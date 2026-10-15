@@ -7,6 +7,11 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **Session tree and branching** - the stats row gets a **tree** chip (and `/tree` works) opening the entry
+  tree from pi's `get_tree`: the branch you are on highlighted, entries pi stopped following dimmed, branch
+  and leaf markers. **jump** scrolls the transcript to an entry, **fork here** moves the session back to an
+  earlier user prompt (append-only, nothing is deleted), **clone branch** duplicates it into a new session
+  file. Everything goes through pi's RPC, so the GUI still never writes a session file.
 - **`@` path completion in the composer** - typing `@` opens the palette with the contents of the
   session's working folder (one level at a time, listed by the background process, never above that
   folder; `node_modules`/`.git`/`dist`/... are hidden unless typed on purpose). `Up`/`Down` then

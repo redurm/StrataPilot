@@ -92,6 +92,8 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   context fill and recent requests, without leaving the app
 - **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
   output, result, duration)
+- **Session tree and branching** (`/tree`): the whole entry tree, jump to any message, fork from an
+  earlier prompt, or clone the branch into a new session - all through pi's own RPC
 - **`@` path completion** in the composer: type `@` and the session folder's contents appear; Enter inserts
   the path (a folder keeps the menu open for the next level), and the listing never leaves the session folder
 - **Several Strata servers at once**: the Monitor gets a pill per address with its own health dot, so two
@@ -297,6 +299,7 @@ passed to pi, which expands extension commands, prompt templates and `/skill:nam
 | `/settings` | open the Settings dialog (the topbar button or `Ctrl+,`) |
 | `/retry [on\|off\|stop]` | pi's retry of transient model errors: on/off for this session, `stop` cancels a retry sitting in its delay - see [Retry of transient model errors](#retry-of-transient-model-errors) |
 | `/jobs` | open the scheduled-prompts dialog - cron jobs, see [Scheduled prompts (cron)](#scheduled-prompts-cron) |
+| `/tree` | show the session tree: the branch you are on, abandoned entries, fork from an earlier prompt, clone the branch |
 | `/stats` | print tokens / cost / context usage into the transcript |
 | `/monitor` | toggle the Strata monitor |
 | `/diagnostics` | copy a diagnostics report for a bug report (see [One-click diagnostics report](#one-click-diagnostics-report)) |
@@ -481,6 +484,29 @@ the file still works — press `Ctrl+R` to reload, or reopen the Settings dialog
 
 The old `pi-gui` settings file is migrated automatically on first launch (see the note at the top).
 
+## Session tree and branching
+
+A pi session is an **append-only tree**: every entry has an id and a parent, and the conversation you
+read is the path from a root down to the current leaf. The transcript only ever shows that path, so an
+earlier prompt you wanted to take a different route from was unreachable in the GUI.
+
+Open it with **`/tree`** or the **tree** chip in the stats row (it counts branch points once they exist).
+
+| Part | What it does |
+|---|---|
+| Source | pi's own `get_tree` over RPC - the GUI never parses or writes the session file for this, so there is still exactly one writer |
+| The view | every entry, indented by depth, labelled by kind (`user`, `assistant`, `model`, `usage`, `compaction`, ...) with a text preview and the time. The branch you are on has a blue left border; entries pi stopped following are dimmed; a node with several children carries a `+ n branches` chip, the leaf says `leaf` |
+| **jump** | scrolls the transcript to that message. The transcript is built from messages, not entries, so the match is by text - if an entry is pre-compaction history or on another branch the toast says so instead of jumping nowhere |
+| **fork here** | on any **user** message of the current branch: pi moves the session back to that prompt and waits for a new one. The session file is append-only, so the answers you already got are not deleted, they are just no longer on your branch. Afterwards the tab re-reads the conversation and asks `get_state` for its session file (pi may hand the process a different one) |
+| **clone branch** | pi duplicates the branch you are on into a **new session file**; the sidebar refreshes and the tab adopts the path pi reports |
+| **refresh** | re-reads the tree, useful right after a fork |
+
+Verified end to end with `PI_ON_STRATA_SMOKE_FORK=1` against a throwaway session: forking from the first
+prompt leaves the transcript with that one message (`items_before=5 items_after=1`).
+
+> Forking is a pi operation, not a GUI edit: an extension can cancel it (`session_before_fork`) and the
+> GUI reports the cancellation instead of pretending it worked.
+
 ## Session storage (size and cleanup)
 
 The sidebar footer shows the count **and the size**: `15 / 15 sessions  Storage: 8.2 MB in 15 files`.
@@ -513,6 +539,8 @@ theme` (keeps following `prefers-color-scheme` while the app runs).
 | `PI_ON_STRATA_SMOKE_STORAGE=1` | D7: reads the totals and three plans (absurd age, absurd cap, everything), checks the open session is filtered out and that the dialog opens and closes: expect `ok=true files=15 bytes=8562058 groups=2 none=0 also_none=0 everything=15 scanned=15 open_in_list=false footer="15 / 15 sessionsStorage: 8.2 MB in 15 files" dialog=true dialog_closed=true`. **Nothing is deleted by the scenario** |
 | `PI_ON_STRATA_SMOKE_SERVERS=1` | D6: adds an unreachable address (`http://127.0.0.1:9/v1`) through Settings, checks the pill and its red health dot, points the cards at it, then removes it through the pill's `x`: expect `pills=4 bogus_pill=true dot_before="mon-dot bad" dot_after="mon-dot bad" active=127.0.0.1:9× removed=true pills_after=3` |
 | `PI_ON_STRATA_SMOKE_PATH=1` | D1: types `@lib/d` in the composer, waits for the palette, presses Enter: expect `rows=1 first="@lib/diagnostics.js…" inserted="read @lib/diagnostics.js" menu_open_after=false sent_instead=false` (the path is inserted, the prompt is **not** sent) |
+| `PI_ON_STRATA_SMOKE_TREE=1` | B1 read-only: opens the tree of a loaded session: expect `modal=true rows=278 on_path=278 off_path=0 branch_heads=0 fork_buttons=12 chip="tree"` |
+| `PI_ON_STRATA_SMOKE_FORK=1` | B1, **writes**: run it against a throwaway session only. Opens the tree, clicks **fork here** on the first user message, confirms, re-reads: expect `fork_button=true confirm=true rows_after=2 items_before=5 items_after=1` |
 
 ## Scheduled prompts (cron)
 

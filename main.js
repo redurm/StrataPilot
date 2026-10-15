@@ -623,6 +623,8 @@ function registerIpc() {
       smokeStorage: !!process.env.PI_ON_STRATA_SMOKE_STORAGE,
       smokeServers: !!process.env.PI_ON_STRATA_SMOKE_SERVERS,
       smokePath: !!process.env.PI_ON_STRATA_SMOKE_PATH,
+      smokeTree: !!process.env.PI_ON_STRATA_SMOKE_TREE,
+      smokeFork: !!process.env.PI_ON_STRATA_SMOKE_FORK,
     };
   });
 

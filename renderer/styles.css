@@ -2188,3 +2188,76 @@ button:disabled {
 .mon-dot.bad {
   background: var(--red);
 }
+
+/* B1: session tree */
+.tree-modal {
+  width: min(900px, 96vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+.tree-list {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+  padding: 4px 0;
+  margin-top: 8px;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 12.5px;
+  border-left: 2px solid transparent;
+}
+.tree-row.on-path {
+  border-left-color: var(--accent);
+  background: var(--bg-soft);
+}
+.tree-row.off-path {
+  opacity: 0.55;
+}
+.tree-row.branch {
+  background-image: linear-gradient(90deg, var(--accent-wash), transparent 60%);
+}
+.tree-kind {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  min-width: 74px;
+  flex: none;
+}
+.tree-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-branch,
+.tree-leaf {
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  flex: none;
+}
+.tree-branch {
+  color: var(--amber);
+  border-color: var(--warn-border-2);
+}
+.tree-leaf {
+  color: var(--green);
+}
+.tree-time {
+  font-size: 11px;
+  color: var(--text-faint);
+  flex: none;
+}
+.stat-tree {
+  font-size: 11.5px;
+  padding: 1px 7px;
+  margin-left: 8px;
+}

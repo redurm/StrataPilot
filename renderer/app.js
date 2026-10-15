@@ -1170,8 +1170,10 @@ function openSimpleModal({ title, message, kind, options, prefill, placeholder, 
     }
 
     const actions = el('div', 'modal-actions');
-    const cancel = el('button', 'ghost', kind === 'confirm' ? 'No' : cancelLabel);
-    const ok = el('button', 'primary', kind === 'confirm' ? 'Yes' : okLabel);
+    // a confirm dialog says Yes/No unless the caller named the action, which is clearer for
+    // destructive ones ("Delete for good", "Fork here")
+    const cancel = el('button', 'ghost', kind === 'confirm' ? (cancelLabel === 'Cancel' ? 'No' : cancelLabel) : cancelLabel);
+    const ok = el('button', 'primary', kind === 'confirm' ? (okLabel === 'OK' ? 'Yes' : okLabel) : okLabel);
     actions.appendChild(cancel);
     actions.appendChild(ok);
     modal.appendChild(actions);
@@ -1346,6 +1348,12 @@ function renderStats(tab) {
     if (tab.stats.cost) add('cost', `$${tab.stats.cost.toFixed(3)}`);
   }
   for (const [key, text] of tab.statuses) add(key, text);
+  // B1: a way into the tree view. The label counts branch points, which is the number that makes
+  // people wish they had seen it earlier.
+  const treeButton = el('button', 'ghost stat-tree', tab.branchPoints ? `tree: ${tab.branchPoints} branch${tab.branchPoints === 1 ? '' : 'es'}` : 'tree');
+  treeButton.title = 'session tree: the branch you are on, the branches pi stopped following, and a fork from any earlier prompt';
+  treeButton.addEventListener('click', () => openSessionTree(tab));
+  els.stats.appendChild(treeButton);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2590,6 +2598,234 @@ function openModal(options) {
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* session tree / branching (B1)                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A pi session is an append-only tree: every entry has an id and a parentId, and the conversation you
+ * see is the path from a root to the current leaf. The GUI used to render only that path (get_messages
+ * returns the active branch), so an abandoned branch was invisible and there was no way to go back to
+ * an earlier prompt and take a different route. pi exposes get_tree / fork / clone over RPC, so the
+ * tree view is a renderer feature: no session parsing here, and no second writer of the session file.
+ */
+
+const TREE_LABEL = {
+  message: (entry) => (entry.message && entry.message.role ? entry.message.role : 'message'),
+  model_change: () => 'model',
+  thinking_level_change: () => 'thinking',
+  usage: () => 'usage',
+  session_info: () => 'name',
+  compaction: () => 'compaction',
+  session_before_fork: () => 'fork point',
+};
+
+function treeKind(entry) {
+  if (TREE_LABEL[entry.type]) return TREE_LABEL[entry.type](entry);
+  return entry.type || 'entry';
+}
+
+function treeText(entry) {
+  if (entry.name) return String(entry.name);
+  if (entry.summary) return String(entry.summary);
+  if (entry.model) return `${entry.model.provider || ''}${entry.model.provider ? '/' : ''}${entry.model.id || ''}`;
+  if (entry.thinkingLevel) return String(entry.thinkingLevel);
+  if (entry.message && entry.message.content) return contentToText(entry.message.content);
+  return '';
+}
+
+/** id -> node, and the id chain from a root down to the current leaf. */
+function indexTree(tree, leafId) {
+  const byId = new Map();
+  const walk = (node) => {
+    if (!node || !node.entry) return;
+    byId.set(node.entry.id, node);
+    for (const child of node.children || []) walk(child);
+  };
+  for (const root of tree || []) walk(root);
+  const onPath = new Set();
+  let cursor = leafId && byId.has(leafId) ? leafId : null;
+  while (cursor) {
+    onPath.add(cursor);
+    cursor = byId.get(cursor).entry.parentId;
+  }
+  return { byId, onPath };
+}
+
+/** The transcript is built from messages, not entries, so a jump matches on text. */
+function findItemForEntry(tab, entry) {
+  const text = treeText(entry).trim();
+  if (!text) return null;
+  const needle = text.replace(/\s+/g, ' ').slice(0, 160);
+  const match = [...tab.items].reverse().find((item) => {
+    if (item.kind !== 'message' || !item.message) return false;
+    if (item.message.role !== (entry.message && entry.message.role)) return false;
+    return contentToText(item.message.content).replace(/\s+/g, ' ').startsWith(needle.slice(0, 60));
+  });
+  return match || null;
+}
+
+async function openSessionTree(tab) {
+  if (!tab || !tab.alive) {
+    toast('this tab is not running - restart it to read its tree', 'warning');
+    return;
+  }
+  const res = await api.cmd(tab.id, 'get_tree');
+  if (!res.success) {
+    toast(`get_tree failed: ${res.error || 'unknown error'}`, 'error', 8000);
+    return;
+  }
+  const tree = res.data.tree || [];
+  const leafId = res.data.leafId || null;
+  const { byId, onPath } = indexTree(tree, leafId);
+  let branchPoints = 0;
+  for (const node of byId.values()) if ((node.children || []).length > 1) branchPoints += 1;
+  tab.branchPoints = branchPoints;
+  renderStats(tab);
+
+  const rows = [];
+  const walk = (node, depth, on) => {
+    const children = node.children || [];
+    rows.push({ node, depth, on });
+    const ordered = [...children].sort((a, b) => Number(onPath.has(b.entry.id)) - Number(onPath.has(a.entry.id)));
+    for (const child of ordered) walk(child, depth + 1, on && onPath.has(child.entry.id));
+  };
+  for (const root of tree) walk(root, 0, onPath.has(root.entry.id));
+
+  return new Promise((resolve) => {
+    const backdrop = el('div', 'modal-backdrop tree-backdrop');
+    const modal = el('div', 'modal tree-modal');
+    modal.appendChild(el('h3', '', `Session tree - ${tabLabel(tab)}`));
+    modal.appendChild(
+      el(
+        'div',
+        'set-hint',
+        `${byId.size} entries, ${branchPoints} branch point${branchPoints === 1 ? '' : 's'}. The highlighted line is the branch you are on; dim rows are entries pi is no longer following. Forking moves the session back to an earlier prompt - the file is append-only, so nothing is deleted.`,
+      ),
+    );
+
+    const list = el('div', 'tree-list');
+    for (const row of rows) {
+      const entry = row.node.entry;
+      const siblings = (byId.get(entry.id).children || []).length;
+      const line = el('div', `tree-row${row.on ? ' on-path' : ' off-path'}${siblings > 1 ? ' branch' : ''}`);
+      line.style.paddingLeft = `${8 + row.depth * 14}px`;
+      line.appendChild(el('span', 'tree-kind', treeKind(entry)));
+      const text = treeText(entry);
+      line.appendChild(el('span', 'tree-text', text ? (text.length > 150 ? `${text.slice(0, 150)}\u2026` : text) : '(no text)'));
+      if (siblings > 1) line.appendChild(el('span', 'tree-branch', `\u2295 ${siblings} branches`));
+      if (entry.id === leafId) line.appendChild(el('span', 'tree-leaf', 'leaf'));
+      if (entry.timestamp) line.appendChild(el('span', 'tree-time', new Date(entry.timestamp).toLocaleTimeString()));
+
+      const actions = el('div', 'outbox-controls');
+      const jump = el('button', 'ghost', 'jump');
+      jump.disabled = !text;
+      jump.title = 'scroll the transcript to this message';
+      jump.addEventListener('click', () => {
+        const item = findItemForEntry(tab, entry);
+        if (!item) {
+          toast('that entry is not in the rendered transcript (it may be pre-compaction history or another branch)', 'warning', 8000);
+          return;
+        }
+        jumpToItem(tab, item.key);
+      });
+      actions.appendChild(jump);
+      const canFork = entry.type === 'message' && entry.message && entry.message.role === 'user' && row.on;
+      if (canFork) {
+        const fork = el('button', 'ghost', 'fork here');
+        fork.title = 'go back to this prompt and take a different route (pi forks in place; the current branch stays in the file)';
+        fork.addEventListener('click', async () => {
+          const answer = await openModal({
+            kind: 'confirm',
+            title: 'Fork from this prompt?',
+            message: 'pi moves this session back to that user message and waits for a new prompt. The session file is append-only, so the answers you already got are not deleted, but they are no longer on the branch you are working on.',
+            okLabel: 'Fork here',
+          });
+          if (!answer || !answer.confirmed) return;
+          const done = await api.cmd(tab.id, 'fork', { entryId: entry.id });
+          if (!done.success) {
+            toast(`fork failed: ${done.error || 'unknown error'}`, 'error', 8000);
+            return;
+          }
+          if (done.data && done.data.cancelled) {
+            toast('fork cancelled by an extension', 'warning', 6000);
+            return;
+          }
+          // pi may keep the same file or move to a forked one - ask it instead of guessing
+          const state = await api.cmd(tab.id, 'get_state');
+          if (state.success && state.data && state.data.sessionFile) {
+            tab.sessionPath = state.data.sessionFile;
+            scheduleSave();
+          }
+          finish();
+          tab.items = [];
+          tab.nodes.clear();
+          tab.tools.clear();
+          tab.streaming = null;
+          tab.currentRequest = null;
+          await bootstrap(tab);
+          pushNote(tab, `forked from: ${oneLine(text, 160)} - type the next prompt to take the other route`, 'info');
+          renderAll(tab);
+          renderTabs();
+        });
+        actions.appendChild(fork);
+      }
+      line.appendChild(actions);
+      list.appendChild(line);
+    }
+    modal.appendChild(list);
+
+    const actions = el('div', 'modal-actions');
+    const clone = el('button', '', 'clone branch');
+    clone.title = 'duplicate the branch you are on into a new session file (this tab keeps going here)';
+    clone.addEventListener('click', async () => {
+      const done = await api.cmd(tab.id, 'clone');
+      if (!done.success) {
+        toast(`clone failed: ${done.error || 'unknown error'}`, 'error', 8000);
+        return;
+      }
+      if (done.data && done.data.cancelled) {
+        toast('clone cancelled by an extension', 'warning', 6000);
+        return;
+      }
+      const state = await api.cmd(tab.id, 'get_state');
+      if (state.success && state.data && state.data.sessionFile) {
+        tab.sessionPath = state.data.sessionFile;
+        scheduleSave();
+      }
+      await refreshSessions();
+      toast('branch cloned into a new session file (the sidebar shows it)', 'info', 7000);
+      finish();
+    });
+    const refresh = el('button', 'ghost', 'refresh');
+    refresh.addEventListener('click', () => {
+      finish();
+      openSessionTree(tab);
+    });
+    const close = el('button', 'ghost', 'Close');
+    actions.appendChild(clone);
+    actions.appendChild(refresh);
+    actions.appendChild(close);
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+    els.modalRoot.appendChild(backdrop);
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      backdrop.remove();
+      modalOpen = null;
+      resolve();
+    };
+    modalOpen = { finish, backdrop };
+    close.addEventListener('click', finish);
+    backdrop.addEventListener('mousedown', (event) => {
+      if (event.target === backdrop) finish();
+    });
+  });
+}
+
 /* session storage (D7)                                                */
 /* ------------------------------------------------------------------ */
 
@@ -3801,6 +4037,7 @@ const GUI_COMMANDS = [
   { name: 'monitor', args: '', desc: 'toggle the Strata monitor' },
   { name: 'stats', args: '', desc: 'print tokens, cost and context usage' },
   { name: 'retry', args: '[on|off|stop]', desc: 'retry transient model errors: on/off for this session, stop cancels a retry that is waiting' },
+  { name: 'tree', args: '', desc: 'show the session tree: branches, abandoned branches, fork from an earlier prompt, clone the branch' },
   { name: 'jobs', args: '', desc: 'scheduled prompts: list, add, edit, run now (cron in the main process, prompts through the serial queue)' },
   { name: 'settings', args: '', desc: 'open the settings dialog (working folder, serial queue, Strata address, Monitor, paths)' },
   { name: 'diagnostics', args: '', desc: 'copy a diagnostics report (versions, paths, Strata health, log tail, queue) for a bug report' },
@@ -3975,6 +4212,10 @@ async function runSlashCommand(tab, text) {
       clearComposer();
       return true;
     }
+    case 'tree':
+      clearComposer();
+      await openSessionTree(activeTab());
+      return true;
     case 'jobs':
       clearComposer();
       await openJobsModal();
@@ -5793,6 +6034,14 @@ async function init() {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
   }
 
+  if (state.info.smoke && state.info.smokeFork) {
+    setTimeout(() => smokeForkScenario().catch((err) => console.error('[smoke] fork scenario failed', err)), 2500);
+  }
+
+  if (state.info.smoke && state.info.smokeTree) {
+    setTimeout(() => smokeTreeScenario().catch((err) => console.error('[smoke] tree scenario failed', err)), 2500);
+  }
+
   if (state.info.smoke && state.info.smokePath) {
     setTimeout(() => smokePathScenario().catch((err) => console.error('[smoke] path scenario failed', err)), 1500);
   }
@@ -6455,6 +6704,70 @@ async function smokePathScenario() {
   closeSlashMenu();
   els.input.value = '';
   els.input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_TREE=1: B1. Opens the session tree of a loaded session and counts what it found:
+ * entries, the active path, branch points and the fork buttons offered. Nothing is forked.
+ */
+async function smokeTreeScenario() {
+  const tab = activeTab();
+  const opened = openSessionTree(tab);
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const modal = els.modalRoot.querySelector('.tree-modal');
+  const rows = modal ? [...modal.querySelectorAll('.tree-row')] : [];
+  const onPath = rows.filter((row) => row.classList.contains('on-path')).length;
+  const offPath = rows.filter((row) => row.classList.contains('off-path')).length;
+  const forks = modal ? modal.querySelectorAll('button[title^="go back to this prompt"]').length : 0;
+  const heads = modal ? modal.querySelectorAll('.tree-branch').length : 0;
+  const closeBox = modal ? [...modal.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Close') : null;
+  if (closeBox) closeBox.click();
+  await opened;
+  console.log(
+    `[smoke-tree] modal=${!!modal} rows=${rows.length} on_path=${onPath} off_path=${offPath} branch_heads=${heads} fork_buttons=${forks} chip=${JSON.stringify(els.stats.querySelector('.stat-tree') ? els.stats.querySelector('.stat-tree').textContent : 'none')} messages=${tab.items.length}`,
+  );
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_FORK=1: B1 for real. The fixture session has one branch point (two answers to the
+ * same prompt). This forks from the FIRST user message, which must abandon everything after it, then
+ * re-reads the tree and counts what moved off the active path. Run it against the fixture only.
+ */
+async function smokeForkScenario() {
+  const tab = activeTab();
+  const itemsBefore = tab.items.length;
+  const opened = openSessionTree(tab);
+  await new Promise((resolve) => setTimeout(resolve, 1400));
+  const modal = els.modalRoot.querySelector('.tree-modal');
+  const rows = modal ? [...modal.querySelectorAll('.tree-row')] : [];
+  const offBefore = rows.filter((row) => row.classList.contains('off-path')).length;
+  const heads = modal ? modal.querySelectorAll('.tree-branch').length : 0;
+  const targetRow = rows.find((row) => row.querySelector('.tree-kind') && row.querySelector('.tree-kind').textContent === 'user');
+  const forkButton = targetRow ? [...targetRow.querySelectorAll('button')].find((button) => button.textContent.trim() === 'fork here') : null;
+  if (forkButton) forkButton.click();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const backdrops = [...els.modalRoot.querySelectorAll('.modal-backdrop')];
+  const confirmModal = backdrops.length ? backdrops[backdrops.length - 1].querySelector('.modal') : null;
+  const confirmButton = confirmModal ? [...confirmModal.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Fork here') : null;
+  if (confirmButton) confirmButton.click();
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  for (const box of [...els.modalRoot.querySelectorAll('.tree-modal')]) {
+    const closeAny = [...box.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Close');
+    if (closeAny) closeAny.click();
+  }
+  await opened;
+  const reopened = openSessionTree(tab);
+  await new Promise((resolve) => setTimeout(resolve, 1400));
+  const last = els.modalRoot.lastElementChild;
+  const modal2 = last ? last.querySelector('.tree-modal') : null;
+  const rows2 = modal2 ? [...modal2.querySelectorAll('.tree-row')] : [];
+  const offAfter = rows2.filter((row) => row.classList.contains('off-path')).length;
+  const closeBox = modal2 ? [...modal2.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Close') : null;
+  if (closeBox) closeBox.click();
+  await reopened;
+  console.log(
+    `[smoke-fork] rows_before=${rows.length} off_before=${offBefore} branch_heads=${heads} fork_button=${!!forkButton} confirm=${!!confirmButton} rows_after=${rows2.length} off_after=${offAfter} items_before=${itemsBefore} items_after=${tab.items.length} chip=${JSON.stringify(els.stats.querySelector('.stat-tree') ? els.stats.querySelector('.stat-tree').textContent : 'none')}`,
+  );
 }
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.
