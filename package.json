@@ -11,9 +11,67 @@
   },
   "scripts": {
     "start": "electron .",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
   },
   "devDependencies": {
-    "electron": "40.10.2"
+    "electron": "40.10.2",
+    "electron-builder": "^26.15.3"
+  },
+  "author": "Chris Chou",
+  "homepage": "https://github.com/hpi-main/pi-on-strata",
+  "build": {
+    "appId": "com.pionstrata.app",
+    "productName": "Pi on Strata",
+    "artifactName": "pi-on-strata-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**",
+      "renderer/**",
+      "build/icon.*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "pi-on-strata-${version}-${os}-${arch}-setup.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.developer-tools",
+      "artifactName": "pi-on-strata-${version}-${os}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.png",
+      "category": "Development",
+      "synopsis": "Desktop GUI for the pi coding agent on a local Strata server",
+      "artifactName": "pi-on-strata-${version}-${os}-${arch}.${ext}"
+    }
   }
 }

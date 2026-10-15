@@ -1,0 +1,95 @@
+name: Release build
+
+# C5: packaging. `npm run dist` (electron-builder) produces
+#
+#   Windows : pi-on-strata-<version>-win-x64-setup.exe (NSIS, per-user, install folder choosable)
+#             pi-on-strata-<version>-win-x64.zip       (the unpacked folder - a portable install:
+#                                                        unzip it anywhere and run "Pi on Strata.exe")
+#   macOS   : .dmg and .zip
+#   Linux   : .AppImage and .deb
+#
+# Nothing is code-signed: there is no certificate in this repo, so Windows SmartScreen and macOS
+# Gatekeeper will warn on first launch. The artifacts are uploaded per OS, so a build that fails on
+# one platform does not hide the others.
+#
+# Run it by hand from the Actions tab (Run workflow), or push a tag like v0.2.0.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19'
+          cache: npm
+      - name: npm ci
+        run: npm ci
+      - name: unit tests before packaging
+        run: npm test
+      - name: build (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npx electron-builder --win --x64
+      - name: build (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: npx electron-builder --linux --x64
+      - name: build (macOS)
+        if: matrix.os == 'macos-latest'
+        run: npx electron-builder --mac --x64 --arm64
+      - name: what came out
+        shell: bash
+        run: ls -la dist
+      - name: upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-on-strata-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.blockmap
+          if-no-files-found: error
+          retention-days: 30
+
+  # A packaged build that never starts is worse than no build, so the Windows artifact is launched
+  # here in smoke mode (no Strata server, no model) before anyone can download it.
+  smoke-windows-artifact:
+    name: smoke the packaged app (Windows)
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pi-on-strata-windows-latest
+          path: artifact
+      - name: unzip the portable build and start it
+        shell: bash
+        env:
+          PI_ON_STRATA_SMOKE: '1'
+          PI_ON_STRATA_SMOKE_MS: '7000'
+        run: |
+          set -e
+          7z x -y -odist artifact/pi-on-strata-*-win-x64.zip > /dev/null
+          "./dist/Pi on Strata.exe" > smoke.log 2>&1 || true
+          cat smoke.log
+          grep -q "\[smoke\] window" smoke.log
+          grep -q "renderer error" smoke.log && { echo "RENDERER_ERROR"; exit 1; }
+          echo "PACKAGED_APP_STARTS"

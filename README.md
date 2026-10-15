@@ -446,8 +446,8 @@ npm start            # electron .
   `PI_ON_STRATA_SMOKE_PI_VERSION=1.4.2` to see the warning without installing another pi.
 - Restoring the previous tabs can be switched off in the Settings dialog (`restoreTabs: false`).
 - To start without a terminal: `start "" /b npm start`, or make a shortcut pointing at `electron .`.
-- There is **no packaging script** (no electron-builder config): for a standalone exe use
-  `electron-packager` / `electron-builder` yourself, or keep using `npm start`.
+- Packaging exists (see [Packaging](#packaging-installers-and-a-portable-build)): `npm run dist:win` builds an NSIS
+  installer and a portable zip; nothing is code-signed, so Windows and macOS will warn on first launch.
 - To check the environment without the UI (no Electron, no prompt sent):
 
   ```bash
@@ -842,6 +842,41 @@ The app was built without any, so D3 added it centrally instead of touching ever
 `PI_ON_STRATA_SMOKE_A11Y=1` proves it: it opens Settings and checks the role, the label, focus moving
 in, `Tab` wrapping, `Esc` closing and focus coming back, then counts the buttons a screen reader would
 not name (`nameless_buttons=0`).
+
+## Packaging (installers and a portable build)
+
+```bash
+npm ci
+npm run dist          # whatever platform you are on
+npm run dist:win      # NSIS setup + portable zip
+npm run dist:mac      # .dmg + .zip (x64 and arm64)
+npm run dist:linux    # .AppImage + .deb
+```
+
+`electron-builder` is a devDependency; the configuration lives in `package.json` under `build`, the icon
+in `build/icon.png` / `build/icon.ico` (a `π` over three Strata layers), and the output goes to `dist/`
+(which is git-ignored).
+
+| Artifact | What it is |
+|---|---|
+| `pi-on-strata-<version>-win-x64-setup.exe` | NSIS installer: per-user, no admin rights needed, you choose the folder, uninstalling keeps your settings |
+| `pi-on-strata-<version>-win-x64.zip` | the unpacked folder - a **portable** install: unzip anywhere and run `Pi on Strata.exe`. This is what CI launches in smoke mode before publishing the artifact |
+| `.dmg` / `.zip`, `.AppImage` / `.deb` | built by the same config on the other two platforms |
+
+Verified here: `npx electron-builder --win` produced both Windows artifacts, and the unpacked
+`Pi on Strata.exe` was started in smoke mode - it opened a window and resolved pi 1.2.0 exactly like
+`npm start` does.
+
+Two things to know:
+
+- **Nothing is code-signed.** There is no certificate in this repo, so SmartScreen ("Windows protected
+  your PC") and Gatekeeper will complain the first time. That is expected, not a broken build.
+- The packaged app uses the same settings file as `npm start` (`%APPDATA%\Pi on Strata`), so installing
+  over a development run keeps your tabs, queue and jobs.
+
+CI: the `Release build` workflow runs on a `v*` tag or manually (Actions ▸ Run workflow), builds on all
+three platforms, uploads each artifact separately, and then **starts the packaged Windows build in smoke
+mode** so a build that does not launch never reaches the artifact list.
 
 ## Linux and macOS
 

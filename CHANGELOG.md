@@ -7,6 +7,10 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **Packaging** - `electron-builder` configuration (`npm run dist`, `dist:win`, `dist:mac`, `dist:linux`), an
+  app icon (a π over three Strata layers, used by the window and the taskbar), and a `Release build`
+  workflow that packages on all three platforms and then starts the packaged Windows build in smoke mode
+  before uploading it. Windows gets an NSIS per-user installer plus a portable zip; nothing is code-signed.
 - **First-run check** - the first run opens a wizard (`/setup`, Help, First-run check): it reports the pi it
   resolved (with the install command to copy and a re-check button when pi is missing), checks the Strata
   address against `/health` with the latency, and lets you pick the folder new tabs start in. It records

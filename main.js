@@ -68,10 +68,25 @@ function send(channel, payload) {
   win.webContents.send(channel, payload);
 }
 
+/**
+ * C5: the window / taskbar icon. Windows wants .ico, Linux the png; a checkout that has no build/
+ * directory (or a packaged app whose resources moved) simply gets Electron's default instead of a
+ * crash, which is why this is a function and not a constant.
+ */
+function appIconPath() {
+  const candidates = process.platform === 'win32' ? ['build/icon.ico', 'build/icon.png'] : ['build/icon.png', 'build/icon.ico'];
+  for (const rel of candidates) {
+    const full = path.join(__dirname, rel);
+    if (fs.existsSync(full)) return full;
+  }
+  return undefined;
+}
+
 function createWindow() {
   const settings = loadSettings();
   const bounds = settings.windowBounds || { width: 1360, height: 900 };
   win = new BrowserWindow({
+    icon: appIconPath(),
     width: Math.max(900, bounds.width),
     height: Math.max(600, bounds.height),
     x: bounds.x,
