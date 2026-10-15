@@ -11,9 +11,9 @@ Priority: `P0` (do next) · `P1` (worth doing) · `P2` (nice to have)
 with the same columns; each one was committed separately and is verified by a unit test or a
 `PI_ON_STRATA_SMOKE_*` scenario named in its row.
 
-## A. Input / output loop still open
+## A. Input / output loop
 
-Cheap to close, and used every day.
+Cheap to close, and used every day - all shipped.
 
 | # | Item | What is missing today | Where | RPC / source | Effort | Priority | Status |
 |---|---|---|---|---|---|---|---|
@@ -36,7 +36,7 @@ Cheap to close, and used every day.
 | `cycle_model`, `cycle_thinking_level` | keyboard model / thinking cycling (dropdowns already cover it) | P2 |
 | `set_steering_mode`, `set_follow_up_mode` | pi-side queue mode (the GUI sends `steer` / `follow_up` directly, so mostly redundant) | P2 |
 
-## B. Structural gaps (already acknowledged in the README, but they need a slot)
+## B. Structural gaps
 
 | # | Item | What is missing today | Where | Effort | Priority | Status |
 |---|---|---|---|---|---|---|
@@ -53,7 +53,7 @@ Cheap to close, and used every day.
 - Risks: a scheduled prompt runs with full read/edit/bash rights (the UI must say so and pin `cwd`); `new-tab` jobs pile up session files (offer `ephemeral` / auto-close after `agent_settled`); a cron prompt sitting in the outbox is lost on crash — same gap as B4, do them together.
 - Testing: `test/cron.test.js` for `parseCron`/`nextRun` (month rollover, weekday field, recompute after sleep); `PI_ON_STRATA_SMOKE_CRON` fires one echo job at startup and checks the outbox badge appears.
 
-## C. Delivery and maintainability (required before handing this to anyone else)
+## C. Delivery and maintainability
 
 | # | Item | What is missing today | Where | Effort | Priority | Status |
 |---|---|---|---|---|---|---|
@@ -67,7 +67,7 @@ Cheap to close, and used every day.
 | C8 | Crash diagnosis (file log) | Was: nothing was written to disk, so a crash left no evidence at all (no crash dump, no WER report, nothing in Event Viewer) and `console.*` only reached the terminal that ran `npm start`. Now: `lib/log.js` mirrors the console to `%APPDATA%\Pi on Strata\logs\pi_on_strata.log` (rotate ~2 MB, keep 2), records a startup banner, pi spawn/exit/stderr, `uncaughtException`/`unhandledRejection`, `child-process-gone`, `render-process-gone`, `unresponsive`, `did-fail-load`, `preload-error`, and `renderer/error-report.js` forwards renderer `error`/`unhandledrejection` over `app:client-error`; Help ▸ Open Log Folder opens it | `lib/log.js`, `main.js`, `preload.js`, `renderer/error-report.js`, `test/log.test.js` | S | P0 | done |
 | C9 | Crash recovery UX | done: `render-process-gone` / `unresponsive` / `did-fail-load` now open a dialog offering **Reload interface** (tab ids are persisted in `openTabs[].id`, so `spawnTab` re-attaches to the live pi process instead of starting a second one); a toast reports when the renderer came back on its own, and a restore logs how many tabs re-used a live process | `main.js` `recoverInterface()`, `renderer/app.js` `api.on('recovery')` | S | P1 | done |
 
-## D. Smaller experience gaps
+## D. Smaller experience gaps (all closed)
 
 | # | Item | What is missing today | Where | Effort | Priority | Status |
 |---|---|---|---|---|---|---|
