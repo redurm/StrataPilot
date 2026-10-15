@@ -354,6 +354,12 @@ textarea {
   border-color: var(--amber);
   cursor: pointer;
 }
+.qbadge.pending {
+  color: var(--accent);
+  border-color: var(--accent);
+  border-style: dashed;
+  cursor: pointer;
+}
 .qbadge.unsaved {
   color: var(--amber);
   border-color: #4a3c22;

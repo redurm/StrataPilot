@@ -213,6 +213,12 @@ off (on by default, remembered in settings).
    - `+1` / `outbox 1` badge = number of messages waiting in that session's outbox
 
 ### Controls
+**The outbox survives a restart.** Whatever was still queued in a session's outbox is stored in the
+settings file; after a relaunch it comes back as a blue dashed **`pending N`** badge on that session's
+queue row and as a note in the transcript. It is *not* in the outbox and the queue will not send it:
+open the badge and choose `queue it` / `queue all` (or `drop`). Sending queued messages automatically
+after a crash is exactly what nobody wants, so the decision stays with the user.
+
 
 | Action | How |
 |---|---|
@@ -829,7 +835,10 @@ The full backlog, with effort and priority, is in [`docs/TODO.md`](docs/TODO.md)
   extension without output events gets no card until its first `bash_execution_update`.
 - The scheduler can only serialize prompts **sent from the GUI**; executions started by an extension
   cannot be blocked (in that case it takes over `runningTabId` directly and shows it in the queue).
-- The outbox is not persisted across restarts.
+- A queued message that was still in the outbox when the app closed comes back as **pending** (never
+  sent on its own), but only for tabs that have a session file: an unsaved or ephemeral tab has
+  nothing to reopen, so its outbox is lost with it. Images of those queued messages are dropped when
+  they would make the settings file bigger than ~400 KB.
 
 ## License
 

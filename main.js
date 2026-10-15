@@ -468,6 +468,7 @@ function registerIpc() {
       smokeDiag: !!process.env.PI_ON_STRATA_SMOKE_DIAG,
       smokeSettings: !!process.env.PI_ON_STRATA_SMOKE_SETTINGS,
       smokeRetry: !!process.env.PI_ON_STRATA_SMOKE_RETRY,
+      smokeOutbox: !!process.env.PI_ON_STRATA_SMOKE_OUTBOX,
     };
   });
 

@@ -228,6 +228,10 @@ function makeTab({ tabId = '', cwd, sessionPath, name, ephemeral, extraArgs = []
     images: [], // {kind:'image', name, mimeType, data, previewUrl, path}
     inlines: [], // {kind:'inline', name, text}
     outbox: [], // {text, images, at} messages waiting for the serial queue
+    // B4: messages that were still queued when the app closed. They are restored as "pending",
+    // never sent automatically - firing model requests by itself after a restart is exactly what
+    // the user did not ask for - and move into the outbox only when the row says so.
+    pendingOutbox: [],
     autoCompact: true, // pi's own automatic compaction (read back from get_state)
     // pi's automatic retry of transient provider errors: get_state does not report it, so the
     // GUI tracks what it last asked for (pi's own default is enabled)
@@ -1684,6 +1688,7 @@ const scheduler = {
   async startTab(tab) {
     const item = tab.outbox.shift();
     if (!item) return { ok: false };
+    scheduleSave(); // the outbox is the crash-recoverable part of the queue
     this.starting = true;
     this.runningTabId = tab.id;
     tab.isStreaming = true;
@@ -1766,6 +1771,17 @@ function queueRow(tab, position) {
     });
     row.appendChild(badge);
   }
+  if (tab.pendingOutbox.length) {
+    // B4: restored from the previous run, deliberately not in the outbox, so the queue will not
+    // send it by itself
+    const badge = el('span', 'qbadge pending', `pending ${tab.pendingOutbox.length}`);
+    badge.title = 'Queued when the app closed - never sent on its own (click to queue or drop)';
+    badge.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openPendingOutboxModal(tab);
+    });
+    row.appendChild(badge);
+  }
   const actions = el('div', 'qactions');
   const top = el('button', '', 'top');
   top.title = 'Move to front of the queue';
@@ -1782,6 +1798,7 @@ function queueRow(tab, position) {
       return;
     }
     tab.outbox = [];
+    scheduleSave();
     renderOpenSessions();
     renderTabs();
     scheduler.pumpSoon(0);
@@ -1837,12 +1854,14 @@ function openOutboxModal(tab) {
         front.addEventListener('click', () => {
           const [moved] = tab.outbox.splice(index, 1);
           tab.outbox.unshift(moved);
+          scheduleSave();
           paint();
           renderOpenSessions();
         });
         const remove = el('button', 'ghost', 'remove');
         remove.addEventListener('click', () => {
           tab.outbox.splice(index, 1);
+          scheduleSave();
           paint();
           renderOpenSessions();
           renderTabs();
@@ -1857,6 +1876,115 @@ function openOutboxModal(tab) {
     modal.appendChild(list);
     const actions = el('div', 'modal-actions');
     const close = el('button', 'primary', 'Close');
+    actions.appendChild(close);
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+    els.modalRoot.appendChild(backdrop);
+    const finish = () => {
+      backdrop.remove();
+      modalOpen = null;
+      resolve();
+    };
+    modalOpen = { finish, backdrop };
+    close.addEventListener('click', finish);
+    backdrop.addEventListener('mousedown', (event) => {
+      if (event.target === backdrop) finish();
+    });
+  });
+}
+
+/**
+ * B4: the outbox used to be memory-only, so a restart silently dropped whatever was waiting.
+ * It is now stored in the settings file and comes back as "pending": visible, but never sent
+ * until the user moves it into the queue (an auto-send after a crash would fire model requests
+ * nobody asked for).
+ */
+function restorePendingOutbox(entry, tab) {
+  const restored = [];
+  for (const source of [entry.pendingOutbox, entry.outbox]) {
+    if (!Array.isArray(source)) continue;
+    for (const item of source) {
+      if (!item || typeof item.text !== 'string' || !item.text.trim()) continue;
+      restored.push({ text: item.text, at: item.at || 0, images: Array.isArray(item.images) ? item.images : [], restored: true });
+    }
+  }
+  if (!restored.length) return 0;
+  tab.pendingOutbox = restored;
+  const dropped = Number(entry.outboxImagesDropped || 0) + Number(entry.pendingImagesDropped || 0);
+  pushNote(
+    tab,
+    `${restored.length} queued message${restored.length === 1 ? '' : 's'} from the previous run ${restored.length === 1 ? 'is' : 'are'} held back and will NOT be sent on their own.` +
+      ' Open the **pending** badge in the queue row to send them or drop them.' +
+      (dropped ? ` ${dropped} message${dropped === 1 ? ' has' : 's'} image${dropped === 1 ? 's' : 's'} too large to store, they were dropped.` : ''),
+    'warn',
+  );
+  return restored.length;
+}
+
+function openPendingOutboxModal(tab) {
+  return new Promise((resolve) => {
+    const backdrop = el('div', 'modal-backdrop');
+    const modal = el('div', 'modal');
+    modal.appendChild(el('h3', '', `Pending from the previous run: ${tabLabel(tab)}`));
+    const intro = el('div', 'modal-msg', 'These were still in the outbox when the app closed. Nothing is sent until you queue it.');
+    modal.appendChild(intro);
+    const list = el('div', 'modal-msg');
+    const paint = () => {
+      list.textContent = '';
+      if (!tab.pendingOutbox.length) {
+        list.appendChild(el('div', '', 'Nothing pending.'));
+        return;
+      }
+      tab.pendingOutbox.forEach((item, index) => {
+        const row = el('div', 'outbox-item');
+        row.appendChild(el('div', 'outbox-text', `#${index + 1}  ${item.text.length > 400 ? `${item.text.slice(0, 400)}\u2026` : item.text}`));
+        const controls = el('div', 'outbox-controls');
+        const queue = el('button', 'ghost', 'queue it');
+        queue.title = 'move this into the outbox: the serial queue will send it in turn';
+        queue.addEventListener('click', () => {
+          const [moved] = tab.pendingOutbox.splice(index, 1);
+          tab.outbox.push(moved);
+          scheduleSave();
+          scheduler.pumpSoon(0);
+          paint();
+          renderOpenSessions();
+        });
+        const remove = el('button', 'ghost', 'drop');
+        remove.addEventListener('click', () => {
+          tab.pendingOutbox.splice(index, 1);
+          scheduleSave();
+          paint();
+          renderOpenSessions();
+        });
+        controls.appendChild(queue);
+        controls.appendChild(remove);
+        row.appendChild(controls);
+        list.appendChild(row);
+      });
+    };
+    paint();
+    modal.appendChild(list);
+    const actions = el('div', 'modal-actions');
+    const queueAll = el('button', '', 'queue all');
+    queueAll.addEventListener('click', () => {
+      if (!tab.pendingOutbox.length) return;
+      tab.outbox.push(...tab.pendingOutbox);
+      tab.pendingOutbox = [];
+      scheduleSave();
+      scheduler.pumpSoon(0);
+      paint();
+      renderOpenSessions();
+    });
+    const dropAll = el('button', 'ghost', 'drop all');
+    dropAll.addEventListener('click', () => {
+      tab.pendingOutbox = [];
+      scheduleSave();
+      paint();
+      renderOpenSessions();
+    });
+    const close = el('button', 'primary', 'Close');
+    actions.appendChild(queueAll);
+    actions.appendChild(dropAll);
     actions.appendChild(close);
     modal.appendChild(actions);
     backdrop.appendChild(modal);
@@ -3493,6 +3621,7 @@ async function send() {
   const otherRunning = scheduler.enabled && scheduler.runningTabId && scheduler.runningTabId !== tab.id;
   if (tab.outbox.length || otherRunning || tab.compacting) {
     tab.outbox.push(message);
+    scheduleSave(); // B4: a queued message must survive a crash, as "pending"
     const moved = queueBackOfWorking(tab);
     clearComposer();
     renderTabs();
@@ -4069,9 +4198,35 @@ function scheduleSave() {
   state.saveTimer = setTimeout(() => {
     const openTabs = [...state.tabs.values()]
       .filter((tab) => tab.sessionPath && !tab.ephemeral)
-      .map((tab) => ({ id: tab.id, cwd: tab.cwd, sessionPath: tab.sessionPath, name: tab.name }));
+      .map((tab) => ({ id: tab.id, cwd: tab.cwd, sessionPath: tab.sessionPath, name: tab.name, ...persistedOutbox(tab) }));
     api.settingsSet({ cwd: state.cwd, openTabs, serialQueue: scheduler.enabled });
   }, 800);
+}
+
+// A queued image is base64 in the settings file; a screenshot is ~1 MB, which would make the file
+// huge. Text is always kept, images only while the whole outbox stays small.
+const OUTBOX_IMAGE_BUDGET = 400000;
+
+function persistedOutbox(tab) {
+  const pack = (list) => {
+    const items = (list || []).map((item) => ({ text: item.text, at: item.at || 0, source: item.source || '' }));
+    const size = items.reduce((sum, item) => sum + (item.text || '').length, 0);
+    const images = (list || []).map((item) => (item.images || []).length);
+    const withImages = (list || []).map((item) => ({ text: item.text, at: item.at || 0, source: item.source || '', images: item.images || [] }));
+    const imageBytes = withImages.reduce((sum, item) => sum + item.images.reduce((s, image) => s + (image.data || '').length, 0), 0);
+    if (imageBytes && size + imageBytes > OUTBOX_IMAGE_BUDGET) {
+      return { items, imagesDropped: images.filter((n) => n > 0).length };
+    }
+    return { items: withImages };
+  };
+  const outbox = pack(tab.outbox);
+  const pending = pack(tab.pendingOutbox);
+  const entry = {};
+  if (outbox.items.length) entry.outbox = outbox.items;
+  if (outbox.imagesDropped) entry.outboxImagesDropped = outbox.imagesDropped;
+  if (pending.items.length) entry.pendingOutbox = pending.items;
+  if (pending.imagesDropped) entry.pendingImagesDropped = pending.imagesDropped;
+  return entry;
 }
 
 /* ------------------------------------------------------------------ */
@@ -4462,6 +4617,7 @@ async function init() {
   if (restore.length) {
     for (const entry of restore) {
       const tab = makeTab({ tabId: entry.id || '', cwd: entry.cwd || state.cwd, sessionPath: entry.sessionPath, name: entry.name });
+      restorePendingOutbox(entry, tab);
       const res = await api.spawn({ tabId: tab.id, cwd: tab.cwd, args: tab.args });
       if (res.ok) {
         tab.alive = true;
@@ -4565,6 +4721,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeExport) {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokeOutbox) {
+    setTimeout(() => smokeOutboxScenario().catch((err) => console.error('[smoke] outbox scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeRetry) {
@@ -4965,6 +5125,31 @@ async function smokeRetryScenario() {
   console.log(
     `[smoke-retry] setOff=${off.success} setOn=${on.success} checkbox_after_off=${els.autoRetryToggle.checked} stop_shown=${shown} stop_hidden_after_end=${els.btnStopRetry.classList.contains('hidden')} abort=${stop.success} retrying=${tab.retrying} note=${note ? note.textContent.slice(0, 40) : ''}`,
   );
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_OUTBOX=1: B4 - a queued message must survive the restart as "pending" and
+ * must never be sent by itself. Nothing is pushed into tab.outbox here, so no prompt reaches the
+ * model during this scenario.
+ */
+async function smokeOutboxScenario() {
+  const tab = activeTab();
+  const bigImage = 'A'.repeat(600000);
+  const packed = persistedOutbox({
+    outbox: [{ text: 'queued before the crash', at: Date.now(), images: [{ mimeType: 'image/png', data: bigImage }] }],
+    pendingOutbox: [{ text: 'second held message', at: Date.now(), images: [] }],
+  });
+  const restored = restorePendingOutbox({ outbox: packed.outbox, outboxImagesDropped: packed.outboxImagesDropped, pendingOutbox: packed.pendingOutbox }, tab);
+  renderOpenSessions();
+  const badge = els.queueList.querySelector('.qbadge.pending');
+  const note = [...els.transcript.querySelectorAll('.note')].pop();
+  scheduler.pumpSoon(0);
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  console.log(
+    `[smoke-outbox] packed=${(packed.outbox || []).length + (packed.pendingOutbox || []).length} images_dropped=${packed.outboxImagesDropped || 0} restored=${restored} pending=${tab.pendingOutbox.length} badge=${badge ? badge.textContent : 'none'} outbox=${tab.outbox.length} auto_sent=${tab.outbox.length > 0} note=${note ? note.textContent.slice(0, 60) : ''}`,
+  );
+  tab.pendingOutbox = [];
+  renderOpenSessions();
 }
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.

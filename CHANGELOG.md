@@ -52,6 +52,11 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   building every node at once; `show 150 earlier` at the top pulls in older pages without moving the
   part you are looking at, and jumping to an older message renders the page that holds it.
 
+- **The outbox survives a restart** - messages that were still queued when the app closed are
+  stored in the settings file and come back as a **pending** badge (plus a transcript note). They are
+  never sent on their own: the modal offers `queue it` / `queue all` / `drop`. Images are only stored
+  while the whole outbox stays under ~400 KB, otherwise they are dropped and the note says so.
+
 ### Changed
 
 - `package.json` gained a `test` script and `engines: { "node": ">=22.19" }`, the version the README
