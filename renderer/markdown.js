@@ -241,6 +241,15 @@ function mdToHtml(source) {
   return html.join('\n');
 }
 
-window.mdToHtml = mdToHtml;
-window.escapeHtml = escapeHtml;
-window.linkify = linkify;
+if (typeof window !== 'undefined') {
+  window.mdToHtml = mdToHtml;
+  window.escapeHtml = escapeHtml;
+  window.linkify = linkify;
+}
+
+// dual export: the browser keeps the window.* assignments (index.html loads this
+// file as a plain <script> under CSP script-src 'self'); Node (unit tests) gets
+// module.exports instead.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { mdToHtml, escapeHtml, linkify };
+}
