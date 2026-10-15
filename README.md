@@ -593,10 +593,12 @@ main.js            Electron main process: window, menu, IPC, pi process manageme
 preload.js         contextBridge (window.piGui) + webUtils.getPathForFile
 lib/pi-launch.js   resolves the pi CLI and the node executable
 lib/pi-process.js  JSONL framing for pi --mode rpc (LF-only line splitting) + command/response pairing
+lib/log.js         file log (userData/logs/pi_on_strata.log) + console tee + rotation
 lib/sessions.js    scanning/parsing session JSONL (title, name, first message, tokens…)
-renderer/          index.html / styles.css / markdown.js / app.js
+renderer/          index.html / styles.css / markdown.js / error-report.js / app.js
 test/smoke-rpc.js  headless RPC smoke test
 docs/TROUBLESHOOTING.md  troubleshooting (split out of the README)
+docs/TODO.md             working backlog (tables: what is still missing, effort and priority)
 scripts/screenshot.ps1  screenshots (used while developing the UI)
 ```
 
@@ -635,7 +637,49 @@ Other smoke switches:
 PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=30000 PI_ON_STRATA_SMOKE_QUEUE=1 npm start
 ```
 
+## Logs and crash diagnosis
+
+Everything the main process prints is mirrored to a file, so a crash can be diagnosed after the
+window is gone:
+
+```
+%APPDATA%\Pi on Strata\logs\pi_on_strata.log      (Windows)
+~/.config/Pi on Strata/logs/pi_on_strata.log      (Linux)
+~/Library/Application Support/Pi on Strata/logs/  (macOS)
+```
+
+Menu **Help ▸ Open Log Folder** opens it. The file rotates at ~2 MB and keeps two older generations
+(`pi_on_strata.log.1`, `.2`). Every record is `[ISO timestamp] [LEVEL] message`.
+
+What lands in it:
+
+| Prefix | Source |
+|---|---|
+| `appVersion= / electronVersion= / piVersion= / logFile=` | startup banner, so a bug report can start from the log alone |
+| `[pi spawn tab=…] ok cwd=… startupMs=` / `failed:` | a tab's pi process starting (or failing) |
+| `[pi exit tab=…] code= signal= stderrTail=` | a tab's pi process dying — often what feels like "the UI crashed" |
+| `[pi stderr tab=…]` / `[pi log tab=…]` | pi's own output, framed by `lib/pi-process.js` |
+| `[renderer 3] … (file:line:col)` | renderer console errors/warnings |
+| `[renderer error] …` + stack | uncaught renderer exceptions and unhandled rejections (`renderer/error-report.js`) |
+| `[crash] renderer gone reason=… exitCode=` | the renderer process died (white window) |
+| `[crash] renderer unresponsive` / `responsive again` | the renderer stopped replying for >30 s |
+| `[crash] … process gone reason= code=` | any Electron child process (GPU, utility…) died |
+| `[fatal] uncaughtException (source):` + stack | main-process crash — the app quits, but the stack is on disk |
+| `[error] unhandledRejection:` | main-process promise rejection (does not quit) |
+
+Notes:
+
+- Logging is best-effort: if the log file cannot be opened the app keeps running and says so once
+  (`[log] disabled, cannot open log file: …`).
+- Smoke mode writes its own log under `%TEMP%/pi_on_strata_smoke_profile/logs/`, so automated runs
+  never touch the real one.
+- A renderer exception used to be invisible: nothing was written to disk, no crash dump, no Windows
+  error report. If the UI ever freezes or vanishes again, read the log first — the last
+  `[renderer error]` / `[crash]` / `[fatal]` line is normally the answer.
+
 ## Known limitations
+
+The full backlog, with effort and priority, is in [`docs/TODO.md`](docs/TODO.md).
 
 - RPC mode does not support pi TUI `custom()` components, theme switching and similar (the pi docs
   describe the RPC-mode degradations).

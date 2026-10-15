@@ -33,6 +33,10 @@ const api = {
   /* strata server monitor (proxied from main to dodge CSP/CORS) --------- */
   strataMetrics: (payload) => ipcRenderer.invoke('strata:metrics', payload),
 
+  /* diagnostics -------------------------------------------------------- */
+  /** Forward an uncaught renderer error to the main process log (fire and forget). */
+  clientError: (entry) => ipcRenderer.send('app:client-error', entry),
+
   /** Absolute path of a dropped File (Electron >= 29 replaces File.path). */
   pathForFile: (file) => {
     try {

@@ -12,7 +12,17 @@ parent [`README.md`](../README.md).
 | `npm install` hangs / cannot fetch Electron | Corporate proxy / TLS interception: set `npm config set proxy/https-proxy`, or point `ELECTRON_MIRROR` at a mirror |
 | Nothing happens on the second `npm start` | Expected: the window has a single-instance lock (`requestSingleInstanceLock`), so re-running only focuses the window that is already open. Close it first if you really want a fresh start |
 | Want to verify the environment without the UI | `node test/smoke-rpc.js C:/some/project` → check the `cli:` / `node:` / `pi version:` / `sessions root:` lines; `cli: null` means pi was not found |
-| No error output visible at all | Start it from a terminal with `npm start`: stderr prints `[renderer …]` plus pi's spawn output (`[stderr]` / `[log]`) |
+| No error output visible at all | Everything is mirrored to `%APPDATA%\Pi on Strata\logs\pi_on_strata.log` (menu **Help ▸ Open Log Folder**); for live output also start it from a terminal with `npm start` — stderr prints `[renderer …]` plus pi's spawn output (`[stderr]` / `[log]`) |
+
+## Crash / white window / the app disappears
+
+| Symptom | Cause / fix |
+|---|---|
+| The window goes white or the app disappears | Open the log file (**Help ▸ Open Log Folder**) and read the **last** lines. `[renderer error] …` + stack = a renderer exception; `[crash] renderer gone reason=crashed exitCode=…` = the renderer process died; `[fatal] uncaughtException` = the main process crashed and quit; `[pi exit tab=…] code=…` = only that tab's pi process died (the window survives, the tab goes dead) |
+| The log file is empty / missing | It is created on startup: an empty file means the app never got as far as opening a window — start it from a terminal with `npm start` and read stderr |
+| Need the renderer stack with line numbers | DevTools (Ctrl+Shift+I) shows it live; the log also records `file:line:col` for uncaught errors. For scripted reproduction, launch with `--remote-debugging-port=9223` and drive it over CDP |
+| Reproduce without touching your real profile | Smoke mode uses a separate profile and skips the single-instance lock: `PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=30000 PI_ON_STRATA_SMOKE_PROMPT="Reply OK" npm start`, then read `%TEMP%\pi_on_strata_smoke_profile\logs\pi_on_strata.log` |
+| The app feels frozen but is still there | Look for `[crash] renderer unresponsive` (no reply for >30 s). Ctrl+Shift+R reloads the renderer; open tabs live in pi processes, so a reload does not kill a running request |
 
 ## Model / connection
 
@@ -105,7 +115,9 @@ parent [`README.md`](../README.md).
 ## What to include when reporting an issue
 
 1. The symptom plus reproduction steps (which tab, what you pressed)
-2. stderr from `npm start` in a terminal (including `[renderer …]` and pi's `[stderr]` / `[log]`)
+2. The tail of `%APPDATA%\Pi on Strata\logs\pi_on_strata.log` (menu **Help ▸ Open Log Folder**) —
+   the startup banner plus the last `[renderer error]` / `[crash]` / `[fatal]` / `[pi exit]` lines;
+   stderr from `npm start` if you can start it from a terminal
 3. The first four lines of `node test/smoke-rpc.js <cwd>` (cli / node / pi version / sessions root)
 4. pi version (`~/.pi/agent/install/current-version`), Strata version, the output of `curl
    http://127.0.0.1:<port>/health`, and both model configurations — pi's `models.json` and Strata's

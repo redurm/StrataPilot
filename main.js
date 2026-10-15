@@ -8,6 +8,7 @@ const path = require('node:path');
 const { PiRpcProcess } = require('./lib/pi-process');
 const { resolvePiInvocation } = require('./lib/pi-launch');
 const sessions = require('./lib/sessions');
+const appLog = require('./lib/log');
 
 const APP_ID = 'com.pionstrata.app';
 const SETTINGS_NAME = 'pi_on_strata_settings.json';
@@ -104,11 +105,29 @@ function createWindow() {
     const level = Number(event.level) || 0;
     const message = event.message;
     const source = event.sourceId;
+    const position = event.lineNumber ? `:${event.lineNumber}:${event.columnNumber}` : '';
     if (process.env.PI_ON_STRATA_SMOKE && level < 2) {
       console.log(`[renderer ${level}] ${message}`);
     } else if (level >= 2) {
-      console.error(`[renderer ${level}] ${message} (${source})`);
+      console.error(`[renderer ${level}] ${message} (${source}${position})`);
     }
+  });
+
+  // Renderer death is the usual shape of a "UI crash" (white window, or the window
+  // vanishing). None of these were recorded before, so it left no evidence.
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error(
+      `[crash] renderer gone reason=${details.reason} exitCode=${details.exitCode} killed=${details.killed}`,
+    );
+  });
+  win.webContents.on('unresponsive', () => console.error('[crash] renderer unresponsive (>30s of no reply)'));
+  win.webContents.on('responsive', () => console.error('[crash] renderer responsive again'));
+  win.webContents.on('preload-error', (_event, preloadPath, error) => {
+    console.error(`[crash] preload-error ${preloadPath}: ${(error && error.stack) || error}`);
+  });
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl) => {
+    if (errorCode === -3) return; // ABORTED: normal during reload/navigation
+    console.error(`[nav] did-fail-load code=${errorCode} ${errorDescription} url=${validatedUrl}`);
   });
 
   if (process.env.PI_ON_STRATA_SMOKE) {
@@ -169,6 +188,14 @@ function buildMenu() {
       label: 'Help',
       submenu: [
         {
+          label: 'Open Log Folder',
+          click: () => {
+            const dir = appLog.logDir();
+            if (dir) shell.openPath(dir);
+            else shell.openPath(app.getPath('userData'));
+          },
+        },
+        {
           label: 'pi RPC docs',
           click: () => shell.openExternal('https://github.com/earendil-works/pi/tree/main/packages/coding-agent/docs'),
         },
@@ -201,9 +228,21 @@ function spawnTab({ tabId, cwd, args = [], env = {} }) {
   const proc = new PiRpcProcess({ id: tabId, cwd: resolvedCwd, args, env });
 
   proc.on('record', (record) => send('pi:record', { tabId, record }));
-  proc.on('stderr', (text) => send('pi:stderr', { tabId, text: text.slice(0, 4000) }));
-  proc.on('log', (text) => send('pi:log', { tabId, text }));
+  proc.on('stderr', (text) => {
+    console.error(`[pi stderr tab=${tabId}] ${text.slice(0, 1000)}`);
+    send('pi:stderr', { tabId, text: text.slice(0, 4000) });
+  });
+  proc.on('log', (text) => {
+    console.log(`[pi log tab=${tabId}] ${text}`);
+    send('pi:log', { tabId, text });
+  });
   proc.on('exit', (info) => {
+    // A tab's pi dying is often what the user perceives as "the UI crashed".
+    console.error(
+      `[pi exit tab=${tabId}] code=${info && info.code} signal=${info && info.signal} stderrTail=${JSON.stringify(
+        String((info && info.stderr) || '').slice(-500),
+      )}`,
+    );
     processes.delete(tabId);
     send('pi:exit', { tabId, ...info });
   });
@@ -211,9 +250,11 @@ function spawnTab({ tabId, cwd, args = [], env = {} }) {
   try {
     proc.start();
   } catch (err) {
+    console.error(`[pi spawn tab=${tabId}] failed: ${err.message}`);
     return { ok: false, error: err.message };
   }
   processes.set(tabId, proc);
+  console.log(`[pi spawn tab=${tabId}] ok cwd=${resolvedCwd} startupMs=${Date.now() - proc.startedAt}`);
   return { ok: true, cwd: resolvedCwd, cwdFallback, startupMs: Date.now() - proc.startedAt };
 }
 
@@ -234,6 +275,7 @@ function registerIpc() {
       nodePath: inv.nodePath,
       runAsNode: inv.runAsNode,
       sessionsRoot: sessions.sessionsRoot(),
+      logPath: appLog.logPath(),
       defaultCwd: process.cwd(),
       home: os.homedir(),
       smoke: !!process.env.PI_ON_STRATA_SMOKE,
@@ -259,6 +301,15 @@ function registerIpc() {
   });
 
   ipcMain.handle('pi:spawn', (_event, payload) => spawnTab(payload || {}));
+
+  // renderer window.onerror / onunhandledrejection (see renderer/app.js)
+  ipcMain.on('app:client-error', (_event, entry) => {
+    const safe = entry && typeof entry === 'object' ? entry : {};
+    console.error(
+      `[renderer error] ${safe.type || 'error'}: ${safe.message || '(no message)'} ` +
+        `${safe.source || ''}${safe.line ? `:${safe.line}:${safe.column}` : ''}\n${safe.stack || '(no stack)'}`,
+    );
+  });
 
   ipcMain.handle('pi:cmd', async (_event, { tabId, type, fields = {}, timeoutMs }) => {
     const proc = processes.get(tabId);
@@ -427,6 +478,21 @@ if (SMOKE) {
   app.setPath('userData', path.join(app.getPath('temp'), 'pi_on_strata_smoke_profile'));
 }
 
+// Must run before anything logs, and after the userData override above.
+appLog.init(path.join(app.getPath('userData'), 'logs', 'pi_on_strata.log'));
+appLog.teeConsole();
+
+process.on('uncaughtException', (error, origin) => {
+  console.error(`[fatal] uncaughtException (${origin}): ${(error && error.stack) || error}`);
+  app.quit();
+});
+process.on('unhandledRejection', (reason) => {
+  console.error(`[error] unhandledRejection: ${(reason && reason.stack) || reason}`);
+});
+app.on('child-process-gone', (_event, details) => {
+  console.error(`[crash] ${details.type} process gone reason=${details.reason} code=${details.exitCode}`);
+});
+
 const gotLock = SMOKE ? true : app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -439,6 +505,16 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
+    const inv = resolvePiInvocation();
+    appLog.banner({
+      appVersion: app.getVersion(),
+      electronVersion: process.versions.electron,
+      nodeVersion: process.versions.node,
+      piVersion: inv.piVersion,
+      platform: `${process.platform}/${process.arch}`,
+      logFile: appLog.logPath(),
+      smoke: SMOKE,
+    });
     migrateSettings();
     if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
     buildMenu();
