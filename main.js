@@ -247,6 +247,7 @@ function registerIpc() {
       smokeAutoCompact: !!process.env.PI_ON_STRATA_SMOKE_AUTO_COMPACT,
       smokeBash: !!process.env.PI_ON_STRATA_SMOKE_BASH,
       smokeBars: !!process.env.PI_ON_STRATA_SMOKE_BARS,
+      smokePaste: !!process.env.PI_ON_STRATA_SMOKE_PASTE,
     };
   });
 

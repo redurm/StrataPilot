@@ -72,11 +72,16 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
 - **Working folder always visible**: the composer carries a `folder` chip with the active session's
   working folder (click to open it in the OS file manager); queue rows show each open tab's folder name,
   and Session files rows show the folder every saved session was started in
-- **Drag & drop files**: drop a file or folder anywhere on the window → it becomes an attachment chip
-  - Images (png/jpg/gif/webp, ≤8 MB) → sent as RPC `images` (base64)
+- **Drag & drop files, or paste them**: drop a file or folder anywhere on the window, or press
+  `Ctrl+V` (or right-click → Paste) with something on the clipboard → it becomes an attachment chip
+  - Images (png/jpg/gif/webp, ≤8 MB) → sent as RPC `images` (base64); the chip shows a thumbnail
   - Anything else → a list of **absolute paths** is inserted, and pi reads them with the `read` tool
   - If the absolute path cannot be resolved, it falls back to inlining the content
   - The `Attach files` button uses the same pipeline
+  - A clipboard image has no file path, so it always goes down the `images` route; when the clipboard
+    gives no name it is called `pasted-1.png`, `pasted-2.png`, … (de-duplicated per paste)
+  - Pasting plain text is untouched; while a dialog (including the extension UI dialogs) or the
+    slash palette is open, paste is never hijacked
 - **Shell & slash commands**: `!cmd` runs a shell command in the session folder (streaming output
   card, `!!cmd` keeps the output out of the model context); `/` opens a command palette
   (`/compact`, `/model`, `/stats`, …) and hands anything else to pi
@@ -576,6 +581,7 @@ Collapsing is still cheaper for the renderer, and the optimization is now really
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Switch tabs |
 | `Ctrl+B` | Show / hide the sidebar |
 | `Ctrl+M` | Show / hide the Strata Monitor |
+| `Ctrl+V` | Paste: an image (or file) on the clipboard is attached like a drop, plain text goes into the composer |
 | `F2` | Name the current session |
 | `Tab` | Complete the highlighted slash command (while the palette is open) |
 | `Esc` | Abort what is running (agent run, or a running `!cmd`), close a dialog, or close the slash palette |
@@ -622,6 +628,7 @@ Other smoke switches:
 | `PI_ON_STRATA_SMOKE_AUTO_COMPACT=1` | Tests `get_state.autoCompactionEnabled` → `set_auto_compaction off/on` → read back; should print `initial=true … now=false … now=true` |
 | `PI_ON_STRATA_SMOKE_BASH=1` | Runs `!echo …`, `!!echo …` and `!exit 3`, then `/commands`, and checks the slash palette (`/co` + `Tab`): expect `cards=1 class=bash-card done`, `sign=!!`, `class=bash-card error … exit 3`, and `open=true rows=5` |
 | `PI_ON_STRATA_SMOKE_BARS=1` | Sends a long prompt, queues a steer while it runs and prints both pinned bars: expect `top="working on prompt …"` with `bottom="… steering … next turn"`, then `top="last request steering …"` and `bottom="(hidden)"` after the steer is delivered; also checks `↓ jump` (`node=true flashed=true`) |
+| `PI_ON_STRATA_SMOKE_PASTE=1` | Synthesises `paste` events carrying a generated 1×1 PNG: expect `files=1 images=1 chips=1 first=pasted-1.png size=70b`, then `images=2 chips=2 first=pasted-2.png`; also checks a two-image paste, `bmp` → "unsupported image type" toast, an 8 MB+ image → "image too large" toast, plain-text paste (`prevented=false`) and the modal guard (`modalOpen=true prevented=false images` unchanged) |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII

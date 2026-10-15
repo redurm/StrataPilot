@@ -63,6 +63,17 @@ const els = {
 };
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+// Anything bigger than this is too heavy for the RPC `images` payload (base64 JSON line).
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+// File extension for a clipboard image that arrives without a name (see pasteName()).
+const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/tiff': 'tiff' };
+
+function fmtBytes(n) {
+  if (n == null) return '?';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function toast(message, kind = 'info', timeoutMs = 6000) {
   const node = document.createElement('div');
@@ -1404,7 +1415,7 @@ function renderComposerState() {
   } else if (!tab.alive) {
     els.input.placeholder = 'This session process ended — press Send to restart it in the same folder';
   } else {
-    els.input.placeholder = 'Enter = send · Shift+Enter = newline · !cmd = run bash · / = commands · drop files to attach';
+    els.input.placeholder = 'Enter = send · Shift+Enter = newline · !cmd = run bash · / = commands · drop or paste files to attach';
   }
   renderCwdChip(tab);
 }
@@ -3283,7 +3294,7 @@ async function addFiles(files) {
     const filePath = api.pathForFile(file);
     const stat = filePath ? statByPath.get(filePath) : null;
     const isImage = IMAGE_TYPES.has(file.type) && (!stat || !stat.isDirectory);
-    if (isImage && file.size <= 8 * 1024 * 1024) {
+    if (isImage && file.size <= MAX_IMAGE_BYTES) {
       try {
         const dataUrl = await readFileAsDataURL(file);
         const comma = dataUrl.indexOf(',');
@@ -3296,7 +3307,13 @@ async function addFiles(files) {
         });
         images++;
         continue;
-      } catch {}
+      } catch {
+        // A clipboard image has no path to fall back on, so say so instead of inlining bytes.
+        if (!filePath) {
+          toast(`could not read image ${file.name}`, 'warning');
+          continue;
+        }
+      }
     }
     if (filePath) {
       target.attachments.push({
@@ -3308,7 +3325,16 @@ async function addFiles(files) {
       paths++;
       continue;
     }
-    // No absolute path available: inline the text content.
+    // No absolute path available (a clipboard paste, or a synthetic File): decide from
+    // type/size alone. Inlining an image would only produce garbage, so reject it clearly.
+    if (isImage) {
+      toast(`image too large: ${file.name} is ${fmtBytes(file.size)} (${file.size} bytes, max ${fmtBytes(MAX_IMAGE_BYTES)})`, 'warning');
+      continue;
+    }
+    if (String(file.type || '').startsWith('image/')) {
+      toast(`unsupported image type: ${file.name} (${file.type}) — use png/jpg/gif/webp`, 'warning');
+      continue;
+    }
     try {
       const text = await file.text();
       target.inlines.push({ name: file.name, text: truncate(text, 60000) });
@@ -3353,6 +3379,78 @@ function wireDragAndDrop() {
     state.dragDepth = 0;
     setDropOverlay(false);
     await addFiles(event.dataTransfer.files);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* paste (Ctrl+V / right-click)                                        */
+/* ------------------------------------------------------------------ */
+
+/* Clipboard images carry no filesystem path (api.pathForFile() returns ''), and
+   Chromium names them "image.png" for every screenshot, so pastes get a name of
+   their own: pasted-1.png, pasted-2.png, … (never clashing with an existing chip). */
+let pasteSeq = 0;
+const GENERIC_PASTE_NAME = /^(image\d*|blob|clipboard|screenshot|screen[ -]?shot|未命名|untitled)(\.(png|jpe?g|gif|webp|bmp|tiff))?$/i;
+
+function pasteName(tab, file) {
+  const given = String(file.name || '').trim();
+  if (given && !GENERIC_PASTE_NAME.test(given)) return given;
+  const ext = IMAGE_EXT[file.type] || String(given).split('.').pop() || 'png';
+  const taken = new Set([
+    ...(tab ? tab.images.map((i) => i.name) : []),
+    ...(tab ? tab.attachments.map((a) => a.name) : []),
+    ...(tab ? tab.inlines.map((i) => i.name) : []),
+  ]);
+  let name;
+  do {
+    pasteSeq += 1;
+    name = `pasted-${pasteSeq}.${ext}`;
+  } while (taken.has(name));
+  return name;
+}
+
+/** Files carried by a paste event: `files` first, `items` as a fallback for the
+ *  (rare) case where only items is populated. */
+function pastedFiles(clipboardData) {
+  const out = [];
+  for (const file of Array.from(clipboardData.files || [])) {
+    if (file) out.push(file);
+  }
+  if (!out.length) {
+    for (const item of Array.from(clipboardData.items || [])) {
+      if (!item || item.kind !== 'file') continue;
+      const file = typeof item.getAsFile === 'function' ? item.getAsFile() : null;
+      if (file) out.push(file);
+    }
+  }
+  return out;
+}
+
+async function handlePaste(event) {
+  // Never hijack a paste while a dialog (including the extension UI modals) or the
+  // slash palette owns the keyboard.
+  if (modalOpen || slashMenu.open) return;
+  const data = event.clipboardData;
+  if (!data) return;
+  const files = pastedFiles(data);
+  if (!files.length) return; // plain text (or nothing): leave the default paste alone
+  event.preventDefault();
+  const tab = activeTab();
+  const named = files.map((file) => {
+    const name = pasteName(tab, file);
+    if (name === file.name) return file;
+    try {
+      return new File([file], name, { type: file.type, lastModified: file.lastModified });
+    } catch {
+      return file;
+    }
+  });
+  await addFiles(named);
+}
+
+function wirePaste() {
+  document.addEventListener('paste', (event) => {
+    handlePaste(event).catch((err) => toast(`paste failed: ${err.message}`, 'warning'));
   });
 }
 
@@ -3655,6 +3753,7 @@ async function init() {
 
   wireUi();
   wireDragAndDrop();
+  wirePaste();
   renderComposerState();
   await refreshSessions();
 
@@ -3735,6 +3834,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeBars) {
     setTimeout(() => smokeBarsScenario().catch((err) => console.error('[smoke] bars scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokePaste) {
+    setTimeout(() => smokePasteScenario().catch((err) => console.error('[smoke] paste scenario failed', err)), 1200);
   }
 
   if (state.info.smoke && state.info.smokePrompt) {
@@ -3919,6 +4022,103 @@ async function smokeBarsScenario() {
       }, 400);
     }
   }, 3000);
+}
+
+// PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.
+// A 1x1 PNG is built in JS (clipboard images have no filesystem path, so pathForFile() -> '').
+const PNG_1X1_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+
+function makeImageFile(name, type, bytes) {
+  return new File([bytes], name, { type });
+}
+
+function pngBytes() {
+  const bin = atob(PNG_1X1_B64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/** Synthesise a paste event: clipboardData is read-only, so shadow it on the instance. */
+function makePasteEvent(files, text = '') {
+  const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true });
+  const data = {
+    files,
+    items: files.map((f) => ({ kind: 'file', type: f.type, getAsFile: () => f })),
+    types: files.length ? ['Files'] : ['text/plain'],
+    getData: (kind) => (kind === 'text/plain' ? text : ''),
+  };
+  Object.defineProperty(event, 'clipboardData', { value: data });
+  return event;
+}
+
+async function smokePasteScenario() {
+  const tab = activeTab();
+  const chips = () => els.attachments.querySelectorAll('.chip').length;
+  const lastToast = () => {
+    // skip addFiles' "attached: ..." summary and report the warning that matters here
+    const nodes = [...els.toasts.children];
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const text = nodes[i].textContent.replace(/\s+/g, ' ').trim();
+      if (!/^attached: \d+ file/.test(text)) return text;
+    }
+    return '';
+  };
+  const settle = async (expectedImages) => {
+    for (let i = 0; i < 60 && tab.images.length < expectedImages; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  };
+  const png = pngBytes();
+
+  const first = makePasteEvent([makeImageFile('image.png', 'image/png', png)]);
+  document.dispatchEvent(first);
+  await settle(1);
+  console.log(
+    `[smoke-paste] paste=1 files=1 images=${tab.images.length} chips=${chips()} first=${tab.images[0] ? tab.images[0].name : ''} size=${png.length}b prevented=${first.defaultPrevented}`,
+  );
+
+  const second = makePasteEvent([makeImageFile('image.png', 'image/png', png)]);
+  document.dispatchEvent(second);
+  await settle(2);
+  console.log(
+    `[smoke-paste] paste=2 files=1 images=${tab.images.length} chips=${chips()} first=${tab.images[1] ? tab.images[1].name : ''} size=${png.length}b prevented=${second.defaultPrevented}`,
+  );
+
+  // two images in one paste
+  const multi = makePasteEvent([makeImageFile('image.png', 'image/png', png), makeImageFile('image.png', 'image/png', png)]);
+  document.dispatchEvent(multi);
+  await settle(4);
+  console.log(`[smoke-paste] multi: files=2 images=${tab.images.length} chips=${chips()} names=${tab.images.map((i) => i.name).join(',')}`);
+
+  // unsupported type (bmp) must toast, not inline garbage
+  const bmp = makePasteEvent([makeImageFile('image.bmp', 'image/bmp', png)]);
+  document.dispatchEvent(bmp);
+  await settle(4);
+  console.log(`[smoke-paste] bmp: images=${tab.images.length} chips=${chips()} inlines=${tab.inlines.length} toast="${lastToast()}"`);
+
+  // oversized image: rejected with its size named, the others untouched
+  const big = makePasteEvent([makeImageFile('image.png', 'image/png', new Uint8Array(MAX_IMAGE_BYTES + 1))]);
+  document.dispatchEvent(big);
+  await settle(4);
+  console.log(`[smoke-paste] oversize: images=${tab.images.length} chips=${chips()} toast="${lastToast()}"`);
+
+  // plain text paste must stay untouched (no preventDefault, no attachment)
+  const text = makePasteEvent([], 'hello clipboard');
+  document.dispatchEvent(text);
+  await settle(4);
+  console.log(`[smoke-paste] text: prevented=${text.defaultPrevented} images=${tab.images.length} chips=${chips()}`);
+
+  // while a modal is open the paste must be ignored entirely
+  const modal = openModal({ title: 'paste guard', message: 'paste while this is open', kind: 'confirm' });
+  await new Promise((r) => setTimeout(r, 200));
+  const guarded = makePasteEvent([makeImageFile('image.png', 'image/png', png)]);
+  document.dispatchEvent(guarded);
+  await new Promise((r) => setTimeout(r, 400));
+  console.log(`[smoke-paste] modal-guard: modalOpen=${!!modalOpen} prevented=${guarded.defaultPrevented} images=${tab.images.length} chips=${chips()}`);
+  if (modalOpen) modalOpen.finish({ cancelled: true });
+  await modal;
 }
 
 init().catch((err) => {

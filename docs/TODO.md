@@ -13,7 +13,7 @@ Cheap to close, and used every day.
 
 | # | Item | What is missing today | Where | RPC / source | Effort | Priority | Status |
 |---|---|---|---|---|---|---|---|
-| A1 | Paste an image with `Ctrl+V` | Only drag & drop and the `Attach files` button exist; pasting a screenshot does nothing | `renderer/app.js` drop handler (~L3343), attachment pipeline (~L3286) | reuse the existing `images` payload path | S | P0 | todo |
+| A1 | Paste an image with `Ctrl+V` | Only drag & drop and the `Attach files` button exist; pasting a screenshot does nothing | `renderer/app.js` drop handler (~L3343), attachment pipeline (~L3286) | reuse the existing `images` payload path | S | P0 | done |
 | A2 | Per-message `copy` / `resend` | Only fenced code blocks have a copy button; no "copy this message (raw markdown)", no "resend the last request" | `renderer/app.js` ~L3553 | `get_last_assistant_text` | S | P0 | todo |
 | A3 | `/export` a session to HTML | RPC command exists, no UI, no palette entry | `renderer/app.js` slash palette | `export_html` | S | P0 | todo |
 | A4 | Retry controls | `auto_retry_start` / `auto_retry_end` events are already rendered as notes, but the two commands are not wired; Strata disconnects make "retry N times / stop retrying" useful | `renderer/app.js` ~L915 | `set_auto_retry`, `abort_retry` | S | P1 | todo |

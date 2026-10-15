@@ -73,8 +73,11 @@ parent [`README.md`](../README.md).
 |---|---|
 | Dropping a file does nothing, or only a path appears | Expected: only png/jpg/gif/webp (≤8 MB) become RPC `images` attachments; every other file or folder is inserted as an **absolute path** for pi to read with the `read` tool |
 | A dropped folder is not expanded into files | By design: only the folder path is inserted |
-| An image ended up as inline text | The absolute path could not be resolved, so it fell back to inline embedding (not a bug) |
+| An image ended up as inline text | Only files whose absolute path cannot be resolved are inlined; images are never inlined (they are attached or rejected with a toast) |
 | Image rejected | Larger than 8 MB, or a format outside png/jpg/gif/webp |
+| `Ctrl+V` with a screenshot does nothing | A clipboard image is attached only when it is png/jpg/gif/webp and ≤8 MB — a `bmp`/`tiff` screenshot shows an "unsupported image type" toast (re-capture as png, or save it to disk and **drop** it: a dropped file is inserted as a path instead). Nothing is attached while a dialog or the slash palette is open, by design |
+| Pasted image is rejected with its size in the toast | A clipboard image has no file path to fall back on, so anything over 8 MB is refused (`image too large: … is 9.2 MB (9646899 bytes, max 8.0 MB)`). Save it as a file and drop it instead, or shrink it |
+| Pasting text stopped working? | It does not: a paste is only hijacked when the clipboard actually carries a file/image, plain text always reaches the composer |
 
 ## Bash (`!`) and slash commands (`/`)
 
