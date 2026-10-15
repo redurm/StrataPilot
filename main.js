@@ -613,6 +613,7 @@ function registerIpc() {
       smokeCron: !!process.env.PI_ON_STRATA_SMOKE_CRON,
       smokeTabTag: !!process.env.PI_ON_STRATA_SMOKE_TABTAG,
       smokeTheme: !!process.env.PI_ON_STRATA_SMOKE_THEME,
+      smokeA11y: !!process.env.PI_ON_STRATA_SMOKE_A11Y,
     };
   });
 

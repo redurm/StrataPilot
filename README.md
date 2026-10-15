@@ -92,6 +92,9 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   context fill and recent requests, without leaving the app
 - **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
   output, result, duration)
+- **Accessibility**: dialogs are real dialogs (role, label, focus trapped and restored, `Esc`), icon-only
+  buttons get an accessible name, queue rows describe their state in words instead of colour, focus is
+  visible for keyboard users, and the animations honour `prefers-reduced-motion`
 - **Dark and light theme**: pick it in Settings (or let it follow the system); colours are CSS
   variables, so a theme is one variable block, and the last theme is mirrored in `localStorage` so a
   light-theme start does not flash dark first
@@ -469,6 +472,7 @@ theme` (keeps following `prefers-color-scheme` while the app runs).
 | Implementation | every colour in `styles.css` goes through a CSS variable, so a theme is only a redefinition of those variables (`[data-theme="light"]`); there is no second stylesheet and no duplicated rule |
 | No flash on start | the last applied theme is mirrored in `localStorage` and read by `renderer/theme-boot.js` before the first paint; the real setting (including `system`) is applied a moment later from the settings file |
 | Screenshots | `PI_ON_STRATA_SMOKE_THEME=1` switches theme, prints the computed colours and writes both screenshots to the temp folder (see the smoke table) |
+| `PI_ON_STRATA_SMOKE_A11Y=1` | D3: expect `dialog=true role=dialog aria_modal=true labelled_by_heading=true focus_inside=true tab_wraps=true esc_closes=true focus_restored=true nameless_buttons=0 toasts_live=polite tabs_role=tablist` plus the `aria-label` of a queue row |
 
 ## Scheduled prompts (cron)
 
@@ -720,6 +724,22 @@ simply renders the page that contains it. Measured on a 319-message session: 61 
 | `F2` | Name the current session |
 | `Tab` | Complete the highlighted slash command (while the palette is open) |
 | `Esc` | Abort what is running (agent run, or a running `!cmd`), close a dialog, or close the slash palette |
+
+## Accessibility
+
+The app was built without any, so D3 added it centrally instead of touching every widget:
+
+| What | How |
+|---|---|
+| Dialogs | anything appended to `#modalRoot` is decorated by an observer: `role="dialog"`, `aria-modal`, a label taken from its own heading, focus moved inside, `Tab` wrapped at both ends, `Esc` mapped to its Cancel / Close button, and focus handed back to the control that opened it |
+| Icon-only buttons | a button whose visible text is empty or a single glyph (the `x` of a tab, the `top` arrow, ...) gets its accessible name from the `title` it already carries; the observer only looks at the nodes that were actually added, so streaming is not slowed down |
+| Queue rows | focusable (`tabIndex`), `role="button"`, and an `aria-label` that says what the colour says: `Halo Code review, queued, 2 pending, queue position 1 of 3. Alt+Up or Alt+Down reorders it.` |
+| Regions | `role="tablist"` on the tab strip (`aria-selected` per tab), `role="list"` on both sidebar lists, `role="log"` on the transcript, `role="status"` + `aria-live="polite"` on the toast area, labels on the search box, the model / thinking selects and the composer |
+| Focus and motion | `:focus-visible` outlines (visible for keyboard, not for mouse clicks) and a `prefers-reduced-motion` block that stops the streaming animations |
+
+`PI_ON_STRATA_SMOKE_A11Y=1` proves it: it opens Settings and checks the role, the label, focus moving
+in, `Tab` wrapping, `Esc` closing and focus coming back, then counts the buttons a screen reader would
+not name (`nameless_buttons=0`).
 
 ## Architecture
 

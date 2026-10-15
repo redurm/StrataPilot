@@ -2076,3 +2076,43 @@ button:disabled {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/*
+ * D3 (accessibility). Keyboard focus used to be invisible because the buttons are custom-styled and
+ * the default outline was removed; :focus-visible only shows it for keyboard users, not for clicks.
+ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.qrow:focus-visible,
+.tab:focus-visible,
+.session-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The transcript animates a lot (streaming, the now bar, toasts). Honour the OS request. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

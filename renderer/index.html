@@ -11,7 +11,7 @@
     <div id="app">
       <header class="topbar">
         <div class="brand">Pi<span> on Strata</span></div>
-        <div id="tabs" class="tabs"></div>
+        <div id="tabs" class="tabs" role="tablist" aria-label="Open sessions"></div>
         <button id="btnNew" class="ghost" title="New session (Ctrl+T)">+ New</button>
         <button id="btnMonitor" class="ghost" title="Strata server monitor (Ctrl+M)">Monitor</button>
         <button id="btnSettings" class="ghost" title="Settings (Ctrl+,)">Settings</button>
@@ -35,28 +35,29 @@
                 <input type="checkbox" id="serialToggle" checked /> serial
               </label>
             </div>
-            <div class="queue-list" id="queueList"></div>
+            <span id="queueHelp" class="sr-only">Use Alt+Up or Alt+Down to change the order of the serial queue.</span>
+            <div class="queue-list" id="queueList" role="list" aria-label="Serial queue: sessions waiting for their turn"></div>
             <div class="queue-hint">Drag rows to reorder. Working rows run one at a time, top first.</div>
           </div>
 
           <div class="list-head">
             <span>Session files <span class="scope-tag" title="No folder filter: sessions of every project are listed, each row showing its working folder">all</span></span>
-            <input id="search" placeholder="Search&hellip;" />
+            <input id="search" placeholder="Search&hellip;" aria-label="Search session files" />
           </div>
           <div class="list-hint" id="listHint">Saved sessions on disk, from every working folder &mdash; each row shows the folder it was started in. Ones already open above show <b>open #n</b>; a tab with no file yet shows <b>unsaved</b>. Search (titles, messages, folder paths) filters this list only.</div>
-          <div class="session-list" id="sessionList"></div>
+          <div class="session-list" id="sessionList" role="list" aria-label="Session files"></div>
           <div class="side-foot" id="sideFoot"></div>
         </aside>
 
         <section class="chat-pane">
           <div class="now-bar hidden" id="nowBar"></div>
-          <div class="transcript" id="transcript"></div>
+          <div class="transcript" id="transcript" role="log" aria-label="Conversation transcript"></div>
           <div class="queue-bar hidden" id="queueBar"></div>
           <div class="ext-widgets" id="extWidgets"></div>
           <div class="composer">
             <div class="composer-row">
-              <select id="modelSel" title="Model"></select>
-              <select id="thinkingSel" title="Thinking level"></select>
+              <select id="modelSel" title="Model" aria-label="Model for this session"></select>
+              <select id="thinkingSel" title="Thinking level" aria-label="Thinking level"></select>
               <select id="busySel" title="What to do when the agent is already running">
                 <option value="steer">when busy: steer</option>
                 <option value="followUp">when busy: follow-up</option>
@@ -66,7 +67,7 @@
             </div>
             <div class="attachments" id="attachments"></div>
             <div class="slash-menu hidden" id="slashMenu"></div>
-            <textarea id="input" placeholder="Ask pi&hellip;  Enter = send &middot; Shift+Enter = newline &middot; !cmd = run bash &middot; / = commands &middot; drop files to attach"></textarea>
+            <textarea id="input" aria-label="Prompt for the active session" placeholder="Ask pi&hellip;  Enter = send &middot; Shift+Enter = newline &middot; !cmd = run bash &middot; / = commands &middot; drop files to attach"></textarea>
             <div class="composer-actions">
               <button id="btnAttach" title="Attach files">Attach files</button>
               <label class="mini-check" id="autoCompactWrap" title="Automatic compaction when the context is nearly full. pi default: enabled, reserve 16,384 tokens, keep the most recent 20,000. This switch only affects the current session.">
@@ -151,7 +152,7 @@
 
       <div class="drop-overlay hidden" id="dropOverlay">Drop files to attach</div>
       <div id="modalRoot"></div>
-      <div class="toasts" id="toasts"></div>
+      <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
       <input type="file" id="fileInput" multiple class="hidden" />
     </div>
 

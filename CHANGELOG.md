@@ -7,6 +7,13 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **Accessibility pass** - dialogs are now real dialogs (`role="dialog"`, labelled by their heading,
+  focus moved in, `Tab` wrapped, `Esc` closing through the Cancel button, focus returned to the
+  opener), icon-only buttons get an accessible name from their `title`, queue rows are focusable and
+  describe their state in words (`queued, 2 pending, queue position 1 of 3`), the tab strip / lists /
+  transcript / toasts carry roles and live regions, keyboard focus is visible (`:focus-visible`) and
+  the animations stop under `prefers-reduced-motion`. Checked by
+  `PI_ON_STRATA_SMOKE_A11Y=1`.
 - **Light theme** - Settings, Theme: `Dark` (default), `Light`, or follow the system theme. Every
   colour in `styles.css` now goes through a variable, so the light theme is one variable block
   (`[data-theme="light"]`) rather than a second stylesheet, and `renderer/theme-boot.js` mirrors the

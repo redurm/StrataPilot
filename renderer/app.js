@@ -1256,6 +1256,9 @@ function renderTabs() {
     if (!tab) continue;
     const node = el('div', `tab${tabId === state.activeId ? ' active' : ''}`);
     node.dataset.tabId = tabId;
+    node.setAttribute('role', 'tab');
+    node.setAttribute('aria-selected', String(tabId === state.activeId));
+    node.setAttribute('aria-label', tabLabel(tab));
     const running = !!tab.isStreaming || scheduler.runningTabId === tabId;
     if (running) node.classList.add('running');
     else if (tab.outbox.length) node.classList.add('queued');
@@ -1778,6 +1781,8 @@ function queueRow(tab, position) {
   // D4: the queue is keyboard-reachable and reorderable, not mouse-drag only
   row.tabIndex = 0;
   row.setAttribute('role', 'button');
+  row.setAttribute('aria-label', describeQueueRow(tab, position));
+  row.setAttribute('aria-describedby', 'queueHelp');
   row.addEventListener('keydown', (event) => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
@@ -2574,6 +2579,138 @@ function openModal(options) {
   if (options.kind === 'fields') return openFieldsModal(options);
   return openSimpleModal(options);
 }
+
+/* ------------------------------------------------------------------ */
+/* accessibility (D3)                                                  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The app grew without any accessibility work, so instead of touching every dialog and every icon
+ * button by hand, two observers do it centrally:
+ *
+ *  - dialogs: whatever gets appended to #modalRoot becomes a real dialog (role, aria-modal, a label
+ *    taken from its heading, focus moved in, Tab kept inside, Esc mapped to its Cancel/Close button,
+ *    focus given back to the element that opened it);
+ *  - controls: a button whose visible text is empty or a single glyph (the "x" of a tab, the "top"
+ *    arrow, ...) gets an accessible name from its title, which every one of them already has.
+ *
+ * Both are cheap: the observers only look at the nodes that were actually added.
+ */
+
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+let dialogOpener = null;
+let dialogStack = [];
+
+function observeDialogs() {
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.removedNodes) {
+        if (!(node instanceof HTMLElement) || !node.querySelector('.modal')) continue;
+        dialogStack.pop();
+        // the dialog is gone: hand focus back to whatever opened it (by now the removed nodes are
+        // detached, so the document has already dropped focus to <body>)
+        if (dialogOpener && dialogOpener.isConnected && (document.activeElement === document.body || document.activeElement === null)) {
+          dialogOpener.focus();
+          dialogOpener = null;
+        }
+      }
+      for (const node of record.addedNodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        const modal = node.classList.contains('modal') ? node : node.querySelector('.modal');
+        if (modal) decorateDialog(node, modal);
+      }
+    }
+  }).observe(els.modalRoot, { childList: true });
+}
+
+function decorateDialog(backdrop, modal) {
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  const heading = modal.querySelector('h3');
+  if (heading) {
+    if (!heading.id) heading.id = `dlg-${Date.now().toString(36)}`;
+    modal.setAttribute('aria-labelledby', heading.id);
+  }
+  dialogStack.push(modal);
+  if (!dialogOpener) dialogOpener = document.activeElement;
+
+  modal.addEventListener('keydown', (event) => {
+    if (dialogStack[dialogStack.length - 1] !== modal) return;
+    if (event.key === 'Escape') {
+      // every dialog has a Cancel / Close / Later button; reusing it means no dialog has to wire Esc
+      // itself and the existing "done" guards keep the result consistent
+      const cancel = [...modal.querySelectorAll('button')].find((button) => /^(cancel|close|later|dismiss|no)$/i.test(button.textContent.trim()));
+      if (cancel) {
+        event.preventDefault();
+        cancel.click();
+      }
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = [...modal.querySelectorAll(FOCUSABLE)].filter((node) => node.offsetParent !== null || node === document.activeElement);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+
+  modal.addEventListener('focusout', (event) => {
+    if (event.relatedTarget === null && !modal.contains(document.activeElement)) {
+      // focus left the dialog (clicked outside): bring it back while the dialog is still open
+      if (backdrop.isConnected) (modal.querySelector(FOCUSABLE) || modal).focus();
+    }
+  });
+}
+
+/** Buttons that only show a glyph get their accessible name from the title they already carry. */
+/**
+ * Buttons that only show a glyph get their accessible name from the title they already carry.
+ * The work is scoped to the nodes that were actually added (streaming appends a lot of DOM, and a
+ * document-wide query every frame would show up in the TPS numbers).
+ */
+function observeControlNames() {
+  let pending = [];
+  const glyphish = (text) => text.length <= 2 && !/[p{L}p{N}]/.test(text);
+  const name = (button) => {
+    if (button.hasAttribute('aria-label') || !button.hasAttribute('title')) return;
+    const text = button.textContent.trim();
+    if (text && !glyphish(text)) return;
+    const label = String(button.title).split('\n')[0].trim();
+    if (label) button.setAttribute('aria-label', label);
+  };
+  const run = () => {
+    const roots = pending;
+    pending = [];
+    for (const root of roots) {
+      if (root.matches && root.matches('button[title]')) name(root);
+      if (!root.querySelectorAll) continue;
+      for (const button of root.querySelectorAll('button[title]')) name(button);
+    }
+  };
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node instanceof HTMLElement) pending.push(node);
+      }
+    }
+    if (pending.length === 1) requestAnimationFrame(run); // one pass per frame, however many adds
+  }).observe(document.body, { childList: true, subtree: true });
+}
+
+/** A short description a screen reader can read for a queue row (the visual state is colour only). */
+function describeQueueRow(tab, position) {
+  const running = !!tab.isStreaming || scheduler.runningTabId === tab.id;
+  const state = running ? 'running' : tab.outbox.length ? `queued, ${tab.outbox.length} pending` : 'idle';
+  const order = position ? `queue position ${position} of ${state.order.length}` : 'not in the queue';
+  return `${tabLabel(tab)}, ${state}, ${order}. Alt+Up or Alt+Down reorders it.`;
+}
+
 
 /* ------------------------------------------------------------------ */
 /* settings dialog (A5)                                               */
@@ -5069,6 +5206,8 @@ async function init() {
   }
 
   wireUi();
+  observeDialogs(); // D3: every dialog becomes a real dialog without touching its creator
+  observeControlNames();
   wireDragAndDrop();
   wirePaste();
   renderComposerState();
@@ -5182,6 +5321,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeExport) {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokeA11y) {
+    setTimeout(() => smokeA11yScenario().catch((err) => console.error('[smoke] a11y scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeTheme) {
@@ -5708,6 +5851,45 @@ async function smokeThemeScenario() {
   const darkShot = await api.smokeShot('dark-theme');
   console.log(`[smoke-theme] shots light=${lightShot.ok ? lightShot.file : lightShot.error} dark=${darkShot.ok ? darkShot.file : darkShot.error}`);
 }
+
+/**
+ * PI_ON_STRATA_SMOKE_A11Y=1: D3. Opens the settings dialog and checks what the accessibility layer
+ * adds by itself (role, label from the heading, focus moved in, Tab wrapped, Esc closing through the
+ * Cancel button, focus handed back), then counts buttons that a screen reader would not name.
+ */
+async function smokeA11yScenario() {
+  const opener = document.activeElement;
+  const done = openSettingsModal();
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const modal = els.modalRoot.querySelector('.modal');
+  const heading = modal && modal.querySelector('h3');
+  const labelledBy = modal && modal.getAttribute('aria-labelledby');
+  const labelOk = !!(heading && labelledBy && heading.id === labelledBy && heading.textContent.trim());
+  const focusInside = !!(modal && modal.contains(document.activeElement));
+  const focusables = modal ? [...modal.querySelectorAll(FOCUSABLE)].filter((node) => node.offsetParent !== null) : [];
+  let wrapped = false;
+  if (focusables.length > 1) {
+    focusables[focusables.length - 1].focus();
+    focusables[0].focus();
+    focusables[focusables.length - 1].focus();
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    wrapped = document.activeElement === focusables[0];
+  }
+  const rowLabel = (() => {
+    const row = els.queueList.querySelector('.qrow');
+    return row ? row.getAttribute('aria-label') : null;
+  })();
+  document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const closed = !els.modalRoot.querySelector('.modal');
+  const restored = document.activeElement === opener;
+  const nameless = [...document.querySelectorAll('button')].filter((button) => !button.getAttribute('aria-label') && !button.textContent.trim()).length;
+  console.log(
+    `[smoke-a11y] dialog=${!!modal} role=${modal ? modal.getAttribute('role') : 'none'} aria_modal=${modal ? modal.getAttribute('aria-modal') : 'none'} labelled_by_heading=${labelOk} focus_inside=${focusInside} tab_wraps=${wrapped} esc_closes=${closed} focus_restored=${restored} nameless_buttons=${nameless} queue_row_label=${JSON.stringify(rowLabel)} toasts_live=${document.getElementById('toasts').getAttribute('aria-live')} tabs_role=${document.getElementById('tabs').getAttribute('role')}`,
+  );
+  await done;
+}
+
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.
 // A 1x1 PNG is built in JS (clipboard images have no filesystem path, so pathForFile() -> '').
