@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-TW">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+    <title>Pi on Strata</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">Pi<span> on Strata</span></div>
+        <div id="tabs" class="tabs"></div>
+        <button id="btnNew" class="ghost" title="New session (Ctrl+T)">+ New</button>
+        <button id="btnMonitor" class="ghost" title="Strata server monitor (Ctrl+M)">Monitor</button>
+        <div id="envInfo" class="env"></div>
+      </header>
+
+      <main class="body" id="body">
+        <aside class="sidebar" id="sidebar">
+          <div class="side-head">
+            <div class="field-row">
+              <button id="btnNewSide" class="primary">New session</button>
+              <button id="btnRefresh" title="Refresh list">Refresh</button>
+            </div>
+          </div>
+
+          <div class="queue-panel">
+            <div class="queue-head">
+              <span class="queue-title">Open sessions (queue)</span>
+              <label class="queue-switch" title="strata can only serve one request at a time: run one session at a time, in list order">
+                <input type="checkbox" id="serialToggle" checked /> serial
+              </label>
+            </div>
+            <div class="queue-list" id="queueList"></div>
+            <div class="queue-hint">Drag rows to reorder. Working rows run one at a time, top first.</div>
+          </div>
+
+          <div class="list-head">
+            <span>Session files</span>
+            <input id="search" placeholder="Search&hellip;" />
+          </div>
+          <div class="side-row scope-row">
+            <label><input type="radio" name="scope" value="project" checked /> this folder</label>
+            <label><input type="radio" name="scope" value="all" /> all projects</label>
+          </div>
+          <div class="list-hint" id="listHint">Saved sessions on disk. Ones already open above show <b>open #n</b>; a tab with no file yet shows <b>unsaved</b>. Search and the scope radios filter this list only.</div>
+          <div class="session-list" id="sessionList"></div>
+          <div class="side-foot" id="sideFoot"></div>
+        </aside>
+
+        <section class="chat-pane">
+          <div class="transcript" id="transcript"></div>
+          <div class="queue-bar hidden" id="queueBar"></div>
+          <div class="ext-widgets" id="extWidgets"></div>
+          <div class="composer">
+            <div class="composer-row">
+              <select id="modelSel" title="Model"></select>
+              <select id="thinkingSel" title="Thinking level"></select>
+              <select id="busySel" title="What to do when the agent is already running">
+                <option value="steer">when busy: steer</option>
+                <option value="followUp">when busy: follow-up</option>
+              </select>
+              <div class="stats" id="stats"></div>
+            </div>
+            <div class="attachments" id="attachments"></div>
+            <textarea id="input" placeholder="Ask pi&hellip;  Enter = send, Shift+Enter = newline, drop files anywhere to attach"></textarea>
+            <div class="composer-actions">
+              <button id="btnAttach" title="Attach files">Attach files</button>
+              <label class="mini-check" id="autoCompactWrap" title="Automatic compaction when the context is nearly full. pi default: enabled, reserve 16,384 tokens, keep the most recent 20,000. This switch only affects the current session.">
+                <input type="checkbox" id="autoCompactToggle" checked /> auto-compact
+              </label>
+              <button id="btnCompact" title="Compact the context now">Compact</button>
+              <button id="btnClearQueue" class="hidden" title="Drop queued messages">Clear queue</button>
+              <button id="btnAbort" class="danger hidden" title="Stop the current run (Esc)">Stop</button>
+              <button id="btnSend" class="primary" title="Send (Enter)">Send</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="monitor-view hidden" id="monitorView">
+          <div class="mon-resizer" id="monResizer" title="Drag to resize the monitor panel"></div>
+          <div class="mon-head">
+            <div class="mon-title">Strata monitor</div>
+            <div class="mon-src" id="monSrc" title="Click to open the Strata web monitor in your browser">&ndash;</div>
+          </div>
+          <div class="mon-scroll">
+            <div class="mon-card">
+              <div class="mon-card-head">
+                <span class="mon-h">Model state</span>
+                <span class="st-badges" id="monBadges"></span>
+              </div>
+              <div class="mon-state-label" id="monStateLabel">Waiting for a request</div>
+              <div class="mon-state-detail" id="monStateDetail"></div>
+              <div class="mon-progress"><div class="mon-progress-bar" id="monStateBar"></div></div>
+            </div>
+
+            <div class="mon-grid" id="monCards"></div>
+
+            <div class="mon-lower">
+              <div class="mon-card mon-ctx">
+                <div class="mon-h">Context fill</div>
+                <div class="ring-wrap">
+                  <svg class="ring" viewBox="0 0 120 120" aria-hidden="true">
+                    <circle class="ring-bg" cx="60" cy="60" r="37.5"></circle>
+                    <circle class="ring-fill" id="monCtxFill" cx="60" cy="60" r="37.5"></circle>
+                  </svg>
+                  <div class="ring-label"><b id="monCtxPct">0%</b><span id="monCtxSub"></span></div>
+                </div>
+                <div class="mon-bars">
+                  <div class="bar-row"><span>Experts in VRAM</span><span id="monSlotsText"></span></div>
+                  <div class="bar"><div class="bar-fill" id="monSlotsBar"></div></div>
+                  <div class="bar-row"><span>System RAM</span><span id="monRamText"></span></div>
+                  <div class="bar"><div class="bar-fill ram" id="monRamBar"></div></div>
+                  <div class="bar-row"><span>GPU temperature</span><span id="monTempText"></span></div>
+                  <div class="bar"><div class="bar-fill temp" id="monTempBar"></div></div>
+                  <div class="bar-row"><span>Engine</span><span id="monEngineText"></span></div>
+                </div>
+              </div>
+
+              <div class="mon-card mon-reqs">
+                <div class="mon-card-head">
+                  <span class="mon-h">Recent requests</span>
+                  <button id="monReqAll" class="ghost">Show all</button>
+                </div>
+                <div class="req-wrap">
+                  <table class="req-table">
+                    <thead>
+                      <tr>
+                        <th>Time</th><th>Status</th><th class="num">Prompt</th><th class="num">Reused</th>
+                        <th class="num">Output</th><th class="num">Prefill t/s</th><th class="num">Decode t/s</th>
+                        <th class="num">VRAM hit</th><th class="num">Duration</th>
+                      </tr>
+                    </thead>
+                    <tbody id="monReqBody"></tbody>
+                  </table>
+                </div>
+                <div class="mon-totals" id="monTotals"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <div class="drop-overlay hidden" id="dropOverlay">Drop files to attach</div>
+      <div id="modalRoot"></div>
+      <div class="toasts" id="toasts"></div>
+      <input type="file" id="fileInput" multiple class="hidden" />
+    </div>
+
+    <script src="markdown.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

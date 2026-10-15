@@ -1,0 +1,14 @@
+{
+  "name": "pi-on-strata",
+  "productName": "Pi on Strata",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop GUI for the pi coding agent on a local Strata server (RPC mode): multi-session tabs with a serial queue, session switcher, file drag & drop, and a built-in Strata monitor.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "40.10.2"
+  }
+}
