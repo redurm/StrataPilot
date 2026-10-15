@@ -118,7 +118,9 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   queued messages back into the editor; while they wait, the bottom bar shows their text (the top bar keeps
   showing the request that is running, and switches to the steering message once pi delivers it)
 - **Compact**: manual context compaction; the status bar shows context usage, tokens and cost; the
-  **`auto-compact`** checkbox next to the editor toggles auto-compaction for this session (see below)
+  **`auto-compact`** checkbox next to the editor toggles auto-compaction for this session (see below);
+  the **`auto-retry`** checkbox does the same for pi's retry of transient model errors, and a
+  **`stop retry`** button appears while a retry is waiting (`abort_retry`)
 - **Extension UI bridging**: `select` / `confirm` / `input` / `editor` emitted by an extension become
   in-window dialogs; `notify` / `setStatus` / `setWidget` / `setTitle` / `set_editor_text` are shown too
 - **Settings dialog** (topbar **Settings**, `Ctrl+,`, `/settings`): working folder, serial queue,
@@ -257,6 +259,7 @@ passed to pi, which expands extension commands, prompt templates and `/skill:nam
 | `/abort` | stop the current run or bash command |
 | `/resume` | focus the session search in the sidebar |
 | `/settings` | open the Settings dialog (the topbar button or `Ctrl+,`) |
+| `/retry [on\|off\|stop]` | pi's retry of transient model errors: on/off for this session, `stop` cancels a retry sitting in its delay - see [Retry of transient model errors](#retry-of-transient-model-errors) |
 | `/stats` | print tokens / cost / context usage into the transcript |
 | `/monitor` | toggle the Strata monitor |
 | `/diagnostics` | copy a diagnostics report for a bug report (see [One-click diagnostics report](#one-click-diagnostics-report)) |
@@ -444,6 +447,19 @@ What the GUI shows and lets you change:
   `auto-compact off · compact before it overflows`, so you do not hit overflow blind
 - To turn it off **permanently**: set `"compaction": { "enabled": false }` in
   `~/.pi/agent/settings.json`
+
+## Retry of transient model errors
+
+Strata drops a request now and then (overloaded, rate limit, 5xx, and - the common one here - a
+Strata restart mid-request). pi retries those by itself, and the GUI exposes both halves of it:
+
+| What | Where |
+|---|---|
+| The retry itself | transcript notes: `retry 2/4 in 3000ms: <error>` (`auto_retry_start`) and, if it gives up, `retry failed after 4 attempts: ...` (`auto_retry_end`) |
+| **`auto-retry`** checkbox | next to `auto-compact`, per session, RPC `set_auto_retry` - off means the request fails on the first transient error instead of waiting |
+| **`stop retry`** button | appears in the composer **only while a retry is sitting in its delay**, and sends `abort_retry`: the delay is cancelled and the request fails now instead of hammering a server that is clearly down |
+| `/retry`, `/retry on`, `/retry off`, `/retry stop` | same from the palette; bare `/retry` prints the current state and the attempt it is waiting for |
+| Off for every session | pi's own setting: `"retry": { "enabled": false }` in `~/.pi/agent/settings.json` (the checkbox is per tab and resets when a tab is reopened, because `get_state` does not report the current value) |
 
 ## Compaction and an in-flight request (not a bug, but confusing)
 
@@ -678,6 +694,7 @@ Other smoke switches:
 | `PI_ON_STRATA_SMOKE_EXPORT=1` | Use with `PI_ON_STRATA_SMOKE_SESSION=<path>`: runs `/export <temp>\pi_on_strata_smoke_export.html` (no dialog; override the target with `PI_ON_STRATA_SMOKE_EXPORT_OUT`), then stats pi's returned path through the read-only `fs:stat-paths`: expect `ok=true path=… exists=true bytes=N` |
 | `PI_ON_STRATA_SMOKE_DIAG=1` | Clicks **Diagnostics** (clipboard write is captured in JS) and checks the report: expect `copied=1 chars=… lines=… missing_sections=none unredacted_apikeys=0` — all seven sections present and no `apiKey` value left unredacted |
 | `PI_ON_STRATA_SMOKE_SETTINGS=1` | Opens the Settings dialog, counts its fields, clicks **Save** and re-reads the file: expect `fields=8 rendered=8 prefilled=3 missing=none saved_monitorWidth=520 css=520px serial=true restoreTabs=true` (the smoke profile keeps these writes away from your real settings) |
+| `PI_ON_STRATA_SMOKE_RETRY=1` | Exercises `set_auto_retry off/on` and `abort_retry`, then feeds the two retry events the composer reacts to: expect `setOff=true setOn=true checkbox_after_off=false stop_shown=true stop_hidden_after_end=true abort=true` |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII

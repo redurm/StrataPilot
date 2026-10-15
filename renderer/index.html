@@ -71,6 +71,10 @@
               <label class="mini-check" id="autoCompactWrap" title="Automatic compaction when the context is nearly full. pi default: enabled, reserve 16,384 tokens, keep the most recent 20,000. This switch only affects the current session.">
                 <input type="checkbox" id="autoCompactToggle" checked /> auto-compact
               </label>
+              <label class="mini-check" id="autoRetryWrap" title="Automatic retry of transient model errors (overloaded, rate limit, 5xx). pi default: enabled. This switch only affects the current session.">
+                <input type="checkbox" id="autoRetryToggle" checked /> auto-retry
+              </label>
+              <button id="btnStopRetry" class="danger hidden" title="Stop the retry that is waiting right now (RPC abort_retry)">stop retry</button>
               <button id="btnCompact" title="Compact the context now">Compact</button>
               <button id="btnClearQueue" class="hidden" title="Drop queued messages">Clear queue</button>
               <button id="btnAbort" class="danger hidden" title="Stop the current run (Esc)">Stop</button>

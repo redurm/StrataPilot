@@ -28,6 +28,9 @@ const els = {
   btnCompact: $('btnCompact'),
   autoCompactToggle: $('autoCompactToggle'),
   autoCompactWrap: $('autoCompactWrap'),
+  autoRetryToggle: $('autoRetryToggle'),
+  autoRetryWrap: $('autoRetryWrap'),
+  btnStopRetry: $('btnStopRetry'),
   extWidgets: $('extWidgets'),
   dropOverlay: $('dropOverlay'),
   modalRoot: $('modalRoot'),
@@ -222,6 +225,10 @@ function makeTab({ cwd, sessionPath, name, ephemeral, extraArgs = [] }) {
     inlines: [], // {kind:'inline', name, text}
     outbox: [], // {text, images, at} messages waiting for the serial queue
     autoCompact: true, // pi's own automatic compaction (read back from get_state)
+    // pi's automatic retry of transient provider errors: get_state does not report it, so the
+    // GUI tracks what it last asked for (pi's own default is enabled)
+    autoRetry: true,
+    retrying: null, // {attempt, maxAttempts, delayMs} while an auto_retry_start is waiting
     compacting: false, // a compaction (manual or auto) is in flight in this session
     compactStartedAt: 0,
     compactEventSeen: false, // pi already reported this compaction through compaction_end
@@ -963,10 +970,14 @@ function handleRecord(tab, record) {
       scheduler.pumpSoon(400); // a running compaction was holding the serial queue
       break;
     case 'auto_retry_start':
+      tab.retrying = { attempt: record.attempt || 1, maxAttempts: record.maxAttempts || 0, delayMs: record.delayMs || 0 };
       pushNote(tab, `retry ${record.attempt}/${record.maxAttempts} in ${record.delayMs}ms: ${record.errorMessage}`, 'warn');
+      renderComposerState();
       break;
     case 'auto_retry_end':
+      tab.retrying = null;
       if (!record.success) pushNote(tab, `retry failed after ${record.attempt} attempts: ${record.finalError || ''}`, 'error');
+      renderComposerState();
       break;
     case 'entry_appended':
       if (record.entry && record.entry.type === 'custom') pushNote(tab, `[${record.entry.customType}] ${truncate(JSON.stringify(record.entry.data ?? ''), 800)}`);
@@ -1450,6 +1461,20 @@ function renderComposerState() {
   els.autoCompactToggle.checked = autoOn;
   els.autoCompactToggle.disabled = !tab || !tab.alive;
   els.autoCompactWrap.classList.toggle('off', !autoOn);
+  const retryOn = !(tab && tab.autoRetry === false);
+  if (els.autoRetryToggle) {
+    els.autoRetryToggle.checked = retryOn;
+    els.autoRetryToggle.disabled = !tab || !tab.alive;
+    els.autoRetryWrap.classList.toggle('off', !retryOn);
+  }
+  // a retry wait is the only moment "stop retrying" means anything: pi is sitting in the delay
+  if (els.btnStopRetry) {
+    const waiting = !!(tab && tab.retrying);
+    els.btnStopRetry.classList.toggle('hidden', !waiting);
+    if (waiting) {
+      els.btnStopRetry.title = `pi is waiting ${tab.retrying.delayMs}ms before attempt ${tab.retrying.attempt}/${tab.retrying.maxAttempts} (RPC abort_retry)`;
+    }
+  }
   if (!tab) {
     els.input.placeholder = 'Create a session first (Ctrl+T)';
   } else if (!tab.alive) {
@@ -3024,6 +3049,7 @@ const GUI_COMMANDS = [
   { name: 'resume', args: '', desc: 'search past sessions in the sidebar' },
   { name: 'monitor', args: '', desc: 'toggle the Strata monitor' },
   { name: 'stats', args: '', desc: 'print tokens, cost and context usage' },
+  { name: 'retry', args: '[on|off|stop]', desc: 'retry transient model errors: on/off for this session, stop cancels a retry that is waiting' },
   { name: 'settings', args: '', desc: 'open the settings dialog (working folder, serial queue, Strata address, Monitor, paths)' },
   { name: 'diagnostics', args: '', desc: 'copy a diagnostics report (versions, paths, Strata health, log tail, queue) for a bug report' },
   { name: 'commands', args: '', desc: 'list the slash commands available here' },
@@ -3194,6 +3220,26 @@ async function runSlashCommand(tab, text) {
           + `cost $${Number(d.cost || 0).toFixed(4)} · context ${ctx.percent || 0}% (${fmtTokens(ctx.tokens || 0)} / ${fmtTokens(ctx.contextWindow || 0)})\n`
           + `session: ${d.sessionFile || '(ephemeral)'}`,
       );
+      clearComposer();
+      return true;
+    }
+    case 'retry': {
+      const what = arg.toLowerCase();
+      if (what === 'stop') {
+        await abortRetry(tab);
+        return true;
+      }
+      if (what === 'on' || what === 'off') {
+        await setAutoRetry(tab, what === 'on');
+        clearComposer();
+        return true;
+      }
+      if (what) {
+        toast('retry: expected on, off or stop', 'warning');
+        return true;
+      }
+      const waiting = tab.retrying ? `waiting ${tab.retrying.delayMs}ms before attempt ${tab.retrying.attempt}/${tab.retrying.maxAttempts}` : 'not retrying';
+      pushNote(tab, `auto-retry is ${tab.autoRetry === false ? 'off' : 'on'} for this session \u00b7 ${waiting}\n/retry on | /retry off | /retry stop (cancels a retry that is waiting)`, 'info');
       clearComposer();
       return true;
     }
@@ -3572,6 +3618,41 @@ async function runCompact(tab, instructions) {
     renderOpenSessions();
     renderComposerState();
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* retry controls (A4) — pi's own retry of transient provider errors   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `set_auto_retry` is per session (like auto-compaction). get_state does not report the current
+ * value, so the checkbox reflects what the GUI last asked for; pi's own default is enabled.
+ */
+async function setAutoRetry(tab, enabled) {
+  const res = await api.cmd(tab.id, 'set_auto_retry', { enabled });
+  if (!res.success) {
+    toast(res.error || 'set_auto_retry failed', 'error');
+    renderComposerState();
+    return false;
+  }
+  tab.autoRetry = enabled;
+  toast(`auto-retry ${enabled ? 'on' : 'off'} \u00b7 ${tabLabel(tab)}`);
+  renderComposerState();
+  return true;
+}
+
+/** Cancel the delay of a running retry and stop retrying (the request then fails normally). */
+async function abortRetry(tab) {
+  const res = await api.cmd(tab.id, 'abort_retry');
+  if (!res.success) {
+    toast(res.error || 'abort_retry failed', 'error');
+    return;
+  }
+  pushNote(tab, 'retry stopped (abort_retry): the request will fail instead of retrying', 'warn');
+  toast('retry stopped', 'info');
+  // pi does not emit a matching auto_retry_end for an aborted retry
+  tab.retrying = null;
+  renderComposerState();
 }
 
 /* ------------------------------------------------------------------ */
@@ -3966,6 +4047,17 @@ function wireUi() {
     renderComposerState();
     renderStats(tab);
   });
+  els.autoRetryToggle.addEventListener('change', async () => {
+    const tab = activeTab();
+    if (!tab) return;
+    const wanted = els.autoRetryToggle.checked;
+    const ok = await setAutoRetry(tab, wanted);
+    if (!ok) els.autoRetryToggle.checked = tab.autoRetry !== false;
+  });
+  els.btnStopRetry.addEventListener('click', async () => {
+    const tab = activeTab();
+    if (tab) await abortRetry(tab);
+  });
   $('btnClearQueue').addEventListener('click', clearQueue);
   $('btnAttach').addEventListener('click', () => els.fileInput.click());
   els.btnMonitor.addEventListener('click', toggleMonitor);
@@ -4232,6 +4324,7 @@ function wireUi() {
     tab.isStreaming = false;
     tab.starting = false;
     tab.compacting = false; // a dead process must not stall the serial queue
+    tab.retrying = null;
     tab.compactStartedAt = 0;
     pushNote(tab, `pi process exited (code=${code} signal=${signal})${stderr ? `\n${stderr.slice(-1500)}` : ''}`, 'error');
     renderTabs();
@@ -4366,6 +4459,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeExport) {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokeRetry) {
+    setTimeout(() => smokeRetryScenario().catch((err) => console.error('[smoke] retry scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeSettings) {
@@ -4736,6 +4833,31 @@ async function smokeSettingsScenario() {
   const merged = await api.settingsGet();
   console.log(
     `[smoke-settings] fields=${wanted.length} rendered=${present.length} prefilled=${prefilled.length} missing=${wanted.filter((k) => !present.includes(k)).join(',') || 'none'} saved_monitorWidth=${merged && merged.monitorWidth} saved_strataUrl=${merged && merged.strataUrl} css=${document.documentElement.style.getPropertyValue('--mon-w')} serial=${scheduler.enabled} restoreTabs=${state.settings.restoreTabs}`,
+  );
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_RETRY=1: the two retry RPCs must answer, and the two events pi already
+ * renders as notes must also drive the composer ("stop retry" only appears while a retry is
+ * waiting; auto_retry_end takes it away again).
+ */
+async function smokeRetryScenario() {
+  const tab = activeTab();
+  if (!tab) {
+    console.log('[smoke-retry] no active tab');
+    return;
+  }
+  const off = await api.cmd(tab.id, 'set_auto_retry', { enabled: false });
+  const on = await api.cmd(tab.id, 'set_auto_retry', { enabled: true });
+  els.autoRetryToggle.checked = false;
+  els.autoRetryToggle.dispatchEvent(new Event('change'));
+  handleRecord(tab, { type: 'auto_retry_start', attempt: 2, maxAttempts: 4, delayMs: 60000, errorMessage: 'simulated overload' });
+  const shown = !els.btnStopRetry.classList.contains('hidden');
+  const note = [...els.transcript.querySelectorAll('.note')].pop();
+  const stop = await api.cmd(tab.id, 'abort_retry');
+  handleRecord(tab, { type: 'auto_retry_end', success: false, attempt: 2, finalError: 'simulated' });
+  console.log(
+    `[smoke-retry] setOff=${off.success} setOn=${on.success} checkbox_after_off=${els.autoRetryToggle.checked} stop_shown=${shown} stop_hidden_after_end=${els.btnStopRetry.classList.contains('hidden')} abort=${stop.success} retrying=${tab.retrying} note=${note ? note.textContent.slice(0, 40) : ''}`,
   );
 }
 
