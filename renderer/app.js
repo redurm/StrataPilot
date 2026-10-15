@@ -201,8 +201,11 @@ function activeTab() {
   return state.tabs.get(state.activeId) || null;
 }
 
-function makeTab({ cwd, sessionPath, name, ephemeral, extraArgs = [] }) {
-  const id = `tab-${Date.now().toString(36)}-${++state.tabSeq}`;
+function makeTab({ tabId = '', cwd, sessionPath, name, ephemeral, extraArgs = [] }) {
+  // A persisted tab id is what makes "Reload interface" cheap after a renderer crash: main.js
+  // spawnTab() reuses the live pi process when the id is still the same, so the session, its
+  // context and anything running survive the reload instead of being started twice.
+  const id = tabId && !state.tabs.has(tabId) ? tabId : `tab-${Date.now().toString(36)}-${++state.tabSeq}`;
   const args = [];
   if (sessionPath) args.push('--session', sessionPath);
   if (ephemeral) args.push('--no-session');
@@ -4015,7 +4018,7 @@ function scheduleSave() {
   state.saveTimer = setTimeout(() => {
     const openTabs = [...state.tabs.values()]
       .filter((tab) => tab.sessionPath && !tab.ephemeral)
-      .map((tab) => ({ cwd: tab.cwd, sessionPath: tab.sessionPath, name: tab.name }));
+      .map((tab) => ({ id: tab.id, cwd: tab.cwd, sessionPath: tab.sessionPath, name: tab.name }));
     api.settingsSet({ cwd: state.cwd, openTabs, serialQueue: scheduler.enabled });
   }, 800);
 }
@@ -4310,6 +4313,13 @@ function wireUi() {
     }
   });
 
+  // C9: the main process noticed the renderer died / hung / came back
+  api.on('recovery', (event) => {
+    const info = event && typeof event === 'object' ? event : {};
+    if (info.kind === 'recovered') toast(info.cause || 'The interface answered again', 'info', 8000);
+    else if (info.kind === 'declined') toast('reload declined \u2014 the window stays broken; sessions keep running in the background', 'warning', 9000);
+  });
+
   api.on('pi:record', ({ tabId, record }) => {
     const tab = state.tabs.get(tabId);
     if (!tab) return;
@@ -4400,7 +4410,7 @@ async function init() {
   const restore = state.info.smoke || state.settings.restoreTabs === false ? [] : (state.settings.openTabs || []).filter((t) => t && t.sessionPath).slice(0, 4);
   if (restore.length) {
     for (const entry of restore) {
-      const tab = makeTab({ cwd: entry.cwd || state.cwd, sessionPath: entry.sessionPath, name: entry.name });
+      const tab = makeTab({ tabId: entry.id || '', cwd: entry.cwd || state.cwd, sessionPath: entry.sessionPath, name: entry.name });
       const res = await api.spawn({ tabId: tab.id, cwd: tab.cwd, args: tab.args });
       if (res.ok) {
         tab.alive = true;
@@ -4410,6 +4420,12 @@ async function init() {
         pushNote(tab, `failed to restore: ${res.error}`, 'error');
       }
     }
+    // A reload after a renderer crash reuses the persisted tab ids, so main hands back the pi
+    // processes that survived instead of starting duplicates; anything that died in the meantime
+    // was respawned by spawnTab, and this is the sanity check that says which is which.
+    const aliveMap = await api.alive(restore.map((entry) => entry.id).filter(Boolean));
+    const reused = Object.values(aliveMap).filter(Boolean).length;
+    if (reused) console.log(`[restore] ${reused}/${restore.length} tabs re-used a live pi process`);
     activateTab(state.order[state.order.length - 1]);
   } else {
     await createTab({ cwd: state.cwd, ephemeral: !!state.info.smoke });

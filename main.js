@@ -115,20 +115,70 @@ function createWindow() {
   });
 
   // Renderer death is the usual shape of a "UI crash" (white window, or the window
-  // vanishing). None of these were recorded before, so it left no evidence.
+  // vanishing). C8 records it; C9 recovers from it. Recovery is cheap because the pi
+  // processes live in the main process and a tab's id is persisted in the settings, so a
+  // reload re-attaches to the processes that are still alive instead of starting a second
+  // pi per session.
+  let unresponsiveReported = false;
+  let recovering = false;
+
+  const recoverInterface = async (cause, detail) => {
+    if (recovering || !win || win.isDestroyed()) return;
+    recovering = true;
+    console.error(`[crash] recovery offered: ${cause} ${detail || ''}`);
+    try {
+      const choice = await dialog.showMessageBox(win, {
+        type: 'error',
+        title: 'Pi on Strata',
+        message: cause,
+        detail:
+          `${detail || ''}\n\nSessions are not closed: every pi session runs as its own process owned by the background process, `
+          + 'and reloading the interface re-attaches to the ones that are still alive. A generation that was running right now is interrupted.\n\n'
+          + 'The log file (Help \u25b8 Open Log Folder) holds what happened.',
+        buttons: ['Reload interface', 'Keep the window as it is'],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (choice.response === 0) {
+        console.log('[crash] reloading interface');
+        win.webContents.reload();
+      } else {
+        console.log('[crash] reload declined by the user');
+        send('recovery', { kind: 'declined', cause });
+      }
+    } catch (err) {
+      console.error(`[crash] recovery dialog failed: ${err.message}`);
+    } finally {
+      recovering = false;
+    }
+  };
+
   win.webContents.on('render-process-gone', (_event, details) => {
     console.error(
       `[crash] renderer gone reason=${details.reason} exitCode=${details.exitCode} killed=${details.killed}`,
     );
+    recoverInterface('The interface stopped responding and was closed by Windows', `reason=${details.reason} exitCode=${details.exitCode}`);
   });
-  win.webContents.on('unresponsive', () => console.error('[crash] renderer unresponsive (>30s of no reply)'));
-  win.webContents.on('responsive', () => console.error('[crash] renderer responsive again'));
+  win.webContents.on('unresponsive', () => {
+    console.error('[crash] renderer unresponsive (>30s of no reply)');
+    unresponsiveReported = true;
+    recoverInterface('The interface has stopped responding', 'It has not answered for over 30 seconds \u2014 usually a stuck render, not a lost session.');
+  });
+  win.webContents.on('responsive', () => {
+    console.error('[crash] renderer responsive again');
+    if (unresponsiveReported) {
+      unresponsiveReported = false;
+      send('recovery', { kind: 'recovered', cause: 'The interface answered again \u2014 nothing was reloaded.' });
+    }
+  });
   win.webContents.on('preload-error', (_event, preloadPath, error) => {
     console.error(`[crash] preload-error ${preloadPath}: ${(error && error.stack) || error}`);
   });
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl) => {
     if (errorCode === -3) return; // ABORTED: normal during reload/navigation
     console.error(`[nav] did-fail-load code=${errorCode} ${errorDescription} url=${validatedUrl}`);
+    recoverInterface('The interface failed to load', `code=${errorCode} ${errorDescription}`);
   });
 
   if (process.env.PI_ON_STRATA_SMOKE) {

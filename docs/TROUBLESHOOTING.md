@@ -23,6 +23,9 @@ parent [`README.md`](../README.md).
 | Need the renderer stack with line numbers | DevTools (Ctrl+Shift+I) shows it live; the log also records `file:line:col` for uncaught errors. For scripted reproduction, launch with `--remote-debugging-port=9223` and drive it over CDP |
 | Reproduce without touching your real profile | Smoke mode uses a separate profile and skips the single-instance lock: `PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=30000 PI_ON_STRATA_SMOKE_PROMPT="Reply OK" npm start`, then read `%TEMP%\pi_on_strata_smoke_profile\logs\pi_on_strata.log` |
 | The app feels frozen but is still there | Look for `[crash] renderer unresponsive` (no reply for >30 s). Ctrl+Shift+R reloads the renderer; open tabs live in pi processes, so a reload does not kill a running request |
+| A white window says nothing at all | It now asks: after a renderer crash, hang or a failed load the app shows a dialog offering **Reload interface** (the window used to just stay blank). Reload re-attaches to the pi processes that are still running - tab ids are saved in the settings file, so the sessions, their context and a running generation survive; only the interface is rebuilt. If a generation really was interrupted, resend the last message (`resend` on the pinned bar or the message action) |
+| The window came back by itself after hanging | The log shows `[crash] renderer unresponsive` then `responsive again`, and a toast says nothing was reloaded. If it happens repeatedly, look for a `[renderer error]` line in between - usually one huge transcript or one huge tool output |
+| Reload did not bring the tabs back | Only tabs with a session file are restored (unsaved and ephemeral tabs have nothing to reopen). Check `restoreTabs` in the Settings dialog is on, and `openTabs` in the settings file |
 
 ## Model / connection
 

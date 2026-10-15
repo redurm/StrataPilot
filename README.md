@@ -734,6 +734,7 @@ What lands in it:
 | `[renderer 3] … (file:line:col)` | renderer console errors/warnings |
 | `[renderer error] …` + stack | uncaught renderer exceptions and unhandled rejections (`renderer/error-report.js`) |
 | `[crash] renderer gone reason=… exitCode=` | the renderer process died (white window) |
+| `[crash] recovery offered: …` / `[crash] reloading interface` | the crash dialog was shown and what the user chose (see [Recovering from a crash](#recovering-from-a-crash)) |
 | `[crash] renderer unresponsive` / `responsive again` | the renderer stopped replying for >30 s |
 | `[crash] … process gone reason= code=` | any Electron child process (GPU, utility…) died |
 | `[fatal] uncaughtException (source):` + stack | main-process crash — the app quits, but the stack is on disk |
@@ -748,6 +749,22 @@ Notes:
 - A renderer exception used to be invisible: nothing was written to disk, no crash dump, no Windows
   error report. If the UI ever freezes or vanishes again, read the log first — the last
   `[renderer error]` / `[crash]` / `[fatal]` line is normally the answer.
+
+### Recovering from a crash
+
+A dead or hung renderer used to leave a white window with no message and no way back. Now the main
+process notices all three shapes of it and offers to fix them itself:
+
+| What happens | What it does |
+|---|---|
+| renderer process died (`render-process-gone`), the interface stopped answering for >30 s (`unresponsive`), or the page failed to load (`did-fail-load`) | a dialog: **Reload interface** or **Keep the window as it is** |
+| the interface starts answering again after a hang | a toast says nothing was reloaded, so you know it was a stall rather than a restart |
+| you choose Reload | `webContents.reload()` rebuilds the interface; the tabs are restored from the settings file **with their tab ids**, and `spawnTab` hands back the pi process that is still running for that id instead of starting a second one |
+
+What survives a reload: every session file, the conversation context, and a generation that is
+still running in pi (it keeps streaming into the reloaded window). What does not: the transcript
+that was on screen (it is re-read from the session file), unsaved and ephemeral tabs (no file to
+reopen), and the outbox (see the note in `docs/TODO.md` B4).
 
 ### One-click diagnostics report
 
