@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Desktop GUI for the pi coding agent on a local Strata server (RPC mode): multi-session tabs with a serial queue, session switcher, file drag & drop, and a built-in Strata monitor.",
+  "license": "MIT",
   "main": "main.js",
   "engines": {
     "node": ">=22.19"

@@ -1,0 +1,97 @@
+# Changelog
+
+All notable changes to **Pi on Strata** are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the version in `package.json` is the one
+that is shipped (`0.x` while the app has no packaging/installer yet).
+
+## [Unreleased]
+
+### Added
+
+- **Diagnostics report** — topbar **Diagnostics** button, `/diagnostics`, and menu
+  Help ▸ Copy Diagnostics: one pasteable block with versions and paths, the pi install, Strata
+  `/health` and `/v1/models`, both model configurations, every open tab's queue state and the log
+  tail, with keys redacted. The same text is saved under
+  `%APPDATA%\Pi on Strata\diagnostics\`. (`lib/diagnostics.js`)
+- **Settings dialog** — topbar **Settings**, `Ctrl+,`, `/settings`: working folder, serial queue,
+  `restoreTabs`, fixed Strata address, Strata config path for the report, Monitor open/width and
+  sidebar, plus one-click access to the settings file, the log file and the sessions folder. Nothing
+  needs a hand edit of the JSON file any more.
+- **Retry controls** — `auto-retry` checkbox per session (`set_auto_retry`), a **stop retry** button
+  that only appears while a retry is sitting in its delay (`abort_retry`), and
+  `/retry [on|off|stop]`. The `auto_retry_start` / `auto_retry_end` notes now also drive the composer.
+- **Crash recovery** — a renderer crash, a >30 s hang or a failed page load now opens a dialog
+  offering **Reload interface** instead of leaving a white window; tab ids are persisted, so a reload
+  re-attaches to the pi processes that are still running instead of starting a second pi per session.
+  A toast reports when the interface starts answering again by itself.
+- **pi version guard** — the env bar shows the pi version first and turns amber (different minor) or
+  red (different major, or pi not resolved) when it is not the version this GUI was tested against
+  (`TESTED_PI_VERSION` in `lib/pi-launch.js`).
+- **File logging** — everything the main process prints is mirrored to
+  `%APPDATA%\Pi on Strata\logs\pi_on_strata.log` (rotates at ~2 MB, keeps two generations): startup
+  banner, pi spawn/exit/stderr, `uncaughtException` / `unhandledRejection`, `child-process-gone`,
+  `render-process-gone`, `unresponsive`, `did-fail-load`, `preload-error`, and renderer
+  `error` / `unhandledrejection` forwarded from `renderer/error-report.js`. Menu
+  Help ▸ Open Log Folder.
+- **Paste an image with `Ctrl+V`** — a screenshot on the clipboard is attached exactly like a drag &
+  drop (thumbnail chip, sent as RPC `images`); plain-text paste is untouched.
+- **Per-message actions** — hovering a message reveals `copy` (raw markdown source of that message,
+  never the rendered HTML) and, on user messages, `resend` (back through the normal Send path, so
+  busy mode and the serial queue behave as for a typed message).
+- **`/export [path]`** — save the session as HTML through pi's `export_html`; no argument opens the
+  native Save dialog, an argument must be an absolute `*.html`.
+- **Unit tests** — `npm test` runs `node --test` over the three hand-written parsers
+  (`renderer/markdown.js`, `lib/sessions.js`, `lib/pi-process.js`), the log writer, the diagnostics
+  report and the pi version guard, with no Electron, pi or Strata needed.
+
+### Changed
+
+- `package.json` gained a `test` script and `engines: { "node": ">=22.19" }`, the version the README
+  already called a hard requirement.
+- Smoke mode grew scenarios for each of the above (`PI_ON_STRATA_SMOKE_PASTE / _COPY / _EXPORT /
+  _DIAG / _SETTINGS / _RETRY`), and `PI_ON_STRATA_SMOKE_PI_VERSION` fakes the pi version to exercise
+  the guard.
+
+## [0.1.0] - 2026-10-15
+
+First version of the app, replacing the `pi_gui` prototype (the app name, the settings file
+`pi_on_strata_settings.json` and the `PI_ON_STRATA_*` environment prefix all moved; the old settings
+file is migrated on first launch).
+
+### Added
+
+- **Multi-session tabs**, each one a real `pi --mode rpc` process: new session (`Ctrl+T`), new session
+  inside the current tab (`Ctrl+Shift+N`), rename (`F2`), close (`Ctrl+W`), restore up to 4 tabs on
+  the next launch.
+- **Serial queue** — Strata answers one request at a time, so the sidebar's
+  `OPEN SESSIONS (QUEUE)` splits open tabs into Working / Idle and runs one session at a time in list
+  order (drag to reorder, `top`, per-tab outbox, `serial` switch).
+- **Session switcher** — every saved session of every project in one list, each row showing the
+  working folder it was started in; open in a new tab, load into this tab (`switch_session`), rename
+  or delete from the row.
+- **Strata Monitor** (`Ctrl+M`) — model state, speed, GPU/VRAM/temperature/power/PCIe/CPU/disk,
+  context fill and recent requests, read from `/metrics` by the main process (no CSP/CORS problems).
+- **Streaming output** — assistant text, collapsible thinking, tool call cards with live partial
+  output, plus `!command` / `!!command` bash cards with streaming output.
+- **`/` command palette** — app commands (`/compact`, `/model`, `/thinking`, `/stats`, `/new`,
+  `/rename`, `/abort`, `/resume`, `/monitor`, `/commands`) plus pi's own extension commands, prompt
+  templates and skills from `get_commands`.
+- **Pinned request bars** — the request pi is working on right now at the top of the chat (`↓ jump`
+  scrolls to it), everything not processed yet above the editor.
+- **Markdown rendering with no dependencies** (`renderer/markdown.js`) — headings, lists, quotes,
+  code blocks with a copy button, and GFM tables with `:---:` alignment, `\|` escaping and column
+  count repair, taking shape while streaming.
+- **Model / thinking dropdowns**, **steer / follow-up while busy**, **manual and automatic
+  compaction** with a per-session `auto-compact` switch, context usage / tokens / cost in the status
+  bar.
+- **Extension UI bridging** — `select` / `confirm` / `input` / `editor` become in-window dialogs,
+  `notify` / `setStatus` / `setWidget` / `setTitle` / `set_editor_text` are shown.
+- **File drag & drop** anywhere on the window: images go to the RPC `images` payload, everything else
+  becomes a list of absolute paths pi can `read`.
+
+### Fixed (relative to the `pi_gui` prototype)
+
+- Compaction no longer reports a fake timeout: the RPC waits on pi's own `compaction_end` event
+  instead of a short timer (an 86 MB session really does take minutes).
+- Links in chat output open in the default browser; they can no longer open a second Electron window
+  or navigate the app away.

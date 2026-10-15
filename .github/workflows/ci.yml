@@ -1,0 +1,72 @@
+name: CI
+
+# What runs here, and what cannot:
+#
+#   * the unit tests (`npm test`) need nothing but Node - no Electron binary, no pi, no Strata -
+#     so they run on all three platforms, which is also the only cross-platform signal this repo
+#     has today (see docs/TODO.md C7: the app itself is developed and smoke-tested on Windows).
+#   * the smoke scenarios (PI_ON_STRATA_SMOKE_*) need a real pi install and a running Strata
+#     server, so they stay manual. `smoke-rpc.js` at least checks the pi install without a model.
+#   * the Electron binary is never downloaded: nothing in CI launches a window, and skipping it
+#     cuts minutes off every job.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    name: unit tests (${{ matrix.os }}, node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node: ['22.19', '24.x'] # 22.19 is the floor package.json declares; latest is what people actually run
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  syntax:
+    name: syntax check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19'
+      # the renderer files are plain browser scripts and the main-process files are CommonJS:
+      # `node --check` catches the one kind of mistake a smoke run only shows as a blank window
+      - name: node --check every source file
+        shell: bash
+        run: |
+          set -e
+          for f in main.js preload.js lib/*.js renderer/*.js test/*.js scripts/*.js; do
+            [ -f "$f" ] && node --check "$f"
+          done
+
+  pi-install:
+    name: pi install smoke (no model needed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19'
+      - name: install pi
+        run: |
+          curl -fsSL https://pi.dev/install.sh | sh || echo "pi install failed: the job below reports what it found"
+      - name: report what the launcher resolves
+        run: node test/smoke-rpc.js "$GITHUB_WORKSPACE" || true

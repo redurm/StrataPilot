@@ -1,0 +1,77 @@
+name: Bug report
+description: Something crashes, hangs, sends the wrong thing, or renders wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Please read `docs/TROUBLESHOOTING.md`
+        first — most "it is broken" reports are a Strata/model configuration problem and are answered there.
+  - type: textarea
+    id: symptom
+    attributes:
+      label: What happened, and what did you expect
+      description: one or two sentences is enough
+      placeholder: |
+        Sent a prompt in the second tab while the first was running; the second tab stayed "queued" forever.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1. 
+        2. 
+        3. 
+      description: which tab, what you pressed, whether it happens every time
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics report
+      description: >
+        Press the topbar **Diagnostics** button (or type `/diagnostics`, or use Help ▸ Copy
+        Diagnostics) and paste what it copied. It already contains the log tail, versions, paths,
+        Strata `/health`, both model configs (keys redacted) and the queue state, so it replaces
+        everything else below. If the app will not start at all, paste the last lines of
+        `%APPDATA%\Pi on Strata\logs\pi_on_strata.log` instead.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: pi-version
+    attributes:
+      label: pi version
+      description: the env bar shows it; `~/.pi/agent/install/current-version` has the same value
+      placeholder: "1.2.0"
+  - type: input
+    id: strata
+    attributes:
+      label: Strata build and model config
+      description: which launcher / engine config (`strata-<model>.json` name), and the port
+      placeholder: "START-HERE.bat, strata-iq3_s.json, port 8081"
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 24H2 (the app is developed on Windows; Linux/macOS are untested)"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part is broken
+      multiple: true
+      options:
+        - startup / window
+        - crash or white window
+        - serial queue / outbox
+        - compaction
+        - streaming / markdown / tool cards
+        - session list / switching
+        - Strata monitor
+        - attachments / paste
+        - model or thinking selection
+        - something else

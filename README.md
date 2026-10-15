@@ -672,6 +672,20 @@ scripts/screenshot.ps1  screenshots (used while developing the UI)
 Protocol details: see the pi docs `docs/rpc.md`, `docs/rpc-commands.md`, `docs/json.md`,
 `docs/session-format.md`.
 
+### CI
+
+`.github/workflows/ci.yml` runs on push/PR:
+
+| Job | What it does |
+|---|---|
+| `unit-tests` | `npm test` on **Windows, Linux and macOS** (Node 22.19, the version `engines` requires, and current Node). The unit tests need nothing but Node: no Electron binary is downloaded (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`), no pi, no Strata |
+| `syntax` | `node --check` over every `main.js` / `preload.js` / `lib` / `renderer` / `test` file |
+| `pi-install` | installs pi on a clean runner and runs `node test/smoke-rpc.js`, which prints what the launcher resolves (cli, node runtime, pi version, sessions root) and exercises `get_state` / `get_available_models` / `get_commands` against a real pi with no model configured |
+
+The smoke scenarios below are **not** in CI: they need a real pi install *and* a running Strata
+server with a model loaded, which no hosted runner has. They stay a manual step, and each one prints
+one `[smoke-…]` line so you can tell at a glance whether it passed.
+
 ### Smoke mode for development
 
 ```bash
@@ -804,3 +818,8 @@ The full backlog, with effort and priority, is in [`docs/TODO.md`](docs/TODO.md)
 - The scheduler can only serialize prompts **sent from the GUI**; executions started by an extension
   cannot be blocked (in that case it takes over `runningTabId` directly and shows it in the queue).
 - The outbox is not persisted across restarts.
+
+## License
+
+MIT — see [LICENSE](LICENSE). What was added when: [CHANGELOG.md](CHANGELOG.md). The working backlog
+with effort/priority/status for everything not done yet: [docs/TODO.md](docs/TODO.md).
