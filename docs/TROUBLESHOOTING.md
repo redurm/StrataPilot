@@ -123,6 +123,13 @@ parent [`README.md`](../README.md).
 
 ## What to include when reporting an issue
 
+**Press the topbar `Diagnostics` button (or type `/diagnostics`, or use menu Help ▸ Copy
+Diagnostics).** It copies a report holding items 2–5 below — versions and paths, the pi install,
+Strata `/health` and `/v1/models`, both model configs with keys redacted, every open tab's queue
+state and the log tail — and saves the same text to
+`%APPDATA%\Pi on Strata\diagnostics\pi_on_strata_diagnostics_<timestamp>.txt`. Paste it in and add
+item 1; only collect the pieces by hand if the app will not start at all.
+
 1. The symptom plus reproduction steps (which tab, what you pressed)
 2. The tail of `%APPDATA%\Pi on Strata\logs\pi_on_strata.log` (menu **Help ▸ Open Log Folder**) —
    the startup banner plus the last `[renderer error]` / `[crash]` / `[fatal]` / `[pi exit]` lines;
@@ -130,5 +137,8 @@ parent [`README.md`](../README.md).
 3. The first four lines of `node test/smoke-rpc.js <cwd>` (cli / node / pi version / sessions root)
 4. pi version (`~/.pi/agent/install/current-version`), Strata version, the output of `curl
    http://127.0.0.1:<port>/health`, and both model configurations — pi's `models.json` and Strata's
-   `strata-<model>.json` (**redact the key**)
+   `strata-<model>.json` (**redact the key**; the report does that for you, and it can include the
+   Strata config when `strataConfigPath` is set in the settings file)
+5. For queue / compact issues: a screenshot of `OPEN SESSIONS (QUEUE)` (Working/Idle groups and
+   badges) — the report prints the same rows as text under `[6] open sessions / queue`
 5. For queue / compact issues: a screenshot of `OPEN SESSIONS (QUEUE)` (Working/Idle groups and badges)

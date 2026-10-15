@@ -18,7 +18,7 @@ Cheap to close, and used every day.
 | A3 | `/export` a session to HTML | RPC command exists, no UI, no palette entry | `renderer/app.js` slash palette | `export_html` | S | P0 | done |
 | A4 | Retry controls | `auto_retry_start` / `auto_retry_end` events are already rendered as notes, but the two commands are not wired; Strata disconnects make "retry N times / stop retrying" useful | `renderer/app.js` ~L915 | `set_auto_retry`, `abort_retry` | S | P1 | todo |
 | A5 | Settings dialog | `strataUrl`, default `cwd`, `serialQueue`, `monitorWidth` all require hand-editing `%APPDATA%\Pi on Strata\pi_on_strata_settings.json` (the README even tells the reader to add `strataUrl` by hand) | `main.js` settings block, new panel in `renderer/index.html` | `app:settings-get/set` already exist | M | P0 | todo |
-| A6 | `Copy diagnostics` button | `docs/TROUBLESHOOTING.md` "What to include when reporting an issue" asks for 5 items the user has to collect by hand (smoke-rpc first four lines, pi version, `/health`, both model configs) | `main.js` `app:info`, `lib/pi-launch.js` `describe()` | pairs with TROUBLESHOOTING | S | P0 | todo |
+| A6 | `Copy diagnostics` button | `docs/TROUBLESHOOTING.md` "What to include when reporting an issue" asked for 5 items the user had to collect by hand (smoke-rpc first four lines, pi version, `/health`, both model configs) — now one click: topbar **Diagnostics** button, `/diagnostics`, and menu **Help ▸ Copy Diagnostics**; report is copied and saved to `userData/diagnostics/`, keys redacted | `lib/diagnostics.js`, `main.js` `app:diagnostics`, `renderer/app.js` `copyDiagnostics()`, `test/diagnostics.test.js` | pairs with TROUBLESHOOTING | S | P0 | done |
 
 ### RPC commands that exist in pi but are not used at all
 

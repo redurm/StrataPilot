@@ -1,14 +1,15 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, clipboard } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const { PiRpcProcess } = require('./lib/pi-process');
-const { resolvePiInvocation } = require('./lib/pi-launch');
+const { resolvePiInvocation, TESTED_PI_VERSION } = require('./lib/pi-launch');
 const sessions = require('./lib/sessions');
 const appLog = require('./lib/log');
+const diagnostics = require('./lib/diagnostics');
 
 const APP_ID = 'com.pionstrata.app';
 const SETTINGS_NAME = 'pi_on_strata_settings.json';
@@ -196,6 +197,16 @@ function buildMenu() {
           },
         },
         {
+          label: 'Copy Diagnostics',
+          click: async () => {
+            // same report the composer button produces; the menu path also puts it on the
+            // clipboard straight from main, so it works even when the renderer is wedged
+            const report = await buildDiagnostics({});
+            clipboard.writeText(report.text);
+            send('diagnostics', report);
+          },
+        },
+        {
           label: 'pi RPC docs',
           click: () => shell.openExternal('https://github.com/earendil-works/pi/tree/main/packages/coding-agent/docs'),
         },
@@ -259,6 +270,110 @@ function spawnTab({ tabId, cwd, args = [], env = {} }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* diagnostics report (A6: "Copy diagnostics")                        */
+/* ------------------------------------------------------------------ */
+
+/** GET a URL and return { ok, text } — the raw body, so /health can be quoted verbatim. */
+async function fetchText(url, { apiKey = '', timeoutMs = 4000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
+  try {
+    const response = await fetch(url, {
+      headers: { accept: 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    const body = (await response.text()).slice(0, 4000);
+    if (!response.ok) return { ok: false, error: `HTTP ${response.status}: ${body}`, url };
+    return { ok: true, text: body, url };
+  } catch (err) {
+    return { ok: false, error: err.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : err.message, url };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function oneLineJson(text) {
+  if (!text) return '';
+  return String(text).replace(/\s+/g, ' ').trim().slice(0, 600);
+}
+
+/**
+ * Assemble the report asked for by docs/TROUBLESHOOTING.md. The renderer passes its queue
+ * snapshot and the Strata address it derived from the active tab; everything else (paths,
+ * config files, the log tail) belongs to the main process. Secrets are stripped by
+ * lib/diagnostics.js before the text reaches the clipboard or the file on disk.
+ */
+async function buildDiagnostics(payload = {}) {
+  const inv = resolvePiInvocation();
+  const settings = loadSettings();
+  const agentDir = path.join(os.homedir(), '.pi', 'agent');
+  const baseUrl = String(payload.baseUrl || settings.strataUrl || '').replace(/\/v1\/?$/i, '').replace(/\/+$/, '');
+
+  const strata = { baseUrl: baseUrl || '(none: no tab with a model, and no strataUrl setting)' };
+  if (baseUrl) {
+    const key = String(payload.apiKey || process.env.PI_ON_STRATA_KEY || process.env.STRATA_API_KEY || '');
+    const health = await fetchText(`${baseUrl}/health`, { apiKey: key });
+    strata.healthText = health.ok ? oneLineJson(health.text) : health.error;
+    const models = await fetchText(`${baseUrl}/v1/models`, { apiKey: key });
+    strata.modelsText = models.ok ? oneLineJson(models.text) : models.error;
+    strata.metricsUrl = `${baseUrl}/metrics`;
+  }
+  strata.engineConfig = diagnostics.readConfig(settings.strataConfigPath || '');
+  if (!settings.strataConfigPath) strata.engineConfig.error = 'settings.strataConfigPath is not set (Settings dialog ▸ Strata config)';
+
+  const data = {
+    app: {
+      appVersion: app.getVersion(),
+      electronVersion: process.versions.electron,
+      nodeVersion: process.versions.node,
+      platform: `${process.platform}/${process.arch}`,
+      logPath: appLog.logPath(),
+      settingsPath: SETTINGS_FILE(),
+      sessionsRoot: sessions.sessionsRoot(),
+      defaultCwd: process.cwd(),
+    },
+    pi: {
+      cliPath: inv.cliPath,
+      nodePath: inv.nodePath,
+      runAsNode: inv.runAsNode,
+      piVersion: inv.piVersion,
+      testedVersion: TESTED_PI_VERSION,
+      sessionsRoot: sessions.sessionsRoot(),
+      settingsFile: path.join(agentDir, 'settings.json'),
+      defaultModel: diagnostics.readConfig(path.join(agentDir, 'settings.json')),
+      modelsJson: diagnostics.readConfig(path.join(agentDir, 'models.json')),
+    },
+    strata,
+    queue: {
+      serial: schedulerStateSnapshot(payload),
+      active: payload.active || '',
+      rows: Array.isArray(payload.rows) ? payload.rows : [],
+    },
+    log: diagnostics.tail(appLog.logPath()),
+  };
+
+  const text = diagnostics.format(data);
+  let savedTo = '';
+  try {
+    const dir = path.join(app.getPath('userData'), 'diagnostics');
+    fs.mkdirSync(dir, { recursive: true });
+    savedTo = path.join(dir, `pi_on_strata_diagnostics_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`);
+    fs.writeFileSync(savedTo, text, 'utf8');
+  } catch (err) {
+    console.error(`[diagnostics] could not save report: ${err.message}`);
+  }
+  console.log(`[diagnostics] report built lines=${text.split('\n').length} saved=${savedTo}`);
+  return { ok: true, text, path: savedTo };
+}
+
+function schedulerStateSnapshot(payload) {
+  if (typeof payload.serial === 'boolean') return payload.serial;
+  return 'unknown';
+}
+
+/* ------------------------------------------------------------------ */
 /* IPC                                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -293,8 +408,11 @@ function registerIpc() {
       smokeCopy: !!process.env.PI_ON_STRATA_SMOKE_COPY,
       smokeExport: !!process.env.PI_ON_STRATA_SMOKE_EXPORT,
       smokeExportOut: process.env.PI_ON_STRATA_SMOKE_EXPORT_OUT || path.join(os.tmpdir(), 'pi_on_strata_smoke_export.html'),
+      smokeDiag: !!process.env.PI_ON_STRATA_SMOKE_DIAG,
     };
   });
+
+  ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(payload && typeof payload === 'object' ? payload : {}));
 
   ipcMain.handle('app:settings-get', () => loadSettings());
   ipcMain.handle('app:settings-set', (_event, patch) => {

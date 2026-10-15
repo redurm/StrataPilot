@@ -60,6 +60,7 @@ const els = {
   monTotals: $('monTotals'),
   monResizer: $('monResizer'),
   slashMenu: $('slashMenu'),
+  btnDiag: $('btnDiag'),
 };
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -2793,6 +2794,7 @@ const GUI_COMMANDS = [
   { name: 'resume', args: '', desc: 'search past sessions in the sidebar' },
   { name: 'monitor', args: '', desc: 'toggle the Strata monitor' },
   { name: 'stats', args: '', desc: 'print tokens, cost and context usage' },
+  { name: 'diagnostics', args: '', desc: 'copy a diagnostics report (versions, paths, Strata health, log tail, queue) for a bug report' },
   { name: 'commands', args: '', desc: 'list the slash commands available here' },
   { name: 'help', args: '', desc: 'show this list' },
 ];
@@ -2964,6 +2966,10 @@ async function runSlashCommand(tab, text) {
       clearComposer();
       return true;
     }
+    case 'diagnostics':
+      clearComposer();
+      await copyDiagnostics();
+      return true;
     case 'commands':
     case 'help': {
       const lines = slashCatalog(tab).map((c) => `/${c.name}${c.args ? ` ${c.args}` : ''} — ${c.desc} [${c.source}]`);
@@ -3420,6 +3426,74 @@ async function runExport(tab, arg) {
 }
 
 /* ------------------------------------------------------------------ */
+/* diagnostics report (A6) — pairs with docs/TROUBLESHOOTING.md        */
+/* ------------------------------------------------------------------ */
+
+let diagnosticsBusy = false;
+
+/**
+ * The part only the renderer knows: which tabs are open, what the queue is doing, and the
+ * Strata address + key the active tab's model uses. lib/diagnostics.js redacts the key before
+ * the text is built, it is passed only so /health and /v1/models can be fetched at all.
+ */
+function diagnosticsSnapshot() {
+  const active = activeTab();
+  const rows = state.order
+    .map((id) => state.tabs.get(id))
+    .filter(Boolean)
+    .map((tab) => ({
+      label: tabLabel(tab),
+      state: tab.isStreaming ? 'streaming' : tab.compacting ? 'compacting' : tab.outbox.length ? 'queued' : tab.alive ? 'idle' : 'dead',
+      cwd: tab.cwd || '',
+      sessionPath: tab.sessionPath || '',
+      outbox: tab.outbox.length,
+      model: tab.model ? `${tab.model.provider ? `${tab.model.provider}/` : ''}${tab.model.id || ''}` : '',
+    }));
+  const model = active && active.model ? active.model : null;
+  return {
+    rows,
+    serial: scheduler.enabled,
+    active: active ? tabLabel(active) : '(none)',
+    baseUrl: strataBaseUrl(),
+    apiKey: (model && model.apiKey) || '',
+  };
+}
+
+/**
+ * Build the report in main, put it on the clipboard, and say where it was saved. The report is
+ * always written to userData/diagnostics/ as well, so a blocked clipboard never loses it.
+ */
+async function copyDiagnostics() {
+  if (diagnosticsBusy) return;
+  diagnosticsBusy = true;
+  els.btnDiag.disabled = true;
+  els.btnDiag.textContent = 'Building\u2026';
+  try {
+    const res = await api.diagnostics(diagnosticsSnapshot());
+    if (!res || !res.ok) {
+      toast((res && res.error) || 'could not build the diagnostics report', 'error');
+      return;
+    }
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(res.text);
+      copied = true;
+    } catch {
+      copied = false; // clipboard permission denied (window not focused): the file is still there
+    }
+    if (copied) toast(res.path ? `diagnostics copied to the clipboard \u00b7 also saved to ${res.path}` : 'diagnostics copied to the clipboard', 'info', 9000);
+    else toast(`clipboard blocked \u00b7 report saved to ${res.path}`, 'warning', 12000);
+    console.log(`[diagnostics] copied=${copied} saved=${res.path || '(not saved)'} lines=${String(res.text || '').split('\n').length}`);
+  } catch (err) {
+    toast(`diagnostics failed: ${err.message}`, 'error', 9000);
+  } finally {
+    diagnosticsBusy = false;
+    els.btnDiag.disabled = false;
+    els.btnDiag.textContent = 'Diagnostics';
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* attachments / drag & drop                                           */
 /* ------------------------------------------------------------------ */
 
@@ -3660,6 +3734,17 @@ function wireUi() {
   $('btnClearQueue').addEventListener('click', clearQueue);
   $('btnAttach').addEventListener('click', () => els.fileInput.click());
   els.btnMonitor.addEventListener('click', toggleMonitor);
+  els.btnDiag.addEventListener('click', copyDiagnostics);
+
+  // Help \u25b8 Copy Diagnostics runs in main (works even if this window is wedged); it already put
+  // the text on the clipboard, the renderer only reports where the copy came from.
+  api.on('diagnostics', (report) => {
+    if (!report || !report.ok) {
+      toast((report && report.error) || 'could not build the diagnostics report', 'error');
+      return;
+    }
+    toast(`diagnostics copied from the menu \u00b7 also saved to ${report.path || '(not saved)'}`, 'info', 9000);
+  });
 
   // chat output contains markdown links and bare urls: route them to the default
   // browser instead of letting Electron navigate or open a second window
@@ -4044,6 +4129,10 @@ async function init() {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
   }
 
+  if (state.info.smoke && state.info.smokeDiag) {
+    setTimeout(() => smokeDiagScenario().catch((err) => console.error('[smoke] diagnostics scenario failed', err)), 1500);
+  }
+
   if (state.info.smoke && state.info.smokePrompt) {
     els.input.value = state.info.smokePrompt;
     setTimeout(() => {
@@ -4347,6 +4436,38 @@ async function smokeExportScenario() {
   console.log(
     `[smoke-export] ok=${result.ok} path=${result.path || ''} exists=${exists} bytes=${bytes}${result.error ? ` error=${JSON.stringify(result.error)}` : ''}`,
   );
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_DIAG=1: the "Diagnostics" button must build the report, hand it to the
+ * clipboard and save a copy. Asserts the five TROUBLESHOOTING items are present and that no
+ * key from ~/.pi/agent/models.json leaks into the text.
+ */
+async function smokeDiagScenario() {
+  const copied = [];
+  const realWrite = navigator.clipboard.writeText.bind(navigator.clipboard);
+  navigator.clipboard.writeText = (value) => {
+    copied.push(value);
+    return Promise.resolve();
+  };
+  try {
+    await copyDiagnostics();
+    const text = copied.join('');
+    const sections = ['[1]', '[2]', '[3]', '[4]', '[5]', '[6]', '[7]'];
+    const missing = sections.filter((s) => !text.includes(s));
+    const unredacted = (text.match(/"(?:api[_-]?key|apikey)"\s*:\s*"(?![*]{3})/g) || []).length;
+    console.log(
+      `[smoke-diag] copied=${copied.length} chars=${text.length} lines=${text.split('\n').length} missing_sections=${missing.join(',') || 'none'} unredacted_apikeys=${unredacted} toast=${JSON.stringify(lastToastText())}`,
+    );
+  } finally {
+    navigator.clipboard.writeText = realWrite;
+  }
+}
+
+function lastToastText() {
+  const nodes = [...els.toasts.children];
+  const last = nodes[nodes.length - 1];
+  return last ? last.textContent.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
 }
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.

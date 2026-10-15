@@ -121,6 +121,10 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   **`auto-compact`** checkbox next to the editor toggles auto-compaction for this session (see below)
 - **Extension UI bridging**: `select` / `confirm` / `input` / `editor` emitted by an extension become
   in-window dialogs; `notify` / `setStatus` / `setWidget` / `setTitle` / `set_editor_text` are shown too
+- **Diagnostics report**: the topbar **Diagnostics** button (`/diagnostics`, menu **Help ▸ Copy
+  Diagnostics**) copies one pasteable block for a bug report — versions and paths, the pi install,
+  Strata `/health` + `/v1/models`, both model configs, every open tab's queue state and the log tail —
+  with keys redacted, and saves the same text under `%APPDATA%\Pi on Strata\diagnostics\`
 - Tabs that were open on exit are restored on next launch (up to 4)
 
 ## The two sidebar lists (why some rows overlap and others don't)
@@ -250,6 +254,7 @@ passed to pi, which expands extension commands, prompt templates and `/skill:nam
 | `/resume` | focus the session search in the sidebar |
 | `/monitor` | toggle the Strata monitor |
 | `/stats` | print tokens / cost / context usage into the transcript |
+| `/diagnostics` | copy a diagnostics report (versions, paths, Strata `/health`, both model configs, log tail, queue) for a bug report — same as the **Diagnostics** button |
 | `/commands`, `/help` | list the app commands plus everything `get_commands` reports from pi |
 
 pi's built-in TUI commands (`/settings`, `/hotkeys`, …) do not exist in RPC mode — the palette list
@@ -399,7 +404,8 @@ edit it — `strataUrl` is the one worth adding by hand):
 | `openTabs` | Tabs to restore (session paths), up to 4 |
 | `serialQueue` | Serial queue on/off |
 | `sidebarHidden` / `monitorOpen` / `monitorWidth` | Sidebar, Monitor panel state and width |
-| `strataUrl` | **Add manually**: fixed Strata address for the Monitor (e.g. `http://127.0.0.1:8081/v1`); if absent it is derived from the current tab's `model.baseUrl` |
+| `strataUrl` | Fixed Strata address for the Monitor (e.g. `http://127.0.0.1:8081/v1`); if absent it is derived from the current tab's `model.baseUrl` |
+| `strataConfigPath` | Optional path of the Strata engine config (`C:\Strata\strata-src\strata-<model>.json`): only used to include that file, keys redacted, in the diagnostics report |
 
 The old `pi-gui` settings file is migrated automatically on first launch (see the note at the top).
 
@@ -661,6 +667,7 @@ Other smoke switches:
 | `PI_ON_STRATA_SMOKE_PASTE=1` | Synthesises `paste` events carrying a generated 1×1 PNG: expect `files=1 images=1 chips=1 first=pasted-1.png size=70b`, then `images=2 chips=2 first=pasted-2.png`; also checks a two-image paste, `bmp` → "unsupported image type" toast, an 8 MB+ image → "image too large" toast, plain-text paste (`prevented=false`) and the modal guard (`modalOpen=true prevented=false images` unchanged) |
 | `PI_ON_STRATA_SMOKE_COPY=1` | Sends a prompt, waits for `agent_settled`, then clicks the user message's `copy` / `resend` (clipboard write is captured in JS): expect `copy_ok=true resend_ok=true composer="" queued=1 label_copied=true assistant_copy_ok=true`. A second tab is generating, so the resent text must land in the **outbox** (queue-aware path), not reach the model; also checks the draft guard (`modal=true` and the draft survives a cancel) and that the buttons survive `renderAll()` |
 | `PI_ON_STRATA_SMOKE_EXPORT=1` | Use with `PI_ON_STRATA_SMOKE_SESSION=<path>`: runs `/export <temp>\pi_on_strata_smoke_export.html` (no dialog; override the target with `PI_ON_STRATA_SMOKE_EXPORT_OUT`), then stats pi's returned path through the read-only `fs:stat-paths`: expect `ok=true path=… exists=true bytes=N` |
+| `PI_ON_STRATA_SMOKE_DIAG=1` | Clicks **Diagnostics** (clipboard write is captured in JS) and checks the report: expect `copied=1 chars=… lines=… missing_sections=none unredacted_apikeys=0` — all seven sections present and no `apiKey` value left unredacted |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII
@@ -706,6 +713,29 @@ Notes:
 - A renderer exception used to be invisible: nothing was written to disk, no crash dump, no Windows
   error report. If the UI ever freezes or vanishes again, read the log first — the last
   `[renderer error]` / `[crash]` / `[fatal]` line is normally the answer.
+
+### One-click diagnostics report
+
+The topbar **Diagnostics** button (also `/diagnostics`, also menu **Help ▸ Copy Diagnostics**)
+assembles everything [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) asks for when reporting an issue
+into one text block, puts it on the clipboard and saves a copy to
+`%APPDATA%\Pi on Strata\diagnostics\pi_on_strata_diagnostics_<timestamp>.txt`:
+
+| Section | Contents |
+|---|---|
+| `[1]` | placeholder for the symptom / reproduction steps you still have to write yourself |
+| `[2]` | app / Electron / Node versions, platform, log, settings and sessions paths |
+| `[3]` | the same four lines `node test/smoke-rpc.js` prints (cli, node runtime, pi version, sessions root) plus the pi version this GUI was tested against |
+| `[4]` | Strata base url, `/health` and `/v1/models` verbatim, `/metrics` url, and the Strata engine config if `strataConfigPath` is set |
+| `[5]` | pi's `~/.pi/agent/models.json` provider block and its default model settings |
+| `[6]` | every open tab: state (streaming / compacting / queued / idle / dead), cwd, session file, outbox length, model — the queue screenshot in text form |
+| `[7]` | the tail of the log file |
+
+Keys are stripped before the text is built (`lib/diagnostics.js`: `apiKey`-style JSON keys,
+`Bearer …` headers and `api-key …` arguments, at any depth), and the saved file is written already
+redacted. Still glance over the text before pasting it into a ticket — the redaction is a
+safety net, not a promise. The menu path copies from the main process, so it still works when the
+renderer itself is the thing that is broken.
 
 ## Known limitations
 

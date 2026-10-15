@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-const EVENT_CHANNELS = new Set(['pi:record', 'pi:stderr', 'pi:log', 'pi:exit', 'menu']);
+const EVENT_CHANNELS = new Set(['pi:record', 'pi:stderr', 'pi:log', 'pi:exit', 'menu', 'diagnostics']);
 
 const api = {
   /* environment ------------------------------------------------------- */
@@ -35,6 +35,8 @@ const api = {
   strataMetrics: (payload) => ipcRenderer.invoke('strata:metrics', payload),
 
   /* diagnostics -------------------------------------------------------- */
+  /** Build the report asked for by docs/TROUBLESHOOTING.md (queue snapshot comes from us). */
+  diagnostics: (payload = {}) => ipcRenderer.invoke('app:diagnostics', payload),
   /** Forward an uncaught renderer error to the main process log (fire and forget). */
   clientError: (entry) => ipcRenderer.send('app:client-error', entry),
 
