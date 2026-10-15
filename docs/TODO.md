@@ -40,6 +40,14 @@ Cheap to close, and used every day.
 | B2 | Lazy transcript rendering | Listed in the README as the "one big item still untouched": opening an 86 MB / 600+ message session builds the whole transcript into the DOM at once | `renderer/app.js` `renderAll()` (~L603) | M | P1 | todo |
 | B3 | Session list cache | `listSessions()` re-reads every `.jsonl` from the beginning (capped at 12 MB each) on every refresh, synchronously in the main process; with hundreds of sessions this stalls the UI. Add a `path → {mtimeMs, size, meta}` cache and re-read only what changed (or move it to a utilityProcess) | `lib/sessions.js` ~L170 | M | P1 | todo |
 | B4 | Persist the outbox | The outbox lives in memory and is silently lost on restart. Minimum: store it in settings and show it as "pending, not sent" after relaunch (never auto-send) | `renderer/app.js` `scheduler`, `main.js` settings | M | P2 | todo |
+| B5 | Cron jobs (scheduled prompts) | No way to run a prompt on a schedule (e.g. daily 09:30). Agreed design: scheduler lives in a new `lib/cron.js` (main process, hand-written 5-field parser, no new dependency), job definitions persist in settings (`settings.jobs[]`), and on fire the main process sends `cron:fire` to the renderer, which pushes the prompt into the target tab's **outbox** and calls `scheduler.pumpSoon(0)` — the existing serial queue stays the only prompt entry point, so Strata single-flight is never violated. Target is `new-tab` / `tab:<id>` / `session:<path>` (respawn a dead tab via `pi --session`). Recompute `nextRun` on `powerMonitor resume` + a 5-min heartbeat (sleep drift); missed runs only toast a notice, never auto-run. Management UI: modal list + add/edit form; `cron:run-now` IPC for testing. See design notes below | new `lib/cron.js`, `main.js`, `preload.js`, `renderer/app.js` | M | P1 | todo |
+
+### B5 design notes (from the 2026 research pass)
+
+- Rejected: main process spawning its own headless `PiRpcProcess` — the renderer `scheduler` would not know about it and two prompts could hit Strata at once; fixing that means moving the scheduler to main (too big).
+- Rejected for the mainline: Windows Task Scheduler + `pi -p` — reliable across sleep/shutdown but bypasses the GUI and the serial queue; could be a later "run even when the app is closed" option.
+- Risks: a scheduled prompt runs with full read/edit/bash rights (the UI must say so and pin `cwd`); `new-tab` jobs pile up session files (offer `ephemeral` / auto-close after `agent_settled`); a cron prompt sitting in the outbox is lost on crash — same gap as B4, do them together.
+- Testing: `test/cron.test.js` for `parseCron`/`nextRun` (month rollover, weekday field, recompute after sleep); `PI_ON_STRATA_SMOKE_CRON` fires one echo job at startup and checks the outbox badge appears.
 
 ## C. Delivery and maintainability (required before handing this to anyone else)
 
