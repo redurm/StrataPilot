@@ -18,7 +18,7 @@ const path = require('node:path');
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-sessions-'));
 process.env.PI_CODING_AGENT_SESSION_DIR = tmpRoot;
 
-const { sessionsRoot, listSessions, readSessionMeta, deleteSession, renameSession } = require('../lib/sessions');
+const { sessionsRoot, listSessions, readSessionMeta, deleteSession, renameSession, clearSessionCache, cacheSize } = require('../lib/sessions');
 
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'sessions');
 const MAX_SCAN_BYTES = 12 * 1024 * 1024;
@@ -231,4 +231,99 @@ test('listSessions scans groups, sorts by updatedAt desc, filters and limits', (
   const limited = listSessions({ limit: 1 });
   assert.equal(limited.sessions.length, 1);
   assert.ok(limited.total >= 3, `total: ${limited.total}`);
+});
+
+/* ---- listSessions metadata cache (B3) ---- */
+
+// iterSessionFiles() only walks <root>/<group>/<file>.jsonl, so the probe file needs to sit
+// directly in its own group folder
+const cacheDir = path.join(tmpRoot, '_cache_probe');
+fs.mkdirSync(cacheDir, { recursive: true });
+const cacheFile = path.join(cacheDir, 'cached.jsonl');
+
+function sessionWith(name, firstText) {
+  return [
+    { type: 'session', id: 'cache-1', cwd: 'C:/work', timestamp: '2024-05-05T00:00:00.000Z', version: 1 },
+    { type: 'session_info', id: 'cache-2', parentId: 'cache-1', timestamp: '2024-05-05T00:00:01.000Z', name },
+    { type: 'message', id: 'cache-3', parentId: 'cache-2', timestamp: '2024-05-05T00:00:02.000Z', message: { role: 'user', content: [{ type: 'text', text: firstText }] } },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join('\n') + '\n';
+}
+
+function findIn(list, name) {
+  return list.sessions.find((s) => s.fileName === name);
+}
+
+/** Count how often lib/sessions.js opens a given file (readSessionMeta is the only reader). */
+function countOpensOf(needle, run) {
+  const realOpen = fs.openSync;
+  let opens = 0;
+  fs.openSync = function patched(...args) {
+    if (String(args[0]).includes(needle)) opens++;
+    return realOpen.apply(fs, args);
+  };
+  try {
+    run();
+  } finally {
+    fs.openSync = realOpen;
+  }
+  return opens;
+}
+
+test('cache: the first list reads the file, the second one does not', () => {
+  clearSessionCache();
+  fs.writeFileSync(cacheFile, sessionWith('Cache Title One', 'hello cache'), 'utf8');
+  const first = countOpensOf('cached.jsonl', () => {
+    var found = findIn(listSessions(), 'cached.jsonl');
+    assert.equal(found.title, 'Cache Title One');
+  });
+  assert.ok(first >= 1, `the first list must read the file (opens=${first})`);
+
+  // the case that matters: the sidebar refreshes after almost every message, while most session
+  // files did not change at all
+  const second = countOpensOf('cached.jsonl', () => {
+    var found = findIn(listSessions(), 'cached.jsonl');
+    assert.equal(found.title, 'Cache Title One');
+  });
+  assert.equal(second, 0, 'an unchanged (mtimeMs, size) file must not be opened again');
+});
+
+test('cache: clearing it makes the same file read again', () => {
+  clearSessionCache();
+  const opens = countOpensOf('cached.jsonl', () => {
+    var found = findIn(listSessions(), 'cached.jsonl');
+    assert.equal(found.title, 'Cache Title One');
+  });
+  assert.ok(opens >= 1, `after clearSessionCache() the file must be read again (opens=${opens})`);
+});
+
+test('cache: an appended line changes the size, so the file is re-read', () => {
+  fs.appendFileSync(cacheFile, JSON.stringify({ type: 'session_info', id: 'cache-9', name: 'Renamed By Append' }) + '\n', 'utf8');
+  const opens = countOpensOf('cached.jsonl', () => {
+    var found = findIn(listSessions(), 'cached.jsonl');
+    assert.equal(found.title, 'Renamed By Append');
+  });
+  assert.ok(opens >= 1, `a size change must force a re-read (opens=${opens})`);
+});
+
+test('cache: renameSession and deleteSession drop the entry instead of returning stale data', () => {
+  renameSession(cacheFile, 'Named Through RPC');
+  assert.equal(findIn(listSessions(), 'cached.jsonl').title, 'Named Through RPC');
+  deleteSession(cacheFile);
+  assert.equal(findIn(listSessions(), 'cached.jsonl'), undefined);
+  assert.ok(!fs.existsSync(cacheFile));
+  assert.throws(() => readSessionMeta(cacheFile), /ENOENT/);
+});
+
+test('cache: a file that disappears between lists is dropped from the cache', () => {
+  const ghost = path.join(cacheDir, 'ghost.jsonl');
+  fs.writeFileSync(ghost, sessionWith('Ghost', 'boo'), 'utf8');
+  listSessions();
+  const withGhost = cacheSize();
+  assert.ok(findIn(listSessions(), 'ghost.jsonl'));
+  fs.rmSync(ghost);
+  listSessions();
+  assert.equal(cacheSize(), withGhost - 1, 'the vanished file must leave the cache');
+  assert.equal(findIn(listSessions(), 'ghost.jsonl'), undefined);
 });

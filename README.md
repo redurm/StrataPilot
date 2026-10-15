@@ -158,6 +158,14 @@ Display rules:
   while the old file stays in Session files — hence the "it was there a second ago, now it's not in
   the queue" case
 
+**Refreshing the list is cheap.** `listSessions()` in the main process keeps a
+`path -> {mtimeMs, size, meta}` cache: a session file is append-only, so when its mtime and size are
+unchanged nothing is parsed again. That matters because the sidebar refreshes after almost every
+message, and parsing an 86 MB session every time would freeze the UI (the scan of one file is also
+capped at 12 MB, which is why very long sessions show `truncatedScan`). `renameSession()` /
+`deleteSession()` drop their cache entry, and a file that vanished between two refreshes is removed
+from it.
+
 ### Export a session
 
 `/export [path]` (composer or palette) turns the current session into a standalone HTML page.

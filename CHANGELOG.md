@@ -44,6 +44,10 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   (`renderer/markdown.js`, `lib/sessions.js`, `lib/pi-process.js`), the log writer, the diagnostics
   report and the pi version guard, with no Electron, pi or Strata needed.
 
+- **Session list cache** - `listSessions()` no longer re-parses every session file on every
+  sidebar refresh: metadata is cached per file and only re-read when the file's `mtimeMs`/`size`
+  changed (an 86 MB session used to be re-scanned after almost every message).
+
 ### Changed
 
 - `package.json` gained a `test` script and `engines: { "node": ">=22.19" }`, the version the README
