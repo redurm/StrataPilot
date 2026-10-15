@@ -2116,3 +2116,27 @@ button:disabled {
     scroll-behavior: auto !important;
   }
 }
+
+/* D7: session storage dialog */
+.storage-modal {
+  width: min(760px, 94vw);
+  max-height: 88vh;
+  overflow: auto;
+}
+.storage-row {
+  padding: 6px 10px;
+}
+.storage-preview {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  background: var(--bg-soft);
+}
+.foot-storage {
+  margin-left: 8px;
+  font-size: 11.5px;
+  padding: 1px 6px;
+}

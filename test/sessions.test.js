@@ -327,3 +327,141 @@ test('cache: a file that disappears between lists is dropped from the cache', ()
   assert.equal(cacheSize(), withGhost - 1, 'the vanished file must leave the cache');
   assert.equal(findIn(listSessions(), 'ghost.jsonl'), undefined);
 });
+
+/* ---- D7: storage stats, cleanup plan, bulk delete ---- */
+
+const { storageStats, cleanupPlan, deleteSessions } = require('../lib/sessions');
+
+/** Point sessionsRoot() somewhere else for one test (it reads the env var on every call). */
+function withRoot(dir, run) {
+  const previous = process.env.PI_CODING_AGENT_SESSION_DIR;
+  process.env.PI_CODING_AGENT_SESSION_DIR = dir;
+  try {
+    return run();
+  } finally {
+    process.env.PI_CODING_AGENT_SESSION_DIR = previous;
+  }
+}
+
+function makeSession(dir, name, bytes, mtimeMs) {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, 'x'.repeat(bytes), 'utf8');
+  if (mtimeMs != null) {
+    const when = new Date(mtimeMs);
+    fs.utimesSync(file, when, when);
+  }
+  return file;
+}
+
+const DAY = 86400000;
+
+test('storageStats: one group per folder-group directory, sized from stat without parsing', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-d7-'));
+  try {
+    const g1 = path.join(root, 'g1');
+    const g2 = path.join(root, 'g2');
+    const big = makeSession(g1, 'big.jsonl', 5000);
+    makeSession(g1, 'small.jsonl', 100);
+    makeSession(g2, 'other.jsonl', 1000);
+    fs.writeFileSync(path.join(g1, 'not-a-session.txt'), 'ignore me', 'utf8');
+    fs.mkdirSync(path.join(root, 'loose'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'loose.jsonl'), 'not in a group dir', 'utf8');
+
+    withRoot(root, () => {
+      const stats = storageStats();
+      assert.equal(stats.root, root);
+      assert.equal(stats.totalFiles, 3, 'only .jsonl inside a group directory counts (the loose one at the root does not)');
+      assert.equal(stats.totalBytes, 6100);
+      assert.deepEqual(stats.groups.map((group) => group.group), ['g1', 'g2'], 'biggest first');
+      assert.equal(stats.groups[0].files, 2);
+      assert.equal(stats.groups[0].bytes, 5100);
+      assert.deepEqual(stats.groups[0].entries.map((entry) => path.basename(entry.path)), ['big.jsonl', 'small.jsonl'], 'newest first');
+      assert.ok(stats.groups[0].newestMs >= stats.groups[0].oldestMs);
+      assert.equal(stats.groups[0].dir, g1);
+      assert.ok(fs.existsSync(big));
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cleanupPlan: age rule and per-folder cap, and neither rule deletes anything by itself', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-d7-'));
+  try {
+    const g1 = path.join(root, 'g1');
+    const now = Date.now();
+    makeSession(g1, 'old-a.jsonl', 400, now - 90 * DAY);
+    makeSession(g1, 'old-b.jsonl', 600, now - 40 * DAY);
+    makeSession(g1, 'new-a.jsonl', 100, now - 1 * DAY);
+    makeSession(g1, 'new-b.jsonl', 50, now - 2 * DAY);
+    makeSession(path.join(root, 'g2'), 'solo.jsonl', 700, now - 90 * DAY);
+
+    withRoot(root, () => {
+      const byAge = cleanupPlan({ olderThanDays: 30 });
+      assert.equal(byAge.candidates.length, 3, 'the two 40+ day old files in g1 plus the 90 day one in g2');
+      assert.equal(byAge.bytes, 1700);
+      assert.ok(byAge.candidates.every((entry) => /older than 30 days/.test(entry.reason)));
+      assert.ok(byAge.candidates.every((entry) => entry.group === 'g1' || entry.group === 'g2'));
+
+      const byCount = cleanupPlan({ keepNewestPerGroup: 2 });
+      assert.deepEqual(byCount.candidates.map((entry) => path.basename(entry.path)).sort(), ['old-a.jsonl', 'old-b.jsonl'], 'the two oldest of g1, g2 keeps its only file');
+      assert.equal(byCount.bytes, 1000);
+      assert.ok(byCount.candidates.every((entry) => /beyond the 2 newest/.test(entry.reason)));
+
+      const none = cleanupPlan({});
+      assert.equal(none.candidates.length, 0);
+      assert.equal(none.scannedFiles, 5);
+      assert.equal(fs.readdirSync(g1).length, 4, 'planning must not delete');
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('deleteSessions: bulk delete, skips files an open tab is using, reports paths outside the root', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-d7-'));
+  try {
+    const g1 = path.join(root, 'g1');
+    const doomed = makeSession(g1, 'doomed.jsonl', 300);
+    const open = makeSession(g1, 'open.jsonl', 400);
+    const kept = makeSession(g1, 'kept.jsonl', 500);
+
+    withRoot(root, () => {
+      const result = deleteSessions([doomed, open, path.join(os.tmpdir(), 'outside-should-be-refused.jsonl')], { skip: new Set([open]) });
+      assert.equal(result.deleted, 1);
+      assert.equal(result.bytes, 300);
+      assert.deepEqual(result.skipped.map((entry) => path.basename(entry)), ['open.jsonl']);
+      assert.equal(result.failed.length, 1);
+      assert.match(result.failed[0].error, /refusing to touch path outside the sessions dir/);
+      assert.ok(!fs.existsSync(doomed));
+      assert.ok(fs.existsSync(open));
+      assert.ok(fs.existsSync(kept));
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('deleteSessions: the sidebar stops listing deleted sessions (cache dropped once, not per file)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-d7-'));
+  try {
+    const g1 = path.join(root, 'g1');
+    fs.mkdirSync(g1, { recursive: true });
+    const first = path.join(g1, 'first.jsonl');
+    const second = path.join(g1, 'second.jsonl');
+    fs.writeFileSync(first, sessionWith('First', 'one'), 'utf8');
+    fs.writeFileSync(second, sessionWith('Second', 'two'), 'utf8');
+    withRoot(root, () => {
+      assert.equal(listSessions().total, 2);
+      const before = cacheSize();
+      assert.ok(before > 0, 'listSessions should have warmed the cache');
+      const result = deleteSessions([first, second]);
+      assert.equal(result.deleted, 2);
+      assert.equal(listSessions().total, 0);
+      assert.equal(cacheSize(), 0, 'a bulk delete must not leave 4000 stale entries behind');
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -21,6 +21,9 @@ const api = {
   sessionsList: (payload) => ipcRenderer.invoke('sessions:list', payload),
   sessionsRead: (sessionPath) => ipcRenderer.invoke('sessions:read', { sessionPath }),
   sessionsDelete: (sessionPath) => ipcRenderer.invoke('sessions:delete', { sessionPath }),
+  sessionsStats: () => ipcRenderer.invoke('sessions:stats'),
+  sessionsCleanupPlan: (payload = {}) => ipcRenderer.invoke('sessions:cleanup-plan', payload),
+  sessionsCleanupRun: (payload = {}) => ipcRenderer.invoke('sessions:cleanup-run', payload),
   sessionsRename: (sessionPath, name) => ipcRenderer.invoke('sessions:rename', { sessionPath, name }),
 
   /* filesystem -------------------------------------------------------- */

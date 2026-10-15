@@ -92,6 +92,8 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   context fill and recent requests, without leaving the app
 - **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
   output, result, duration)
+- **Session storage**: the footer shows how much disk the sessions take; a dialog cleans up by age or by
+  "keep the N newest per folder", always after a preview, and never touching a session that is open
 - **Accessibility**: dialogs are real dialogs (role, label, focus trapped and restored, `Esc`), icon-only
   buttons get an accessible name, queue rows describe their state in words instead of colour, focus is
   visible for keyboard users, and the animations honour `prefers-reduced-motion`
@@ -461,6 +463,23 @@ the file still works — press `Ctrl+R` to reload, or reopen the Settings dialog
 
 The old `pi-gui` settings file is migrated automatically on first launch (see the note at the top).
 
+## Session storage (size and cleanup)
+
+The sidebar footer shows the count **and the size**: `15 / 15 sessions  Storage: 8.2 MB in 15 files`.
+Click **Storage** for the dialog.
+
+| Part | Behaviour |
+|---|---|
+| Totals | per working-folder group: bytes, file count, newest and oldest session, biggest group first. Only `stat()` is called, so an 86 MB session costs the same as a 1 KB one |
+| Two rules | **age** (older than 30 / 90 / 180 / 365 days) and **a per-folder cap** (keep the 5 / 10 / 20 / 50 newest). Leave one empty and the other does all the work |
+| Always previewed | `Preview` lists how many files and how many bytes would go, with the reason per file; `Delete` then asks again before touching anything |
+| Safe by construction | the main process filters out every session a live pi process owns, so a session open in a tab can never be in the list; paths outside the sessions folder are refused by `assertInsideRoot`; deleting is permanent (no recycle bin) |
+| Cache | a bulk delete drops the session-metadata cache in one go, so the sidebar re-reads instead of showing ghosts |
+
+Code: `storageStats()`, `cleanupPlan()`, `deleteSessions()` in `lib/sessions.js` (unit-tested against a
+temp sessions root, never the real one), IPC `sessions:stats` / `sessions:cleanup-plan` /
+`sessions:cleanup-run`, dialog `openStorageModal()`.
+
 ## Theme (dark / light)
 
 Pick it in **Settings ▸ Interface ▸ Theme**: `Dark` (the default), `Light`, or `Follow the system
@@ -473,6 +492,7 @@ theme` (keeps following `prefers-color-scheme` while the app runs).
 | No flash on start | the last applied theme is mirrored in `localStorage` and read by `renderer/theme-boot.js` before the first paint; the real setting (including `system`) is applied a moment later from the settings file |
 | Screenshots | `PI_ON_STRATA_SMOKE_THEME=1` switches theme, prints the computed colours and writes both screenshots to the temp folder (see the smoke table) |
 | `PI_ON_STRATA_SMOKE_A11Y=1` | D3: expect `dialog=true role=dialog aria_modal=true labelled_by_heading=true focus_inside=true tab_wraps=true esc_closes=true focus_restored=true nameless_buttons=0 toasts_live=polite tabs_role=tablist` plus the `aria-label` of a queue row |
+| `PI_ON_STRATA_SMOKE_STORAGE=1` | D7: reads the totals and three plans (absurd age, absurd cap, everything), checks the open session is filtered out and that the dialog opens and closes: expect `ok=true files=15 bytes=8562058 groups=2 none=0 also_none=0 everything=15 scanned=15 open_in_list=false footer="15 / 15 sessionsStorage: 8.2 MB in 15 files" dialog=true dialog_closed=true`. **Nothing is deleted by the scenario** |
 
 ## Scheduled prompts (cron)
 

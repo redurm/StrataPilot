@@ -7,6 +7,11 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **Session storage dialog** - the sidebar footer now shows what the sessions folder costs
+  (`Storage: 8.2 MB in 15 files`); clicking it lists every working-folder group by size and offers two
+  cleanup rules (age, or keep the N newest per folder) with a mandatory preview and a second
+  confirmation. A session that is open in a tab is filtered out by the main process, paths outside the
+  sessions folder are refused, and a bulk delete invalidates the metadata cache in one pass.
 - **Accessibility pass** - dialogs are now real dialogs (`role="dialog"`, labelled by their heading,
   focus moved in, `Tab` wrapped, `Esc` closing through the Cancel button, focus returned to the
   opener), icon-only buttons get an accessible name from their `title`, queue rows are focusable and

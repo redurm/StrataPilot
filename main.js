@@ -290,6 +290,12 @@ function spawnTab({ tabId, cwd, args = [], env = {} }) {
     console.log(`[spawn] tab=${tabId} cwd missing: ${cwdFallback} -> ${resolvedCwd}`);
   }
   const proc = new PiRpcProcess({ id: tabId, cwd: resolvedCwd, args, env });
+  // D7: remember which session file this process owns, so a bulk cleanup refuses to delete a
+  // session that is open in a tab (the file would keep being written to while deleted)
+  {
+    const flagIndex = args.findIndex((arg) => String(arg) === '--session');
+    proc.sessionPath = flagIndex >= 0 && args[flagIndex + 1] ? String(args[flagIndex + 1]) : null;
+  }
 
   proc.on('record', (record) => send('pi:record', { tabId, record }));
   proc.on('stderr', (text) => {
@@ -614,6 +620,7 @@ function registerIpc() {
       smokeTabTag: !!process.env.PI_ON_STRATA_SMOKE_TABTAG,
       smokeTheme: !!process.env.PI_ON_STRATA_SMOKE_THEME,
       smokeA11y: !!process.env.PI_ON_STRATA_SMOKE_A11Y,
+      smokeStorage: !!process.env.PI_ON_STRATA_SMOKE_STORAGE,
     };
   });
 
@@ -750,6 +757,76 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
       return { ok: false, error: err.message };
     }
   });
+
+  /* D7: session storage usage and bulk cleanup */
+  ipcMain.handle('sessions:stats', () => {
+    try {
+      const stats = sessions.storageStats();
+      // the IPC payload stays small: a group with thousands of files only needs its biggest ones here,
+      // the totals are what the sidebar footer shows and the plan endpoint returns full lists
+      const ENTRY_CAP = 400;
+      return {
+        ok: true,
+        root: stats.root,
+        totalBytes: stats.totalBytes,
+        totalFiles: stats.totalFiles,
+        groups: stats.groups.map((group) => ({
+          group: group.group,
+          dir: group.dir,
+          files: group.files,
+          bytes: group.bytes,
+          newestMs: group.newestMs,
+          oldestMs: group.oldestMs,
+          entries: group.entries.slice(0, ENTRY_CAP),
+          entriesTruncated: Math.max(0, group.entries.length - ENTRY_CAP),
+        })),
+      };
+    } catch (err) {
+      console.error(`[sessions:stats] failed: ${err.stack || err}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('sessions:cleanup-plan', (_event, payload) => {
+    try {
+      const plan = sessions.cleanupPlan({
+        olderThanDays: Number.isFinite(payload && payload.olderThanDays) ? payload.olderThanDays : null,
+        keepNewestPerGroup: Number.isFinite(payload && payload.keepNewestPerGroup) ? payload.keepNewestPerGroup : null,
+      });
+      const open = openSessionPaths();
+      plan.candidates = plan.candidates.filter((entry) => {
+        entry.openInTab = open.has(path.resolve(entry.path));
+        return !entry.openInTab;
+      });
+      plan.bytes = plan.candidates.reduce((sum, entry) => sum + entry.bytes, 0);
+      plan.openSkipped = open.size;
+      return { ok: true, ...plan };
+    } catch (err) {
+      console.error(`[sessions:cleanup-plan] failed: ${err.stack || err}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('sessions:cleanup-run', (_event, payload) => {
+    try {
+      const paths = Array.isArray(payload && payload.paths) ? payload.paths : [];
+      const result = sessions.deleteSessions(paths, { skip: openSessionPaths() });
+      console.log(`[sessions:cleanup] requested=${paths.length} deleted=${result.deleted} bytes=${result.bytes} skipped_open=${result.skipped.length} failed=${result.failed.length}`);
+      return { ok: true, ...result };
+    } catch (err) {
+      console.error(`[sessions:cleanup-run] failed: ${err.stack || err}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  /** Session files currently owned by a live pi process - a cleanup must not delete those. */
+  function openSessionPaths() {
+    const out = new Set();
+    for (const proc of processes.values()) {
+      if (proc && proc.alive && proc.sessionPath) out.add(path.resolve(proc.sessionPath));
+    }
+    return out;
+  }
 
   ipcMain.handle('fs:choose-folder', async () => {
     if (!win) return { ok: false };

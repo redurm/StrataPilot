@@ -187,6 +187,7 @@ const state = {
   info: null,
   settings: {},
   tabs: new Map(),
+  storage: null,
   theme: 'dark',
   themeMode: 'dark',
   order: [],
@@ -2272,6 +2273,12 @@ async function refreshSessions() {
   }
   state.sessions = res.sessions;
   els.sideFoot.textContent = `${res.sessions.length} / ${res.total} sessions`;
+  // D7: the footer used to show only the session count; the size of the folder is the number
+  // that makes people go looking for a cleanup
+  const storageButton = el('button', 'ghost foot-storage', state.storage ? `Storage: ${formatBytes(state.storage.totalBytes)} in ${state.storage.totalFiles} files` : 'Storage');
+  storageButton.title = 'what the sessions folder costs, and a way to clear old sessions without opening the file manager';
+  storageButton.addEventListener('click', () => openStorageModal());
+  els.sideFoot.appendChild(storageButton);
   els.sessionList.textContent = '';
 
   if (!res.sessions.length) {
@@ -2581,6 +2588,192 @@ function openModal(options) {
 }
 
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* session storage (D7)                                                */
+/* ------------------------------------------------------------------ */
+
+/** 1.5 GB, 812 MB, 4.1 KB, 312 B - the sidebar footer and the storage dialog both need this. */
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let size = value / 1024;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size >= 100 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
+}
+
+async function refreshStorage() {
+  const res = await api.sessionsStats();
+  if (!res || !res.ok) {
+    console.error(`[storage] stats failed: ${(res && res.error) || 'unknown'}`);
+    return null;
+  }
+  state.storage = res;
+  renderOpenSessions();
+  return res;
+}
+
+/**
+ * What the sessions folder costs, and a cleanup that does not need the file manager. Two rules only
+ * (age, and a per-folder cap), always previewed before anything is deleted, and a session that is
+ * open in a tab is never in the list - the main process filters those out, not this dialog.
+ */
+async function openStorageModal() {
+  const stats = (await refreshStorage()) || state.storage;
+  if (!stats) {
+    toast('could not read the sessions folder', 'error');
+    return;
+  }
+  let plan = null;
+
+  return new Promise((resolve) => {
+    const backdrop = el('div', 'modal-backdrop storage-backdrop');
+    const modal = el('div', 'modal storage-modal');
+    modal.appendChild(el('h3', '', 'Session storage'));
+    modal.appendChild(
+      el('div', 'set-hint', `${stats.totalFiles} session files, ${formatBytes(stats.totalBytes)} in ${stats.root}. Deleting here is permanent - sessions do not go to a recycle bin.`),
+    );
+
+    const groups = el('div', 'job-list');
+    for (const group of stats.groups.slice(0, 40)) {
+      const row = el('div', 'job-row storage-row');
+      const head = el('div', 'job-head');
+      head.appendChild(el('span', 'job-name', group.group));
+      head.appendChild(el('span', 'job-schedule', `${formatBytes(group.bytes)} / ${group.files} files`));
+      row.appendChild(head);
+      row.appendChild(
+        el('div', 'job-meta', `newest ${new Date(group.newestMs).toLocaleString()} · oldest ${new Date(group.oldestMs).toLocaleString()}`),
+      );
+      groups.appendChild(row);
+    }
+    if (stats.groups.length > 40) groups.appendChild(el('div', 'set-hint', `${stats.groups.length - 40} more folders not shown`));
+    modal.appendChild(groups);
+
+    const rules = el('div', 'field-row');
+    const olderSel = document.createElement('select');
+    for (const option of [
+      { value: '', label: 'any age' },
+      { value: '30', label: 'older than 30 days' },
+      { value: '90', label: 'older than 90 days' },
+      { value: '180', label: 'older than 180 days' },
+      { value: '365', label: 'older than a year' },
+    ]) {
+      const opt = document.createElement('option');
+      opt.value = option.value;
+      opt.textContent = option.label;
+      olderSel.appendChild(opt);
+    }
+    const keepSel = document.createElement('select');
+    for (const option of [
+      { value: '', label: 'keep every session per folder' },
+      { value: '5', label: 'keep the 5 newest per folder' },
+      { value: '10', label: 'keep the 10 newest per folder' },
+      { value: '20', label: 'keep the 20 newest per folder' },
+      { value: '50', label: 'keep the 50 newest per folder' },
+    ]) {
+      const opt = document.createElement('option');
+      opt.value = option.value;
+      opt.textContent = option.label;
+      keepSel.appendChild(opt);
+    }
+    olderSel.setAttribute('aria-label', 'Age rule');
+    keepSel.setAttribute('aria-label', 'Per folder cap');
+    rules.appendChild(olderSel);
+    rules.appendChild(keepSel);
+    modal.appendChild(rules);
+
+    const previewBox = el('div', 'storage-preview', 'Pick a rule and preview - nothing is deleted until you say so.');
+    modal.appendChild(previewBox);
+
+    const actions = el('div', 'modal-actions');
+    const previewButton = el('button', '', 'Preview');
+    const del = el('button', 'danger', 'Delete');
+    del.disabled = true;
+    const close = el('button', 'ghost', 'Close');
+    actions.appendChild(previewButton);
+    actions.appendChild(del);
+    actions.appendChild(close);
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+    els.modalRoot.appendChild(backdrop);
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      backdrop.remove();
+      modalOpen = null;
+      resolve();
+    };
+    modalOpen = { finish, backdrop };
+    close.addEventListener('click', finish);
+    backdrop.addEventListener('mousedown', (event) => {
+      if (event.target === backdrop) finish();
+    });
+
+    previewButton.addEventListener('click', async () => {
+      const olderThanDays = olderSel.value ? Number(olderSel.value) : null;
+      const keepNewestPerGroup = keepSel.value ? Number(keepSel.value) : null;
+      if (olderThanDays == null && keepNewestPerGroup == null) {
+        previewBox.textContent = 'Choose at least one rule first - otherwise nothing would be deleted.';
+        del.disabled = true;
+        return;
+      }
+      const res = await api.sessionsCleanupPlan({ olderThanDays, keepNewestPerGroup });
+      if (!res.ok) {
+        previewBox.textContent = `preview failed: ${res.error}`;
+        del.disabled = true;
+        return;
+      }
+      plan = res;
+      if (!res.candidates.length) {
+        previewBox.textContent = `Nothing matches: ${res.scannedFiles} files scanned, 0 to delete.`;
+        del.disabled = true;
+        return;
+      }
+      const sample = res.candidates
+        .slice(0, 12)
+        .map((entry) => `${pathParts(entry.path).leaf || entry.group} - ${formatBytes(entry.bytes)}, ${entry.reason}`)
+        .join(' · ');
+      previewBox.textContent = `${res.candidates.length} files, ${formatBytes(res.bytes)} to free: ${sample}${res.candidates.length > 12 ? ` (+${res.candidates.length - 12} more)` : ''}`;
+      del.disabled = false;
+      del.textContent = `Delete ${res.candidates.length} files (${formatBytes(res.bytes)})`;
+    });
+
+    del.addEventListener('click', async () => {
+      if (!plan || !plan.candidates.length) return;
+      const paths = plan.candidates.map((entry) => entry.path);
+      const answer = await openModal({
+        kind: 'confirm',
+        title: `Delete ${paths.length} session files?`,
+        message: `${formatBytes(plan.bytes)} will be removed from ${stats.root}. This is permanent. Sessions open in a tab are never included.`,
+        okLabel: 'Delete for good',
+      });
+      if (!answer || !answer.confirmed) return;
+      const res = await api.sessionsCleanupRun({ paths });
+      if (!res.ok) {
+        toast(`cleanup failed: ${res.error}`, 'error', 9000);
+        return;
+      }
+      toast(
+        `deleted ${res.deleted} session files (${formatBytes(res.bytes)})${res.skipped.length ? `, ${res.skipped.length} skipped: open in a tab` : ''}${res.failed.length ? `, ${res.failed.length} failed` : ''}`,
+        'info',
+        9000,
+      );
+      plan = null;
+      del.disabled = true;
+      del.textContent = 'Delete';
+      previewBox.textContent = 'Done. The totals above are refreshed.';
+      await refreshStorage();
+      await refreshSessions();
+    });
+  });
+}
+
 /* accessibility (D3)                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -5207,6 +5400,7 @@ async function init() {
 
   wireUi();
   observeDialogs(); // D3: every dialog becomes a real dialog without touching its creator
+  refreshStorage().catch(() => {}); // D7: the footer shows the folder size once this lands
   observeControlNames();
   wireDragAndDrop();
   wirePaste();
@@ -5321,6 +5515,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeExport) {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokeStorage) {
+    setTimeout(() => smokeStorageScenario().catch((err) => console.error('[smoke] storage scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeA11y) {
@@ -5890,6 +6088,32 @@ async function smokeA11yScenario() {
   await done;
 }
 
+
+/**
+ * PI_ON_STRATA_SMOKE_STORAGE=1: D7. Reads the totals, asks for two plans that must match nothing
+ * (an absurd age, an absurd cap) and one that matches everything, and checks the session open in this
+ * tab is filtered out by the main process. Nothing is ever deleted by this scenario.
+ */
+async function smokeStorageScenario() {
+  const stats = await api.sessionsStats();
+  const none = await api.sessionsCleanupPlan({ olderThanDays: 100000 });
+  const alsoNone = await api.sessionsCleanupPlan({ keepNewestPerGroup: 100000 });
+  const everything = await api.sessionsCleanupPlan({ olderThanDays: 0 });
+  const tab = activeTab();
+  const openPath = tab && tab.sessionPath ? tab.sessionPath : null;
+  const openListed = openPath ? everything.candidates.some((entry) => entry.path === openPath) : false;
+  const footer = els.sideFoot.textContent;
+  const opened = openStorageModal();
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  const modal = els.modalRoot.querySelector('.storage-modal');
+  const closeBox = modal ? [...modal.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Close') : null;
+  if (closeBox) closeBox.click();
+  await opened;
+  const closed = !els.modalRoot.querySelector('.modal');
+  console.log(
+    `[smoke-storage] ok=${stats.ok} files=${stats.totalFiles} bytes=${stats.totalBytes} groups=${stats.groups.length} none=${none.candidates.length} also_none=${alsoNone.candidates.length} everything=${everything.candidates.length} scanned=${everything.scannedFiles} open_in_list=${openListed} footer=${JSON.stringify(footer)} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
+  );
+}
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.
 // A 1x1 PNG is built in JS (clipboard images have no filesystem path, so pathForFile() -> '').
