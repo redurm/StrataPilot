@@ -2634,6 +2634,17 @@ function openSettingsModal() {
     checkRow('serialQueue', 'Serial queue: run one session at a time (Strata is single-flight)', 'off = all tabs may call the model at the same time', { defaultTrue: true });
     checkRow('restoreTabs', 'Reopen the tabs from the previous run (up to 4)', 'off = always start with a single new tab', { defaultTrue: true });
 
+    group('Scheduled prompts');
+    const jobsRow = el('div', 'field-row');
+    const jobsButton = el('button', '', 'Manage scheduled jobs\u2026');
+    jobsButton.addEventListener('click', async () => {
+      finish(false);
+      await openJobsModal();
+    });
+    jobsRow.appendChild(jobsButton);
+    jobsRow.appendChild(el('span', 'set-hint', 'cron runs in the background process; a due prompt is queued into a session, never sent behind the queue\u2019s back'));
+    modal.appendChild(jobsRow);
+
     group('Strata server');
     textRow('strataUrl', 'Fixed Strata address (Monitor and diagnostics)', 'leave empty to derive it from the active tab model baseUrl, e.g. http://127.0.0.1:8081/v1', { placeholder: 'http://127.0.0.1:8081/v1', clear: true });
     textRow('strataConfigPath', 'Strata engine config (only for the diagnostics report)', 'e.g. C:\\Strata\\strata-src\\strata-<model>.json \u2014 copied into the report with keys redacted', { filePicker: true, fileTitle: 'Strata engine config', filters: [{ name: 'JSON', extensions: ['json'] }], clear: true });
@@ -3232,6 +3243,7 @@ const GUI_COMMANDS = [
   { name: 'monitor', args: '', desc: 'toggle the Strata monitor' },
   { name: 'stats', args: '', desc: 'print tokens, cost and context usage' },
   { name: 'retry', args: '[on|off|stop]', desc: 'retry transient model errors: on/off for this session, stop cancels a retry that is waiting' },
+  { name: 'jobs', args: '', desc: 'scheduled prompts: list, add, edit, run now (cron in the main process, prompts through the serial queue)' },
   { name: 'settings', args: '', desc: 'open the settings dialog (working folder, serial queue, Strata address, Monitor, paths)' },
   { name: 'diagnostics', args: '', desc: 'copy a diagnostics report (versions, paths, Strata health, log tail, queue) for a bug report' },
   { name: 'commands', args: '', desc: 'list the slash commands available here' },
@@ -3405,6 +3417,10 @@ async function runSlashCommand(tab, text) {
       clearComposer();
       return true;
     }
+    case 'jobs':
+      clearComposer();
+      await openJobsModal();
+      return true;
     case 'retry': {
       const what = arg.toLowerCase();
       if (what === 'stop') {
@@ -3993,6 +4009,336 @@ async function copyDiagnostics() {
 }
 
 /* ------------------------------------------------------------------ */
+/* scheduled prompts (B5) - the renderer half                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A due job arrives as an event from the main-process scheduler. The prompt is pushed into the
+ * target tab's outbox, which keeps the serial queue as the only thing that ever sends a prompt -
+ * that is why the scheduler does not own a pi process of its own.
+ */
+async function resolveJobTarget(job) {
+  const target = String(job.target || 'new-tab');
+  if (target.startsWith('tab:')) {
+    const tab = state.tabs.get(target.slice(4));
+    if (!tab) {
+      toast(`scheduled job "${job.name}": that tab is closed - edit the job to point at a session file`, 'warning', 9000);
+      return null;
+    }
+    return tab;
+  }
+  if (target.startsWith('session:')) {
+    const sessionPath = target.slice(8);
+    const existing = [...state.tabs.values()].find((tab) => samePath(tab.sessionPath, sessionPath));
+    if (existing) return existing;
+    const read = await api.sessionsRead(sessionPath);
+    if (!read.ok) {
+      toast(`scheduled job "${job.name}": cannot open ${sessionPath} (${read.error})`, 'error', 9000);
+      return null;
+    }
+    return createTab({ cwd: read.meta.cwd || job.cwd || state.cwd, sessionPath, name: read.meta.name });
+  }
+  // new-tab: a fresh session every run. Ephemeral by default so they do not pile up session files.
+  return createTab({ cwd: job.cwd || state.cwd, ephemeral: job.ephemeral !== false });
+}
+
+async function handleCronFire({ job, firedAt, manual }) {
+  const name = job.name || job.schedule || 'job';
+  try {
+    const tab = await resolveJobTarget(job);
+    if (!tab) return;
+    if (!tab.alive && !(await respawnTab(tab))) {
+      toast(`scheduled job "${name}": the session process could not be started`, 'error', 9000);
+      return;
+    }
+    tab.outbox.push({ text: job.prompt, at: Date.now(), images: [], source: `job:${name}` });
+    scheduleSave(); // a cron prompt sitting in the outbox is recoverable like any other (B4)
+    renderOpenSessions();
+    renderTabs();
+    pushNote(tab, `scheduled job "${name}" (${job.schedule}) queued${manual ? ' now (manual run)' : ''}: ${oneLine(job.prompt, 200)}`, 'info');
+    scheduler.pumpSoon(0);
+    toast(`scheduled job "${name}" queued in ${tabLabel(tab)}`, 'info', 6000);
+    console.log(`[cron] fired job=${job.id} name=${JSON.stringify(name)} target_tab=${tab.id} outbox=${tab.outbox.length} manual=${!!manual} firedAt=${firedAt}`);
+  } catch (err) {
+    console.error(`[cron] firing "${name}" failed: ${err.stack || err}`);
+    toast(`scheduled job "${name}" failed: ${err.message}`, 'error', 9000);
+  }
+}
+
+/** The job list (Settings dialog ▸ Scheduled jobs, or /jobs). */
+async function openJobsModal() {
+  const listed = await api.cronList();
+  if (!listed || !listed.ok) {
+    toast((listed && listed.error) || 'cron:list failed', 'error');
+    return;
+  }
+  let jobs = listed.jobs.map((job) => ({ ...job }));
+
+  return new Promise((resolve) => {
+    const backdrop = el('div', 'modal-backdrop jobs-backdrop');
+    const modal = el('div', 'modal jobs-modal');
+    modal.appendChild(el('h3', '', 'Scheduled prompts'));
+    modal.appendChild(
+      el(
+        'div',
+        'set-hint',
+        'A job sends its prompt to a session at the given time (5-field cron: minute hour day month weekday, local time). The prompt goes through the serial queue like any typed message, so it never collides with a running session - and it runs with full read/edit/bash rights in the folder it targets.',
+      ),
+    );
+    const list = el('div', 'job-list');
+    modal.appendChild(list);
+
+    const paint = () => {
+      list.textContent = '';
+      if (!jobs.length) {
+        list.appendChild(el('div', 'modal-msg', 'No jobs yet. Add one to run a prompt every morning, before standup, …'));
+        return;
+      }
+      jobs.forEach((job, index) => {
+        const row = el('div', `job-row${job.enabled === false ? ' off' : ''}`);
+        const head = el('div', 'job-head');
+        const toggle = el('input');
+        toggle.type = 'checkbox';
+        toggle.checked = job.enabled !== false;
+        toggle.title = 'enable / disable this job';
+        toggle.addEventListener('change', async () => {
+          job.enabled = toggle.checked;
+          const saved = await api.cronSave(jobs);
+          if (!saved.ok) {
+            toast(saved.error, 'error');
+            return;
+          }
+          jobs = saved.jobs.map((entry) => ({ ...entry }));
+          paint();
+          toast(`job "${job.name}" ${job.enabled ? 'enabled' : 'disabled'}`);
+        });
+        head.appendChild(toggle);
+        head.appendChild(el('span', 'job-name', job.name));
+        head.appendChild(el('span', 'job-schedule', job.schedule));
+        row.appendChild(head);
+        row.appendChild(el('div', 'job-prompt', job.prompt.length > 220 ? `${job.prompt.slice(0, 220)}\u2026` : job.prompt));
+        const meta = el('div', 'job-meta');
+        meta.appendChild(el('span', '', `target: ${job.target || 'new-tab'}`));
+        meta.appendChild(el('span', '', `next: ${job.nextRun ? new Date(job.nextRun).toLocaleString() : 'never'}`));
+        if (job.lastRun) meta.appendChild(el('span', '', `last: ${new Date(job.lastRun).toLocaleString()}`));
+        if (job.cwd) meta.appendChild(el('span', '', `cwd: ${job.cwd}`));
+        row.appendChild(meta);
+
+        const actions = el('div', 'outbox-controls');
+        const edit = el('button', 'ghost', 'edit');
+        edit.addEventListener('click', async () => {
+          const result = await openJobEditor(job);
+          if (result.cancelled) return;
+          jobs[index] = { ...job, ...result.job };
+          const saved = await api.cronSave(jobs);
+          if (!saved.ok) {
+            toast(saved.error, 'error', 9000);
+            return;
+          }
+          jobs = saved.jobs.map((entry) => ({ ...entry }));
+          paint();
+        });
+        const run = el('button', 'ghost', 'run now');
+        run.title = 'queue this prompt right now (tests the target and the prompt)';
+        run.addEventListener('click', () => api.cronRunNow(job.id));
+        const del = el('button', 'ghost', 'del');
+        del.addEventListener('click', async () => {
+          jobs.splice(index, 1);
+          const saved = await api.cronSave(jobs);
+          if (!saved.ok) {
+            toast(saved.error, 'error');
+            return;
+          }
+          jobs = saved.jobs.map((entry) => ({ ...entry }));
+          paint();
+        });
+        actions.appendChild(edit);
+        actions.appendChild(run);
+        actions.appendChild(del);
+        row.appendChild(actions);
+        list.appendChild(row);
+      });
+    };
+    paint();
+
+    const actions = el('div', 'modal-actions');
+    const add = el('button', 'primary', 'Add job');
+    add.addEventListener('click', async () => {
+      const result = await openJobEditor(null);
+      if (result.cancelled) return;
+      jobs.push(result.job);
+      const saved = await api.cronSave(jobs);
+      if (!saved.ok) {
+        toast(saved.error, 'error', 9000);
+        return;
+      }
+      jobs = saved.jobs.map((entry) => ({ ...entry }));
+      paint();
+    });
+    const close = el('button', 'ghost', 'Close');
+    actions.appendChild(add);
+    actions.appendChild(close);
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+    els.modalRoot.appendChild(backdrop);
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      backdrop.remove();
+      modalOpen = null;
+      resolve();
+    };
+    modalOpen = { finish, backdrop };
+    close.addEventListener('click', finish);
+    backdrop.addEventListener('mousedown', (event) => {
+      if (event.target === backdrop) finish();
+    });
+  });
+}
+
+/** Add / edit one job. The schedule field previews what it means and when it next fires. */
+function openJobEditor(existing) {
+  return new Promise((resolve) => {
+    const job = existing ? { ...existing } : { name: '', schedule: '30 9 * * 1-5', prompt: '', target: 'new-tab', cwd: state.cwd, ephemeral: true, enabled: true };
+    const backdrop = el('div', 'modal-backdrop');
+    const modal = el('div', 'modal jobs-editor');
+    modal.appendChild(el('h3', '', existing ? `Edit job: ${job.name}` : 'New scheduled prompt'));
+
+    const field = (label, control, hint) => {
+      const wrap = el('div', 'field');
+      wrap.appendChild(el('label', '', label));
+      wrap.appendChild(control);
+      if (hint) wrap.appendChild(el('div', 'set-hint', hint));
+      modal.appendChild(wrap);
+      return wrap;
+    };
+    const input = (value, placeholder) => {
+      const box = el('input');
+      box.type = 'text';
+      box.value = value == null ? '' : String(value);
+      box.placeholder = placeholder || '';
+      return box;
+    };
+
+    const nameBox = input(job.name, 'morning standup prep');
+    field('Name', nameBox);
+    const scheduleBox = input(job.schedule, '30 9 * * 1-5');
+    scheduleBox.dataset.setting = 'schedule';
+    const preview = el('div', 'set-hint', '');
+    const scheduleWrap = field('Schedule (cron: minute hour day month weekday)', scheduleBox, '');
+    scheduleWrap.appendChild(preview);
+    const promptBox = el('textarea');
+    promptBox.value = job.prompt || '';
+    promptBox.placeholder = 'the prompt to send, e.g. Summarise what changed in this folder since yesterday';
+    field('Prompt', promptBox, 'runs with the same rights as a typed message: pi can read, edit and run commands in the target folder');
+
+    const targetSel = document.createElement('select');
+    for (const option of [
+      { value: 'new-tab', label: 'a new tab (fresh session each run)' },
+      { value: 'session:', label: 'a session file (opens it if closed)' },
+      { value: 'tab:', label: 'an open tab' },
+    ]) {
+      const opt = document.createElement('option');
+      opt.value = option.value;
+      opt.textContent = option.label;
+      targetSel.appendChild(opt);
+    }
+    const chosen = String(job.target || 'new-tab');
+    targetSel.value = chosen === 'new-tab' ? 'new-tab' : chosen.split(':')[0] + ':';
+    const valueBox = input(chosen.startsWith('new-tab') ? '' : chosen.split(':').slice(1).join(':'), '/path/to/session.jsonl or tab id');
+    const targetRow = el('div', 'field-row');
+    targetRow.appendChild(targetSel);
+    targetRow.appendChild(valueBox);
+    field('Target', targetRow, 'new-tab creates a session every run; a session file is reused, so the conversation keeps growing');
+
+    const cwdRow = el('div', 'field-row');
+    const cwdBox = input(job.cwd || state.cwd);
+    const browse = el('button', '', 'Browse\u2026');
+    browse.addEventListener('click', async () => {
+      const picked = await api.chooseFolder();
+      if (picked.ok) cwdBox.value = picked.path;
+    });
+    cwdRow.appendChild(cwdBox);
+    cwdRow.appendChild(browse);
+    field('Working folder (new-tab jobs)', cwdRow, 'ignored when the target is a session file (that session already records its folder)');
+
+    const ephemeralWrap = el('div', 'field');
+    const ephemeralRow = el('div', 'field-row set-check');
+    const ephemeralBox = el('input');
+    ephemeralBox.type = 'checkbox';
+    ephemeralBox.checked = job.ephemeral !== false;
+    ephemeralRow.appendChild(ephemeralBox);
+    ephemeralRow.appendChild(el('label', '', 'ephemeral new-tab jobs (write no session file)'));
+    ephemeralWrap.appendChild(ephemeralRow);
+    modal.appendChild(ephemeralWrap);
+
+    const refreshPreview = async () => {
+      preview.textContent = 'checking\u2026';
+      const res = await api.cronPreview(scheduleBox.value);
+      if (!res.valid) {
+        preview.className = 'set-hint bad';
+        preview.textContent = `not a valid schedule: ${res.error}`;
+        return;
+      }
+      preview.className = 'set-hint good';
+      preview.textContent = `${res.description} \u00b7 next: ${res.nextRun ? new Date(res.nextRun).toLocaleString() : 'never (this expression can never fire)'}`;
+    };
+    scheduleBox.addEventListener('input', () => refreshPreview());
+    refreshPreview();
+
+    const actions = el('div', 'modal-actions');
+    const cancel = el('button', 'ghost', 'Cancel');
+    const ok = el('button', 'primary', 'Save job');
+    actions.appendChild(cancel);
+    actions.appendChild(ok);
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+    els.modalRoot.appendChild(backdrop);
+
+    let done = false;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      backdrop.remove();
+      modalOpen = null;
+      resolve(result);
+    };
+    modalOpen = { finish, backdrop };
+    const submit = () => {
+      const target = targetSel.value === 'new-tab' ? 'new-tab' : `${targetSel.value}${valueBox.value.trim()}`;
+      if (target !== 'new-tab' && !valueBox.value.trim()) {
+        toast('the target needs a session path or a tab id', 'warning');
+        return;
+      }
+      finish({
+        cancelled: false,
+        job: {
+          id: job.id || `job-${Date.now().toString(36)}`,
+          name: nameBox.value.trim() || scheduleBox.value.trim(),
+          schedule: scheduleBox.value.trim(),
+          prompt: promptBox.value,
+          target,
+          cwd: cwdBox.value.trim(),
+          ephemeral: ephemeralBox.checked,
+          enabled: job.enabled !== false,
+          createdAt: job.createdAt || new Date().toISOString(),
+          lastRun: job.lastRun || null,
+          nextRun: job.nextRun || null,
+        },
+      });
+    };
+    ok.addEventListener('click', submit);
+    cancel.addEventListener('click', () => finish({ cancelled: true }));
+    backdrop.addEventListener('mousedown', (event) => {
+      if (event.target === backdrop) finish({ cancelled: true });
+    });
+    setTimeout(() => nameBox.focus(), 30);
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* attachments / drag & drop                                           */
 /* ------------------------------------------------------------------ */
 
@@ -4526,6 +4872,18 @@ function wireUi() {
     else if (info.kind === 'declined') toast('reload declined \u2014 the window stays broken; sessions keep running in the background', 'warning', 9000);
   });
 
+  // B5: the main-process scheduler never sends a prompt itself, it tells us and we queue it
+  api.on('cron:fire', (event) => {
+    handleCronFire(event || {}).catch((err) => console.error(`[cron] fire handler failed: ${err.stack || err}`));
+  });
+  api.on('cron:notice', (event) => {
+    const info = event && typeof event === 'object' ? event : {};
+    const names = (info.jobs || []).map((job) => job.name).join(', ');
+    if (info.kind === 'missed') toast(`scheduled job${info.jobs.length > 1 ? 's' : ''} missed its run while the machine slept: ${names} \u2014 not replayed, next run is scheduled`, 'warning', 12000);
+    else if (info.kind === 'invalid') toast(`scheduled job ${names} has an invalid schedule: ${(info.jobs[0] || {}).error || ''}`, 'error', 12000);
+    console.log(`[cron] notice kind=${info.kind} reason=${info.reason || ''} jobs=${names}`);
+  });
+
   api.on('pi:record', ({ tabId, record }) => {
     const tab = state.tabs.get(tabId);
     if (!tab) return;
@@ -4721,6 +5079,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeExport) {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokeCron) {
+    setTimeout(() => smokeCronScenario().catch((err) => console.error('[smoke] cron scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeOutbox) {
@@ -5150,6 +5512,38 @@ async function smokeOutboxScenario() {
   );
   tab.pendingOutbox = [];
   renderOpenSessions();
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_CRON=1: the job round trip - save through the main process, read it back with
+ * a computed nextRun, preview a schedule, reject a bad one, and fire one "run now" so the prompt
+ * lands in a tab's outbox. The serial queue is switched off for the scenario so nothing is actually
+ * sent to the model.
+ */
+async function smokeCronScenario() {
+  const wasEnabled = scheduler.enabled;
+  scheduler.enabled = false;
+  try {
+    const saved = await api.cronSave([{ id: 'smoke-job', name: 'smoke job', schedule: '*/5 * * * *', prompt: 'SMOKE-CRON-MUST-NOT-BE-SENT', target: 'new-tab', cwd: state.cwd, ephemeral: true, enabled: true }]);
+    const listed = await api.cronList();
+    const preview = await api.cronPreview('30 9 * * 1-5');
+    const bad = await api.cronPreview('nope');
+    const before = state.order.length;
+    await api.cronRunNow('smoke-job');
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const target = [...state.tabs.values()].find((tab) => tab.outbox.some((item) => /SMOKE-CRON/.test(item.text || '')));
+    const badges = els.queueList.querySelectorAll('.qbadge.outbox').length;
+    console.log(
+      `[smoke-cron] saved=${saved.ok} jobs=${listed.jobs.length} nextRun=${listed.jobs[0] && listed.jobs[0].nextRun ? 'set' : 'none'} preview=${JSON.stringify(preview.description)} has_next=${!!preview.nextRun} invalid_rejected=${bad.ok && !bad.valid} new_tab=${state.order.length > before} queued=${!!target} outbox_badges=${badges} tabs_before=${before}`,
+    );
+    await api.cronSave([]);
+    if (target) {
+      target.outbox = [];
+      renderOpenSessions();
+    }
+  } finally {
+    scheduler.enabled = wasEnabled;
+  }
 }
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.

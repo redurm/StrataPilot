@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, shell, Menu, clipboard } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, clipboard, powerMonitor } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -10,6 +10,7 @@ const { resolvePiInvocation, TESTED_PI_VERSION, piVersionStatus } = require('./l
 const sessions = require('./lib/sessions');
 const appLog = require('./lib/log');
 const diagnostics = require('./lib/diagnostics');
+const cron = require('./lib/cron');
 
 const APP_ID = 'com.pionstrata.app';
 const SETTINGS_NAME = 'pi_on_strata_settings.json';
@@ -322,6 +323,146 @@ function spawnTab({ tabId, cwd, args = [], env = {} }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* scheduled prompts (B5)                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The scheduler deliberately lives in the main process (it must keep running while the renderer is
+ * reloading), but it never runs a prompt itself: firing a prompt from here would create a second
+ * path into Strata next to the renderer's serial queue, and Strata answers one request at a time.
+ * So a due job only sends a `cron:fire` event; the renderer pushes the text into the target tab's
+ * outbox and lets the existing queue do the work.
+ *
+ * Job shape (persisted in settings.jobs[]):
+ *   { id, name, schedule, prompt, target, cwd, ephemeral, enabled, createdAt, lastRun, nextRun }
+ *   target: "new-tab" | "tab:<id>" | "session:<path>"
+ */
+const CRON_TICK_MS = 30 * 1000;
+// a job whose time passed by more than this is reported as missed, not fired late: waking a laptop
+// at 11:00 must not replay the 09:30 run
+const CRON_GRACE_MS = 2 * 60 * 1000;
+
+let cronTimer = null;
+
+function jobList() {
+  const jobs = loadSettings().jobs;
+  return Array.isArray(jobs) ? jobs : [];
+}
+
+function saveJobs(jobs) {
+  const next = loadSettings();
+  next.jobs = jobs;
+  saveSettings(next);
+}
+
+/** Recompute every job's nextRun; report the runs that were slept through instead of firing them. */
+function cronRecompute(reason) {
+  const now = new Date();
+  const jobs = jobList();
+  const missed = [];
+  const invalid = [];
+  for (const job of jobs) {
+    if (!job.enabled) {
+      job.nextRun = null;
+      continue;
+    }
+    let next = null;
+    try {
+      next = cron.nextRun(job.schedule, now);
+    } catch (err) {
+      invalid.push({ id: job.id, name: job.name || job.schedule, error: err.message });
+      job.nextRun = null;
+      continue;
+    }
+    const stored = job.nextRun ? Date.parse(job.nextRun) : NaN;
+    if (Number.isFinite(stored) && stored < now.getTime() - CRON_GRACE_MS) {
+      missed.push({ id: job.id, name: job.name || job.schedule, scheduled: job.nextRun });
+    }
+    job.nextRun = next ? next.toISOString() : null;
+  }
+  saveJobs(jobs);
+  if (missed.length) {
+    console.log(`[cron] ${reason}: ${missed.length} run(s) missed while asleep: ${missed.map((m) => `${m.name}@${m.scheduled}`).join(', ')}`);
+    send('cron:notice', { kind: 'missed', jobs: missed, reason });
+  }
+  if (invalid.length) {
+    console.error(`[cron] ${reason}: invalid schedule(s): ${invalid.map((i) => `${i.name}: ${i.error}`).join(' | ')}`);
+    send('cron:notice', { kind: 'invalid', jobs: invalid, reason });
+  }
+  console.log(`[cron] ${reason}: armed ${jobs.filter((j) => j.enabled && j.nextRun).length} job(s)`);
+}
+
+function cronTick() {
+  const now = new Date();
+  const jobs = jobList();
+  let changed = false;
+  for (const job of jobs) {
+    if (!job.enabled || !job.nextRun) continue;
+    const due = Date.parse(job.nextRun);
+    if (!Number.isFinite(due) || due > now.getTime()) continue;
+    if (now.getTime() - due > CRON_GRACE_MS) continue; // handled by cronRecompute as "missed"
+    console.log(`[cron] firing "${job.name || job.schedule}" (${job.schedule}) target=${job.target || 'new-tab'}`);
+    send('cron:fire', { job, firedAt: now.toISOString(), manual: false });
+    job.lastRun = now.toISOString();
+    let next = null;
+    try {
+      next = cron.nextRun(job.schedule, now);
+    } catch (err) {
+      console.error(`[cron] job ${job.id} has an invalid schedule (${job.schedule}): ${err.message}`);
+    }
+    job.nextRun = next ? next.toISOString() : null;
+    changed = true;
+  }
+  if (changed) saveJobs(jobs);
+}
+
+function cronStart() {
+  cronRecompute('startup');
+  clearInterval(cronTimer);
+  cronTimer = setInterval(cronTick, CRON_TICK_MS);
+  console.log(`[cron] ticking every ${CRON_TICK_MS / 1000}s (grace ${CRON_GRACE_MS / 1000}s)`);
+}
+
+function cronStop() {
+  clearInterval(cronTimer);
+  cronTimer = null;
+}
+
+/** Validate what the Jobs dialog sends; returns the sanitised list or throws with a clear message. */
+function sanitizeJobs(input) {
+  if (!Array.isArray(input)) throw new Error('jobs must be a list');
+  const out = [];
+  input.forEach((job, index) => {
+    const source = job && typeof job === 'object' ? job : {};
+    const schedule = String(source.schedule || '').trim();
+    const prompt = String(source.prompt || '').trim();
+    if (!schedule) throw new Error(`job ${index + 1}: schedule is empty`);
+    if (!cron.isValidCron(schedule)) {
+      throw new Error(`job ${index + 1}: "${schedule}" is not a 5-field cron expression (${cron.parseCron.name}: minute hour day month weekday)`);
+    }
+    if (!prompt) throw new Error(`job ${index + 1}: prompt is empty`);
+    const target = String(source.target || 'new-tab').trim();
+    if (!['new-tab', 'tab:', 'session:'].some((prefix) => target === 'new-tab' || target.startsWith(prefix))) {
+      throw new Error(`job ${index + 1}: target must be new-tab, tab:<id> or session:<path>`);
+    }
+    out.push({
+      id: String(source.id || `job-${Date.now().toString(36)}-${index}`),
+      name: String(source.name || '').trim() || schedule,
+      schedule,
+      prompt,
+      target,
+      cwd: String(source.cwd || '').trim(),
+      ephemeral: !!source.ephemeral,
+      enabled: source.enabled !== false,
+      createdAt: source.createdAt || new Date().toISOString(),
+      lastRun: source.lastRun || null,
+      nextRun: null,
+    });
+  });
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
 /* diagnostics report (A6: "Copy diagnostics")                        */
 /* ------------------------------------------------------------------ */
 
@@ -469,7 +610,41 @@ function registerIpc() {
       smokeSettings: !!process.env.PI_ON_STRATA_SMOKE_SETTINGS,
       smokeRetry: !!process.env.PI_ON_STRATA_SMOKE_RETRY,
       smokeOutbox: !!process.env.PI_ON_STRATA_SMOKE_OUTBOX,
+      smokeCron: !!process.env.PI_ON_STRATA_SMOKE_CRON,
     };
+  });
+
+  ipcMain.handle('cron:list', () => ({ ok: true, jobs: jobList(), now: new Date().toISOString() }));
+
+  ipcMain.handle('cron:save', (_event, { jobs } = {}) => {
+    try {
+      const clean = sanitizeJobs(jobs);
+      saveJobs(clean);
+      cronRecompute('saved');
+      console.log(`[cron] saved ${clean.length} job(s) from the dialog`);
+      return { ok: true, jobs: jobList() };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  /** Preview in the editor: is the expression valid, what does it mean, when does it next fire. */
+  ipcMain.handle('cron:preview', (_event, { schedule } = {}) => {
+    try {
+      const next = cron.nextRun(schedule, new Date());
+      return { ok: true, valid: true, description: cron.describeCron(schedule), nextRun: next ? next.toISOString() : null };
+    } catch (err) {
+      return { ok: true, valid: false, error: err.message };
+    }
+  });
+
+  /** Fire a job immediately (the Jobs dialog has a "run now" button for testing a prompt). */
+  ipcMain.handle('cron:run-now', (_event, { id } = {}) => {
+    const job = jobList().find((entry) => entry.id === id);
+    if (!job) return { ok: false, error: 'no such job' };
+    console.log(`[cron] run-now "${job.name}" (manual)`);
+    send('cron:fire', { job, firedAt: new Date().toISOString(), manual: true });
+    return { ok: true };
   });
 
   ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(payload && typeof payload === 'object' ? payload : {}));
@@ -725,18 +900,30 @@ if (!gotLock) {
     buildMenu();
     registerIpc();
     createWindow();
+    cronStart();
+    // A laptop that slept through 09:30 must not fire it at 11:00; it re-arms for tomorrow and the
+    // user is told the run was missed (cronRecompute reports it).
+    for (const event of ['resume', 'unlock-screen']) {
+      try {
+        powerMonitor.on(event, () => cronRecompute(event));
+      } catch (err) {
+        console.error(`[cron] powerMonitor.on(${event}) failed: ${err.message}`);
+      }
+    }
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
   });
 
   app.on('window-all-closed', () => {
+    cronStop();
     for (const proc of processes.values()) proc.dispose({ graceMs: 300 });
     processes.clear();
     app.quit();
   });
 
   app.on('before-quit', () => {
+    cronStop();
     for (const proc of processes.values()) proc.dispose({ graceMs: 300 });
     processes.clear();
   });

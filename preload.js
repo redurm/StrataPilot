@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-const EVENT_CHANNELS = new Set(['pi:record', 'pi:stderr', 'pi:log', 'pi:exit', 'menu', 'diagnostics', 'recovery']);
+const EVENT_CHANNELS = new Set(['pi:record', 'pi:stderr', 'pi:log', 'pi:exit', 'menu', 'diagnostics', 'recovery', 'cron:fire', 'cron:notice']);
 
 const api = {
   /* environment ------------------------------------------------------- */
@@ -34,6 +34,14 @@ const api = {
 
   /* strata server monitor (proxied from main to dodge CSP/CORS) --------- */
   strataMetrics: (payload) => ipcRenderer.invoke('strata:metrics', payload),
+
+  /* scheduled jobs (B5) -------------------------------------------------
+   * The scheduler runs in main (it survives a renderer reload) but only announces due jobs:
+   * the renderer is the one place that owns the serial queue, so the prompt enters through it. */
+  cronList: () => ipcRenderer.invoke('cron:list'),
+  cronSave: (jobs) => ipcRenderer.invoke('cron:save', { jobs }),
+  cronPreview: (schedule) => ipcRenderer.invoke('cron:preview', { schedule }),
+  cronRunNow: (id) => ipcRenderer.invoke('cron:run-now', { id }),
 
   /* diagnostics -------------------------------------------------------- */
   /** Build the report asked for by docs/TROUBLESHOOTING.md (queue snapshot comes from us). */

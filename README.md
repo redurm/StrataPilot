@@ -127,6 +127,10 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   reopen-tabs, fixed Strata address, Strata config path for the report, Monitor open/width, sidebar,
   plus one-click access to the settings file, the log file and the sessions folder — nothing needs a
   hand edit of the JSON any more
+- **Scheduled prompts** (`/jobs`, Settings): cron-style jobs (5 fields, local time) kept in the settings
+  file and armed by the background process; a due prompt is queued into a session through the serial
+  queue, never sent behind its back, and a run missed while the machine slept is reported instead of
+  replayed
 - **Diagnostics report**: the topbar **Diagnostics** button (`/diagnostics`, menu **Help ▸ Copy
   Diagnostics**) copies one pasteable block for a bug report — versions and paths, the pi install,
   Strata `/health` + `/v1/models`, both model configs, every open tab's queue state and the log tail —
@@ -274,6 +278,7 @@ passed to pi, which expands extension commands, prompt templates and `/skill:nam
 | `/resume` | focus the session search in the sidebar |
 | `/settings` | open the Settings dialog (the topbar button or `Ctrl+,`) |
 | `/retry [on\|off\|stop]` | pi's retry of transient model errors: on/off for this session, `stop` cancels a retry sitting in its delay - see [Retry of transient model errors](#retry-of-transient-model-errors) |
+| `/jobs` | open the scheduled-prompts dialog - cron jobs, see [Scheduled prompts (cron)](#scheduled-prompts-cron) |
 | `/stats` | print tokens / cost / context usage into the transcript |
 | `/monitor` | toggle the Strata monitor |
 | `/diagnostics` | copy a diagnostics report for a bug report (see [One-click diagnostics report](#one-click-diagnostics-report)) |
@@ -438,9 +443,31 @@ the file still works — press `Ctrl+R` to reload, or reopen the Settings dialog
 | `restoreTabs` | Set to `false` to stop reopening last run's tabs (`true` unless set) |
 | `sidebarHidden` / `monitorOpen` / `monitorWidth` | Sidebar, Monitor panel state and width |
 | `strataUrl` | Fixed Strata address for the Monitor (e.g. `http://127.0.0.1:8081/v1`); if absent it is derived from the current tab's `model.baseUrl` |
+| `jobs[]` | Scheduled prompts (B5): `{ id, name, schedule, prompt, target, cwd, ephemeral, enabled, lastRun, nextRun }` - edited in the Jobs dialog rather than by hand |
 | `strataConfigPath` | Optional path of the Strata engine config (`C:\Strata\strata-src\strata-<model>.json`): only used to include that file, keys redacted, in the diagnostics report |
 
 The old `pi-gui` settings file is migrated automatically on first launch (see the note at the top).
+
+## Scheduled prompts (cron)
+
+Run a prompt on a schedule - "every weekday at 09:30, summarise what changed since yesterday".
+Open it with the **`/jobs`** command or Settings, Manage scheduled jobs.
+
+| Piece | Where it lives |
+|---|---|
+| The schedule | 5-field cron in **local time**: `minute hour day-of-month month day-of-week`, with `*`, `a-b`, `*/n`, `a-b/step`, lists, and the names `jan..dec` / `sun..sat`. When day-of-month and day-of-week are both restricted, **either** matching is enough (Vixie cron); `0` and `7` are both Sunday. Parsed by `lib/cron.js` (no dependency added); `test/cron.test.js` covers month/year rollover, impossible dates (`0 0 30 2 *` never fires) and the slept-through case |
+| The scheduler | the **main process**: ticks every 30 s, keeps `nextRun` per job in `settings.jobs[]`, and re-arms on `powerMonitor resume` / `unlock-screen` and on every tick. A laptop that slept through 09:30 does not fire it at 11:00 - the run is reported as missed and the next one is scheduled |
+| The firing | the scheduler **never sends a prompt itself**: it emits `cron:fire`, and the renderer pushes the text into the target session's **outbox** and lets the serial queue run it. Two senders would break Strata's one-request-at-a-time rule, and an outbox item is crash-recoverable (B4) |
+| The target | `new-tab` (a fresh session each run, **ephemeral by default** so jobs do not pile up session files), `session:<path>` (reuses that conversation, opening it if closed), or `tab:<id>` (an open tab; a dead tab is restarted) |
+| Run it now | the **run now** button queues the prompt immediately - the quick way to test a job without waiting for the clock |
+
+> **A scheduled prompt runs with full rights.** It is sent exactly like a typed message, so pi may
+> read, edit and run commands in the target folder while nobody is watching. Keep those prompts
+> read-mostly, pin the working folder in the job, and prefer ephemeral new-tab jobs you can inspect
+> afterwards.
+
+Jobs live in the settings file (`jobs[]`) so they survive restarts; disabling a job keeps it listed
+with its `nextRun` cleared.
 
 ## Auto-compaction (identical to the CLI)
 
@@ -735,6 +762,8 @@ Other smoke switches:
 | `PI_ON_STRATA_SMOKE_DIAG=1` | Clicks **Diagnostics** (clipboard write is captured in JS) and checks the report: expect `copied=1 chars=… lines=… missing_sections=none unredacted_apikeys=0` — all seven sections present and no `apiKey` value left unredacted |
 | `PI_ON_STRATA_SMOKE_SETTINGS=1` | Opens the Settings dialog, counts its fields, clicks **Save** and re-reads the file: expect `fields=8 rendered=8 prefilled=3 missing=none saved_monitorWidth=520 css=520px serial=true restoreTabs=true` (the smoke profile keeps these writes away from your real settings) |
 | `PI_ON_STRATA_SMOKE_RETRY=1` | Exercises `set_auto_retry off/on` and `abort_retry`, then feeds the two retry events the composer reacts to: expect `setOff=true setOn=true checkbox_after_off=false stop_shown=true stop_hidden_after_end=true abort=true` |
+| `PI_ON_STRATA_SMOKE_OUTBOX=1` | B4: packs an outbox entry (an oversized image is dropped instead of bloating the settings file), restores it and checks nothing was sent: expect `packed=2 images_dropped=1 restored=2 pending=2 badge=pending 2 outbox=0 auto_sent=false` |
+| `PI_ON_STRATA_SMOKE_CRON=1` | B5: saves a job through the main process, reads it back with a computed `nextRun`, previews `30 9 * * 1-5`, rejects `nope`, then run-now: expect `saved=true jobs=1 nextRun=set preview="every weekday, at 09:30" has_next=true invalid_rejected=true new_tab=true queued=true outbox_badges=1`. The serial queue is off inside the scenario, so the prompt never reaches the model |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII

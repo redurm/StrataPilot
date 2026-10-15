@@ -7,6 +7,13 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **Scheduled prompts (cron)** - `/jobs` or Settings, Manage scheduled jobs: 5-field cron jobs
+  (`minute hour day month weekday`, local time) stored in the settings file and armed by the
+  background process. A due job never sends anything itself: it emits `cron:fire` and the renderer
+  queues the prompt into the target session's outbox, so the serial queue stays the only sender.
+  Targets `new-tab` (ephemeral by default), `session:<path>` or `tab:<id>`; there is a **run now**
+  button, runs missed while the machine slept are reported instead of replayed, and `powerMonitor
+  resume` re-arms the schedule. Parser in `lib/cron.js`, no new dependency, 18 unit tests.
 
 - **Diagnostics report** — topbar **Diagnostics** button, `/diagnostics`, and menu
   Help ▸ Copy Diagnostics: one pasteable block with versions and paths, the pi install, Strata
