@@ -121,6 +121,10 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   **`auto-compact`** checkbox next to the editor toggles auto-compaction for this session (see below)
 - **Extension UI bridging**: `select` / `confirm` / `input` / `editor` emitted by an extension become
   in-window dialogs; `notify` / `setStatus` / `setWidget` / `setTitle` / `set_editor_text` are shown too
+- **Settings dialog** (topbar **Settings**, `Ctrl+,`, `/settings`): working folder, serial queue,
+  reopen-tabs, fixed Strata address, Strata config path for the report, Monitor open/width, sidebar,
+  plus one-click access to the settings file, the log file and the sessions folder — nothing needs a
+  hand edit of the JSON any more
 - **Diagnostics report**: the topbar **Diagnostics** button (`/diagnostics`, menu **Help ▸ Copy
   Diagnostics**) copies one pasteable block for a bug report — versions and paths, the pi install,
   Strata `/health` + `/v1/models`, both model configs, every open tab's queue state and the log tail —
@@ -252,9 +256,10 @@ passed to pi, which expands extension commands, prompt templates and `/skill:nam
 | `/rename <name>` | name the current session |
 | `/abort` | stop the current run or bash command |
 | `/resume` | focus the session search in the sidebar |
-| `/monitor` | toggle the Strata monitor |
+| `/settings` | open the Settings dialog (the topbar button or `Ctrl+,`) |
 | `/stats` | print tokens / cost / context usage into the transcript |
-| `/diagnostics` | copy a diagnostics report (versions, paths, Strata `/health`, both model configs, log tail, queue) for a bug report — same as the **Diagnostics** button |
+| `/monitor` | toggle the Strata monitor |
+| `/diagnostics` | copy a diagnostics report for a bug report (see [One-click diagnostics report](#one-click-diagnostics-report)) |
 | `/commands`, `/help` | list the app commands plus everything `get_commands` reports from pi |
 
 pi's built-in TUI commands (`/settings`, `/hotkeys`, …) do not exist in RPC mode — the palette list
@@ -394,8 +399,10 @@ PI_ON_STRATA_KEY=llama npm start
 
 ### 5. Application settings file
 
-`%APPDATA%\Pi on Strata\pi_on_strata_settings.json` (written by the GUI itself; you normally do not
-edit it — `strataUrl` is the one worth adding by hand):
+`%APPDATA%\Pi on Strata\pi_on_strata_settings.json` — written and **edited by the GUI itself**: the
+topbar **Settings** button (`Ctrl+,`, also `/settings`) is a form over every key below, it saves and
+applies the change straight away (queue switch, Monitor width, sidebar, working folder). Hand-editing
+the file still works — press `Ctrl+R` to reload, or reopen the Settings dialog to see the values.
 
 | Key | Meaning |
 |---|---|
@@ -403,6 +410,7 @@ edit it — `strataUrl` is the one worth adding by hand):
 | `cwd` | Default working folder for new tabs |
 | `openTabs` | Tabs to restore (session paths), up to 4 |
 | `serialQueue` | Serial queue on/off |
+| `restoreTabs` | Set to `false` to stop reopening last run's tabs (`true` unless set) |
 | `sidebarHidden` / `monitorOpen` / `monitorWidth` | Sidebar, Monitor panel state and width |
 | `strataUrl` | Fixed Strata address for the Monitor (e.g. `http://127.0.0.1:8081/v1`); if absent it is derived from the current tab's `model.baseUrl` |
 | `strataConfigPath` | Optional path of the Strata engine config (`C:\Strata\strata-src\strata-<model>.json`): only used to include that file, keys redacted, in the diagnostics report |
@@ -615,6 +623,7 @@ Collapsing is still cheaper for the renderer, and the optimization is now really
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Switch tabs |
 | `Ctrl+B` | Show / hide the sidebar |
 | `Ctrl+M` | Show / hide the Strata Monitor |
+| `Ctrl+,` | Settings dialog (working folder, serial queue, Strata address, Monitor, paths) |
 | `Ctrl+V` | Paste: an image (or file) on the clipboard is attached like a drop, plain text goes into the composer |
 | `F2` | Name the current session |
 | `Tab` | Complete the highlighted slash command (while the palette is open) |
@@ -668,6 +677,7 @@ Other smoke switches:
 | `PI_ON_STRATA_SMOKE_COPY=1` | Sends a prompt, waits for `agent_settled`, then clicks the user message's `copy` / `resend` (clipboard write is captured in JS): expect `copy_ok=true resend_ok=true composer="" queued=1 label_copied=true assistant_copy_ok=true`. A second tab is generating, so the resent text must land in the **outbox** (queue-aware path), not reach the model; also checks the draft guard (`modal=true` and the draft survives a cancel) and that the buttons survive `renderAll()` |
 | `PI_ON_STRATA_SMOKE_EXPORT=1` | Use with `PI_ON_STRATA_SMOKE_SESSION=<path>`: runs `/export <temp>\pi_on_strata_smoke_export.html` (no dialog; override the target with `PI_ON_STRATA_SMOKE_EXPORT_OUT`), then stats pi's returned path through the read-only `fs:stat-paths`: expect `ok=true path=… exists=true bytes=N` |
 | `PI_ON_STRATA_SMOKE_DIAG=1` | Clicks **Diagnostics** (clipboard write is captured in JS) and checks the report: expect `copied=1 chars=… lines=… missing_sections=none unredacted_apikeys=0` — all seven sections present and no `apiKey` value left unredacted |
+| `PI_ON_STRATA_SMOKE_SETTINGS=1` | Opens the Settings dialog, counts its fields, clicks **Save** and re-reads the file: expect `fields=8 rendered=8 prefilled=3 missing=none saved_monitorWidth=520 css=520px serial=true restoreTabs=true` (the smoke profile keeps these writes away from your real settings) |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII

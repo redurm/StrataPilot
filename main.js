@@ -165,6 +165,8 @@ function buildMenu() {
         { label: 'Open Session…', accelerator: 'CmdOrCtrl+O', click: () => send('menu', 'open-session') },
         { label: 'Rename Session', accelerator: 'F2', click: () => send('menu', 'rename-tab') },
         { type: 'separator' },
+        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'settings') },
+        { type: 'separator' },
         { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => send('menu', 'close-tab') },
         { label: 'Next Tab', accelerator: 'CmdOrCtrl+Tab', click: () => send('menu', 'next-tab') },
         { label: 'Previous Tab', accelerator: 'CmdOrCtrl+Shift+Tab', click: () => send('menu', 'prev-tab') },
@@ -391,6 +393,8 @@ function registerIpc() {
       runAsNode: inv.runAsNode,
       sessionsRoot: sessions.sessionsRoot(),
       logPath: appLog.logPath(),
+      settingsPath: SETTINGS_FILE(),
+      testedPiVersion: TESTED_PI_VERSION,
       defaultCwd: process.cwd(),
       home: os.homedir(),
       smoke: !!process.env.PI_ON_STRATA_SMOKE,
@@ -409,6 +413,7 @@ function registerIpc() {
       smokeExport: !!process.env.PI_ON_STRATA_SMOKE_EXPORT,
       smokeExportOut: process.env.PI_ON_STRATA_SMOKE_EXPORT_OUT || path.join(os.tmpdir(), 'pi_on_strata_smoke_export.html'),
       smokeDiag: !!process.env.PI_ON_STRATA_SMOKE_DIAG,
+      smokeSettings: !!process.env.PI_ON_STRATA_SMOKE_SETTINGS,
     };
   });
 
@@ -499,6 +504,17 @@ function registerIpc() {
     const result = await dialog.showOpenDialog(win, {
       title: 'Choose a working folder',
       properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
+    return { ok: true, path: result.filePaths[0] };
+  });
+
+  ipcMain.handle('fs:choose-file', async (_event, { title = 'Choose a file', filters = null } = {}) => {
+    if (!win) return { ok: false };
+    const result = await dialog.showOpenDialog(win, {
+      title,
+      properties: ['openFile'],
+      ...(Array.isArray(filters) && filters.length ? { filters } : {}),
     });
     if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
     return { ok: true, path: result.filePaths[0] };

@@ -1392,6 +1392,59 @@ button:disabled {
   gap: 6px;
 }
 
+/* ---------- settings dialog ---------- */
+.settings-modal {
+  width: min(620px, 94vw);
+  max-height: 88vh;
+  overflow: auto;
+}
+.set-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.set-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  opacity: 0.8;
+}
+.set-check {
+  align-items: center;
+}
+.set-check input {
+  width: auto;
+}
+.set-check label {
+  color: var(--text);
+  font-size: 13px;
+}
+.set-paths {
+  display: grid;
+  gap: 4px;
+}
+.set-path-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 6px;
+  align-items: center;
+}
+.set-path-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.set-path-value {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- toasts ---------- */
 .toasts {
   position: fixed;
