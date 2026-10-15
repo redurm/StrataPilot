@@ -92,6 +92,12 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   context fill and recent requests, without leaving the app
 - **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
   output, result, duration)
+- **Tab strip carries more**: each tab shows which **model** it is on (plus the thinking level when it
+  is not the default), its queue position and its outbox count; hovering the model tag shows the full
+  `provider/id` and the server address
+- **Restart a dead tab**: when a tab's pi process has ended, the composer gets an explicit
+  **Restart** button (same folder, same session file) instead of only hinting "press Send" in the
+  placeholder, so the draft in the editor survives
 - **Message actions on hover**: hovering a message (or tabbing into it) reveals small actions in its
   head — `copy` puts the **raw markdown source** of that message on the clipboard (never the rendered
   HTML, and never thinking / tool output), and user messages also get `resend`, which puts the original
@@ -690,6 +696,7 @@ simply renders the page that contains it. Measured on a 319-message session: 61 
 | `Ctrl+O` | Focus the session search box |
 | `Ctrl+W` | Close tab (terminates that pi process) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Switch tabs |
+| `Alt+Up` / `Alt+Down` | Move the active session up / down in the serial queue (also works with the row focused, then plain `Up` / `Down` do it) |
 | `Ctrl+B` | Show / hide the sidebar |
 | `Ctrl+M` | Show / hide the Strata Monitor |
 | `Ctrl+,` | Settings dialog (working folder, serial queue, Strata address, Monitor, paths) |
@@ -764,6 +771,7 @@ Other smoke switches:
 | `PI_ON_STRATA_SMOKE_RETRY=1` | Exercises `set_auto_retry off/on` and `abort_retry`, then feeds the two retry events the composer reacts to: expect `setOff=true setOn=true checkbox_after_off=false stop_shown=true stop_hidden_after_end=true abort=true` |
 | `PI_ON_STRATA_SMOKE_OUTBOX=1` | B4: packs an outbox entry (an oversized image is dropped instead of bloating the settings file), restores it and checks nothing was sent: expect `packed=2 images_dropped=1 restored=2 pending=2 badge=pending 2 outbox=0 auto_sent=false` |
 | `PI_ON_STRATA_SMOKE_CRON=1` | B5: saves a job through the main process, reads it back with a computed `nextRun`, previews `30 9 * * 1-5`, rejects `nope`, then run-now: expect `saved=true jobs=1 nextRun=set preview="every weekday, at 09:30" has_next=true invalid_rejected=true new_tab=true queued=true outbox_badges=1`. The serial queue is off inside the scenario, so the prompt never reaches the model |
+| `PI_ON_STRATA_SMOKE_TABTAG=1` | D5/D8: expect `model_tag=qwen3.8-flash-n… tag_title="strata/qwen3.8-flash-next-iq3_s" shown_when_alive=false shown_when_dead=true hidden_when_alive_again=true` |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII

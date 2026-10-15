@@ -7,6 +7,12 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **Tab strip shows the model** each tab is on (plus the thinking level when it is not the default),
+  next to the queue position and outbox count.
+- **Restart button** for a tab whose pi process died - the draft in the editor survives, instead of
+  the old "press Send to restart" hint.
+- **Keyboard queue reordering** - `Alt+Up` / `Alt+Down` moves the active session in the serial queue,
+  and a focused queue row answers to plain `Up` / `Down` (rows are focusable now).
 - **Scheduled prompts (cron)** - `/jobs` or Settings, Manage scheduled jobs: 5-field cron jobs
   (`minute hour day month weekday`, local time) stored in the settings file and armed by the
   background process. A due job never sends anything itself: it emits `cron:fire` and the renderer

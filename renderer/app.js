@@ -31,6 +31,7 @@ const els = {
   autoRetryToggle: $('autoRetryToggle'),
   autoRetryWrap: $('autoRetryWrap'),
   btnStopRetry: $('btnStopRetry'),
+  btnRestart: $('btnRestart'),
   extWidgets: $('extWidgets'),
   dropOverlay: $('dropOverlay'),
   modalRoot: $('modalRoot'),
@@ -1234,12 +1235,25 @@ function tabLabel(tab) {
   return tab.starting ? 'starting…' : 'new session';
 }
 
+/**
+ * D5: the model a tab is on, shortened for the tab strip. The thinking level is only shown when it
+ * is not the pi default (medium), because that is the case people are surprised by.
+ */
+function tabModelTag(tab) {
+  if (!tab.model || !tab.model.id) return null;
+  const id = String(tab.model.id);
+  const short = id.length > 16 ? `${id.slice(0, 15)}\u2026` : id;
+  const level = tab.thinking && tab.thinking !== 'medium' ? ` \u00b7 ${tab.thinking}` : '';
+  return { text: short, title: `${tab.model.provider ? `${tab.model.provider}/` : ''}${id}${level}${tab.model.baseUrl ? `\n${tab.model.baseUrl}` : ''}` };
+}
+
 function renderTabs() {
   els.tabs.textContent = '';
   for (const tabId of state.order) {
     const tab = state.tabs.get(tabId);
     if (!tab) continue;
     const node = el('div', `tab${tabId === state.activeId ? ' active' : ''}`);
+    node.dataset.tabId = tabId;
     const running = !!tab.isStreaming || scheduler.runningTabId === tabId;
     if (running) node.classList.add('running');
     else if (tab.outbox.length) node.classList.add('queued');
@@ -1251,7 +1265,15 @@ function renderTabs() {
       if (position) node.appendChild(el('span', 'tab-pos', `#${position}`));
     }
     if (tab.outbox.length) node.appendChild(el('span', 'tab-outbox', `+${tab.outbox.length}`));
-    node.title = `${tabLabel(tab)}\n${tab.cwd}\n${running ? 'running' : tab.outbox.length ? `queued (${tab.outbox.length} pending)` : 'idle'}`;
+    // D5: which model this tab is actually on - with several tabs open on different models the
+    // dropdown alone does not tell you what the other tabs are doing
+    const modelTag = tabModelTag(tab);
+    if (modelTag) {
+      const tag = el('span', 'tab-model', modelTag.text);
+      tag.title = modelTag.title;
+      node.appendChild(tag);
+    }
+    node.title = `${tabLabel(tab)}\n${tab.cwd}\n${running ? 'running' : tab.outbox.length ? `queued (${tab.outbox.length} pending)` : 'idle'}${modelTag ? `\nmodel: ${modelTag.title}` : ''}`;
     const close = el('button', 'tab-close', '×');
     close.title = 'Close tab';
     close.addEventListener('click', (event) => {
@@ -1515,6 +1537,13 @@ function renderComposerState() {
   }
   els.btnSend.disabled = !tab;
   els.input.disabled = !tab;
+  // D8: a dead tab says "press Send to restart" in the placeholder, which is easy to miss and
+  // destroys the draft; an explicit Restart does the same thing without touching the composer
+  if (els.btnRestart) {
+    const dead = !!(tab && !tab.alive && !tab.starting);
+    els.btnRestart.classList.toggle('hidden', !dead);
+    if (dead) els.btnRestart.title = `restart the pi process of this tab (cwd: ${tab.cwd})`;
+  }
   const autoOn = !(tab && tab.autoCompact === false);
   els.autoCompactToggle.checked = autoOn;
   els.autoCompactToggle.disabled = !tab || !tab.alive;
@@ -1744,6 +1773,20 @@ function queueRow(tab, position) {
   if (state.activeId === tab.id) classes.push('active');
   const row = el('div', classes.join(' '));
   row.dataset.tabId = tab.id;
+  // D4: the queue is keyboard-reachable and reorderable, not mouse-drag only
+  row.tabIndex = 0;
+  row.setAttribute('role', 'button');
+  row.addEventListener('keydown', (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    const index = state.order.indexOf(tab.id);
+    const target = event.key === 'ArrowUp' ? index - 1 : index + 1;
+    if (index === -1 || target < 0 || target >= state.order.length) return;
+    moveTabTo(tab.id, target);
+    const moved = els.queueList.querySelector(`[data-tab-id="${tab.id}"]`);
+    if (moved) moved.focus();
+  });
   row.draggable = true;
   row.title = `${tab.cwd}\n${tab.sessionPath || 'unsaved session'}`;
   row.appendChild(el('span', 'qdot'));
@@ -4609,6 +4652,17 @@ function wireUi() {
     const ok = await setAutoRetry(tab, wanted);
     if (!ok) els.autoRetryToggle.checked = tab.autoRetry !== false;
   });
+  els.btnRestart.addEventListener('click', async () => {
+    const tab = activeTab();
+    if (!tab) return;
+    if (tab.alive) {
+      toast('this tab is already running', 'info', 3000);
+      return;
+    }
+    await respawnTab(tab);
+    renderTabs();
+    renderComposerState();
+  });
   els.btnStopRetry.addEventListener('click', async () => {
     const tab = activeTab();
     if (tab) await abortRetry(tab);
@@ -4682,6 +4736,21 @@ function wireUi() {
   els.fileInput.addEventListener('change', async () => {
     await addFiles(els.fileInput.files);
     els.fileInput.value = '';
+  });
+
+  // D4: Alt+Arrow moves the active tab in the serial queue (works whatever has focus, including the
+  // composer, because Alt+Arrow is never typed text)
+  document.addEventListener('keydown', (event) => {
+    if (modalOpen || !event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    const tab = activeTab();
+    if (!tab) return;
+    const index = state.order.indexOf(tab.id);
+    const target = event.key === 'ArrowUp' ? index - 1 : index + 1;
+    if (index === -1 || target < 0 || target >= state.order.length) return;
+    event.preventDefault();
+    moveTabTo(tab.id, target);
+    toast(`${tabLabel(tab)} \u2192 queue position ${target + 1} (Alt+Arrow)`, 'info', 2500);
   });
 
   els.search.addEventListener('input', () => {
@@ -5079,6 +5148,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeExport) {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokeTabTag) {
+    setTimeout(() => smokeTabTagScenario().catch((err) => console.error('[smoke] tab tag scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeCron) {
@@ -5544,6 +5617,28 @@ async function smokeCronScenario() {
   } finally {
     scheduler.enabled = wasEnabled;
   }
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_TABTAG=1: D5 (which model a tab is on, in the tab strip) and D8 (an explicit
+ * Restart button that only appears while that tab's pi process is dead).
+ */
+async function smokeTabTagScenario() {
+  const tab = activeTab();
+  const tagNode = () => els.tabs.querySelector(`.tab[data-tab-id="${tab.id}"] .tab-model`);
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const tag = tagNode();
+  const before = !els.btnRestart.classList.contains('hidden');
+  tab.alive = false;
+  tab.starting = false;
+  renderComposerState();
+  const shown = !els.btnRestart.classList.contains('hidden');
+  tab.alive = true;
+  renderComposerState();
+  const hidden = els.btnRestart.classList.contains('hidden');
+  console.log(
+    `[smoke-tabtag] model_tag=${tag ? tag.textContent : 'none'} tag_title=${tag ? JSON.stringify(String(tag.title).split('\n')[0]) : 'none'} shown_when_alive=${before} shown_when_dead=${shown} hidden_when_alive_again=${hidden}`,
+  );
 }
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.

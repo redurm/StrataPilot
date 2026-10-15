@@ -70,11 +70,11 @@ Cheap to close, and used every day.
 | D1 | `@` path completion in the composer | The composer has a `/` palette but no path/file completion; attachments rely on drag & drop or the button | `renderer/app.js` slash palette | M | P2 | todo |
 | D2 | Light / dark theme | One `styles.css`, no switch (pi's TUI has themes) | `renderer/styles.css` | M | P2 | todo |
 | D3 | Accessibility | `renderer/index.html` has a single `aria-` attribute, `app.js` has none; the session list and queue rows cannot be navigated by keyboard, reordering is mouse-drag only | `renderer/index.html`, `app.js` | M | P2 | todo |
-| D4 | Keyboard queue reordering | Only mouse drag plus the `top` button | `renderer/app.js` queue rows | S | P2 | todo |
-| D5 | Model / thinking in the tab label | The tab strip shows title, queue position and outbox count, but not which model that tab is on | `renderer/app.js` `renderTabs()` (~L1125) | S | P2 | todo |
+| D4 | Keyboard queue reordering | done: `Alt+Up` / `Alt+Down` moves the active session in the queue from anywhere (composer included), and a focused queue row reacts to plain `Up` / `Down`; rows are focusable now, which is also the first step of D3 | `renderer/app.js` `queueRow()` + a document keydown handler | S | P2 | done |
+| D5 | Model / thinking in the tab label | done: each tab shows a model tag (id, truncated; full `provider/id` + server url on hover) and the thinking level when it is not the pi default | `renderer/app.js` `tabModelTag()` in `renderTabs()` | S | P2 | done |
 | D6 | Multiple Strata servers | The Monitor derives one address from the active tab (or `strataUrl`); running two servers on different ports is not viewable | `renderer/app.js` monitor, `main.js` `strata:metrics` | M | P2 | todo |
 | D7 | Session storage usage / cleanup | The sidebar footer shows the sessions root path only; no size, no bulk cleanup (an 86 MB session can currently only be deleted from the file manager) | `lib/sessions.js`, sidebar footer | M | P2 | todo |
-| D8 | Restart a dead tab explicitly | A dead pi process prints a note and changes the placeholder to "press Send to restart"; there is no explicit Restart button | `renderer/app.js` ~L1405, ~L2598 | S | P2 | todo |
+| D8 | Restart a dead tab explicitly | done: an explicit **Restart** button appears in the composer only while that tab's pi process is dead, so the editor draft survives (the placeholder hint still works as before) | `renderer/app.js` `renderComposerState()` + `btnRestart` | S | P2 | done |
 
 ## Deliberately not doing
 

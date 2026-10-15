@@ -341,6 +341,18 @@ textarea {
   color: var(--text-dim);
 }
 .qpos,
+.tab-model {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 5px;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: none;
+}
 .qbadge {
   font-size: 10.5px;
   color: var(--text-faint);
