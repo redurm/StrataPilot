@@ -40,8 +40,8 @@ pi --version    # pi requires Node.js 22.19+ (the installer provides it if missi
 **3) Point pi at Strata** (one-time setup)
 
 Add Strata as a provider in `~/.pi/agent/models.json` and set `defaultProvider` in
-`~/.pi/agent/settings.json`. Full example and field notes:
-[Connecting pi to Strata](#connecting-pi-to-strata-one-time-setup).
+`~/.pi/agent/settings.json`. **Every value comes from your Strata install** — the mapping and the
+commands that read them: [Connecting pi to Strata](#connecting-pi-to-strata-one-time-setup).
 After this, plain `pi` works in a terminal — and only then does the GUI's model dropdown have
 anything in it.
 
@@ -233,7 +233,34 @@ unrecognised `/foo` is sent to pi as written (it then reaches the model as plain
 ### 2. Connecting pi to Strata (one-time setup)
 
 The GUI reads pi's own configuration, so **add Strata as a provider in pi first** — only then does the
-GUI's model dropdown list anything. `~/.pi/agent/models.json`:
+GUI's model dropdown list anything.
+
+**Do not copy anyone's provider block: pi's values are decided by *your* Strata config.** Read them
+from the engine config Strata was started with — the JSON named by `--config` in the launcher, e.g.
+`run-iq3_s.bat` → `C:\Strata\strata-src\strata-iq3_s.json` — or, better, from the running server:
+
+```bash
+curl -s http://127.0.0.1:8081/v1/models
+# {"data":[{"id":"qwen3.8-flash-next-iq3_s","meta":{"n_ctx":262144},
+#           "architecture":{"input_modalities":["text","image"],…}}]}
+curl -s http://127.0.0.1:8081/health
+# {"max_context":262144,"model":"qwen3.8-flash-next-iq3_s","images":true,"api_key":false}
+```
+
+| pi field in `~/.pi/agent/models.json` | the Strata side it has to match |
+|---|---|
+| provider `baseUrl` | the port Strata actually listens on: `--port` in the launcher `.bat` (it wins) or `"port"` in the config → `http://127.0.0.1:<port>/v1` |
+| `models[].id` | `"model_name"` in the config (else the family default) — exactly the `id` `/v1/models` reports. pi puts that name in every request, so a mismatch is a "model not found" |
+| `apiKey` | Strata's key: `"api_key"` in the config, `--api-key`, or `$STRATA_API_KEY`. When `/health` says `"api_key": false` the server has none — put any non-empty placeholder (`"strata"`): pi needs a key to list the model, Strata ignores it |
+| `models[].contextWindow` | `--max-context` in the config's `args` = `/health`'s `max_context` = `/v1/models` `meta.n_ctx` |
+| `models[].input` | add `"image"` only when the config has a `vision` section or `--vision` in `args` (`/health` `"images": true`) |
+| `models[].reasoning` | `true` when that build thinks: the config carries `reasoning_budget_tokens` / `reasoning_close_retry` / `reasoning_effort` |
+| `models[].maxTokens` | the output cap pi asks for — keep it well below `contextWindow`. With `"fit_max_tokens": true` in the Strata config the server shortens it to the room left; without it, prompt + `max_tokens` over the context is a 400. Strata also caps the thinking budget at `max_tokens` minus a quarter of it, so a small `maxTokens` starves the answer |
+| `models[].cost` | all zeros — a local server |
+
+The config above (`port 8081`, `model_name qwen3.8-flash-next-iq3_s`, `--max-context 262144`,
+`--vision`, `reasoning_budget_tokens 16384`, no `api_key`) therefore gives this
+`~/.pi/agent/models.json`:
 
 ```json
 {
@@ -242,7 +269,7 @@ GUI's model dropdown list anything. `~/.pi/agent/models.json`:
       "name": "Strata Flash-Next (local)",
       "baseUrl": "http://127.0.0.1:8081/v1",
       "api": "openai-completions",
-      "apiKey": "llama",
+      "apiKey": "strata",
       "models": [
         {
           "id": "qwen3.8-flash-next-iq3_s",
@@ -259,16 +286,23 @@ GUI's model dropdown list anything. `~/.pi/agent/models.json`:
 }
 ```
 
-Set the defaults in `~/.pi/agent/settings.json` (you can still switch in the top bar after launch):
+Only `id` is required by pi's schema (`models.schema.json`); the rest is metadata pi acts on — when to
+compact, whether it may attach images, which thinking levels it offers, what it prints as cost. Wrong
+metadata still reaches the server, it just misjudges all of those.
+
+Set the defaults in `~/.pi/agent/settings.json` (`defaultModel` must be that same `id`; you can still
+switch in the top bar after launch):
 
 ```json
 { "defaultProvider": "strata", "defaultModel": "qwen3.8-flash-next-iq3_s" }
 ```
 
-> Get `contextWindow` / `maxTokens` right: both the auto-compaction trigger point and the Monitor's
-> context-fill donut are driven by these two values. `apiKey` here is Strata's local key (different
-> from `PI_ON_STRATA_KEY` below: the one in `models.json` is what pi uses for requests, the other is
-> what the Monitor uses to fetch `/metrics`).
+> Two keys, don't mix them up: the `apiKey` in `models.json` is what pi sends to `/v1/*`,
+> `PI_ON_STRATA_KEY` below is what the Monitor sends to `/metrics`.
+>
+> Re-running `START-HERE.bat --calibrate`, or editing the Strata config, can change `--max-context`
+> and the port. Re-read the two endpoints above afterwards and update `contextWindow` / `baseUrl` —
+> the auto-compaction trigger point and the Monitor's context-fill donut both follow `contextWindow`.
 
 ### 3. Installing and starting this repo
 

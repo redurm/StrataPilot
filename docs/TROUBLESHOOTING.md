@@ -19,9 +19,11 @@ parent [`README.md`](../README.md).
 | Symptom | Cause / fix |
 |---|---|
 | The model dropdown is empty | No provider in `~/.pi/agent/models.json`, or `defaultProvider` in `settings.json` is wrong |
-| Sending spins forever / `connection error` | Strata is not running: open `http://127.0.0.1:8081/metrics` in a browser first. Check that the port in the model's `baseUrl` matches the port Strata actually listens on |
-| 401 / `invalid api key` | The `apiKey` in `models.json` does not match Strata's key (that key is what pi uses for requests; it is not the Monitor's `PI_ON_STRATA_KEY`) |
-| Context usage looks wrong, or is high while nothing runs | `contextWindow` in `models.json` is wrong: both the status bar and the Monitor's context-fill donut use that value |
+| Sending spins forever / `connection error` | Strata is not running: open `http://127.0.0.1:8081/metrics` in a browser first. Check that the port in the model's `baseUrl` matches the port Strata actually listens on (`--port` in the launcher `.bat`, `"port"` in the Strata config) |
+| `model not found` / the request names another model | `models[].id` in `models.json` is not what the server serves: it must equal `"model_name"` in the Strata config, i.e. the `id` in `curl http://127.0.0.1:<port>/v1/models` |
+| 401 / `invalid api key` | The `apiKey` in `models.json` does not match Strata's key (`"api_key"` in the config, `--api-key` or `$STRATA_API_KEY`; `curl http://127.0.0.1:<port>/health` says `"api_key": false` when the server has none — then any non-empty placeholder works). That key is what pi uses for requests; it is not the Monitor's `PI_ON_STRATA_KEY` |
+| `request exceeds the context window` | `contextWindow` / `maxTokens` in `models.json` are bigger than the server's (`--max-context` in the Strata config, `max_context` in `/health`), and the config has no `"fit_max_tokens": true` to shorten the request instead |
+| Context usage looks wrong, or is high while nothing runs | `contextWindow` in `models.json` is wrong: both the status bar and the Monitor's context-fill donut use that value. It must equal `/health`'s `max_context` — re-check it after `START-HERE.bat --calibrate` rewrites the Strata config |
 | Fewer thinking options after switching model | Expected: models without reasoning support expose a shorter thinking list (whatever `get_available_thinking_levels` returns) |
 
 ## Sessions / tabs
@@ -102,6 +104,7 @@ parent [`README.md`](../README.md).
 1. The symptom plus reproduction steps (which tab, what you pressed)
 2. stderr from `npm start` in a terminal (including `[renderer …]` and pi's `[stderr]` / `[log]`)
 3. The first four lines of `node test/smoke-rpc.js <cwd>` (cli / node / pi version / sessions root)
-4. pi version (`~/.pi/agent/install/current-version`), Strata version and the model configuration
-   (`models.json`, **redact the key**)
+4. pi version (`~/.pi/agent/install/current-version`), Strata version, the output of `curl
+   http://127.0.0.1:<port>/health`, and both model configurations — pi's `models.json` and Strata's
+   `strata-<model>.json` (**redact the key**)
 5. For queue / compact issues: a screenshot of `OPEN SESSIONS (QUEUE)` (Working/Idle groups and badges)
