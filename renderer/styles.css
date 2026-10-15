@@ -726,6 +726,55 @@ details.thinking pre {
   margin-bottom: 6px;
 }
 
+/* bash cards: output of `!cmd` typed in the composer (pi RPC `bash`) */
+.bash-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+.bash-card.running {
+  border-left-color: var(--amber);
+}
+.bash-card.error {
+  border-left-color: var(--red);
+}
+.bash-card.done {
+  border-left-color: var(--green);
+}
+.bash-card.cancelled {
+  border-left-color: var(--text-faint);
+}
+.bash-sign {
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--accent);
+}
+.bash-out {
+  border-top: 1px solid var(--border);
+  margin: 0;
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 340px;
+  overflow: auto;
+  color: var(--text-dim);
+}
+.bash-out.hidden {
+  display: none;
+}
+.bash-foot {
+  border-top: 1px solid var(--border);
+  padding: 4px 8px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.bash-foot.hidden {
+  display: none;
+}
+
 .note {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -900,6 +949,53 @@ details.thinking pre {
 #input:focus {
   border-color: var(--accent);
 }
+/* `!cmd` turns the composer amber, like pi's own TUI bash mode */
+#input.bash-mode {
+  border-color: var(--amber);
+}
+
+/* slash command palette (above the composer) */
+.slash-menu {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  max-height: 264px;
+  overflow-y: auto;
+  margin-bottom: 6px;
+}
+.slash-menu.hidden {
+  display: none;
+}
+.slash-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 9px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.slash-item.active {
+  background: var(--accent-soft);
+}
+.slash-name {
+  font-family: var(--mono);
+  color: var(--text);
+  white-space: nowrap;
+}
+.slash-desc {
+  color: var(--text-dim);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slash-src {
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 
 .composer-actions {
   display: flex;
@@ -922,6 +1018,8 @@ a:hover {
 }
 /* links inside monospace / dim panels need to stay readable */
 .tool-body a,
+.bash-out a,
+.bash-foot a,
 details.thinking pre a,
 .note a,
 .msg-user .msg-body a {

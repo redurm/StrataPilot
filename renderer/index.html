@@ -64,7 +64,8 @@
               <div class="stats" id="stats"></div>
             </div>
             <div class="attachments" id="attachments"></div>
-            <textarea id="input" placeholder="Ask pi&hellip;  Enter = send, Shift+Enter = newline, drop files anywhere to attach"></textarea>
+            <div class="slash-menu hidden" id="slashMenu"></div>
+            <textarea id="input" placeholder="Ask pi&hellip;  Enter = send &middot; Shift+Enter = newline &middot; !cmd = run bash &middot; / = commands &middot; drop files to attach"></textarea>
             <div class="composer-actions">
               <button id="btnAttach" title="Attach files">Attach files</button>
               <label class="mini-check" id="autoCompactWrap" title="Automatic compaction when the context is nearly full. pi default: enabled, reserve 16,384 tokens, keep the most recent 20,000. This switch only affects the current session.">

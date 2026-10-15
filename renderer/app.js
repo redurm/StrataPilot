@@ -57,6 +57,7 @@ const els = {
   monReqBody: $('monReqBody'),
   monTotals: $('monTotals'),
   monResizer: $('monResizer'),
+  slashMenu: $('slashMenu'),
 };
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -144,6 +145,7 @@ const state = {
   sessions: [],
   dragDepth: 0,
   tabSeq: 0,
+  bashSeq: 0,
   saveTimer: null,
 };
 
@@ -166,8 +168,10 @@ function makeTab({ cwd, sessionPath, name, ephemeral, extraArgs = [] }) {
     name: name || '',
     args,
     ephemeral: !!ephemeral,
-    items: [], // {key, kind:'message'|'note', message?, noteType?, text?}
+    items: [], // {key, kind:'message'|'note'|'bash', ...}
     tools: new Map(), // toolCallId -> {name,args,status,result,isError,durationMs,el}
+    bashes: new Map(), // bashId -> {command,output,exitCode,status,…} (`!` commands)
+    bashRunning: null, // bashId of the command pi is running for this tab
     attachments: [], // {kind:'file'|'dir', path, name, size}
     images: [], // {kind:'image', name, mimeType, data, previewUrl, path}
     inlines: [], // {kind:'inline', name, text}
@@ -185,6 +189,8 @@ function makeTab({ cwd, sessionPath, name, ephemeral, extraArgs = [] }) {
     starting: true,
     queued: { steering: [], followUp: [] },
     models: [],
+    commands: [], // slash commands pi knows about (get_commands)
+    commandsLoaded: false,
     thinkingLevels: ['off'],
     model: null,
     thinking: 'medium',
@@ -286,6 +292,102 @@ function updateToolCard(tab, toolCallId, incremental = false) {
   if (entry.paint) entry.paint(incremental);
 }
 
+/* ------------------------------------------------------------------ */
+/* bash cards (`!cmd` in the composer, or bashExecution messages)      */
+/* ------------------------------------------------------------------ */
+
+function bashEntryFromMessage(message) {
+  const exitCode = message.exitCode === undefined ? null : message.exitCode;
+  return {
+    id: '',
+    command: message.command || '',
+    output: message.output || '',
+    exitCode,
+    cancelled: !!message.cancelled,
+    truncated: !!message.truncated,
+    fullOutputPath: message.fullOutputPath || '',
+    excludeFromContext: !!message.excludeFromContext,
+    error: '',
+    status: message.cancelled ? 'cancelled' : exitCode ? 'error' : 'done',
+    startedAt: 0,
+    durationMs: 0,
+    fromHistory: true,
+    el: null,
+  };
+}
+
+function bashFootText(entry) {
+  const bits = [];
+  if (entry.error) bits.push(entry.error);
+  else if (entry.cancelled) bits.push('cancelled');
+  else if (entry.exitCode) bits.push(`exit ${entry.exitCode}`);
+  if (entry.truncated) {
+    bits.push(entry.fullOutputPath ? `output truncated · full log: ${entry.fullOutputPath}` : 'output truncated');
+  }
+  if (!entry.fromHistory) {
+    bits.push(entry.excludeFromContext ? '!! kept out of the model context' : 'output goes to the model with your next message');
+  }
+  return bits.join(' · ');
+}
+
+function buildBashCard(tab, entry) {
+  const card = el('div', `bash-card ${entry.status}`);
+
+  const head = el('div', 'tool-head');
+  head.appendChild(el('span', 'tool-name bash-sign', entry.excludeFromContext ? '!!' : '$'));
+  const cmd = el('span', 'tool-arg');
+  cmd.innerHTML = window.linkify(entry.command);
+  head.appendChild(cmd);
+  const dur = el('span', 'tool-dur');
+  head.appendChild(dur);
+  card.appendChild(head);
+
+  const body = el('pre', 'bash-out');
+  card.appendChild(body);
+  const foot = el('div', 'bash-foot');
+  card.appendChild(foot);
+
+  head.addEventListener('click', () => body.classList.toggle('hidden'));
+  entry.el = card;
+  entry._body = body;
+  entry._dur = dur;
+  entry._foot = foot;
+  paintBashCard(entry);
+  return card;
+}
+
+function paintBashCard(entry, incremental = false) {
+  const card = entry.el;
+  if (!card) return;
+  card.className = `bash-card ${entry.status}`;
+  entry._dur.textContent =
+    entry.status === 'running' ? 'running…' : entry.durationMs ? `${(entry.durationMs / 1000).toFixed(1)}s` : '';
+
+  const text = entry.output || (entry.status === 'running' ? '' : '(no output)');
+  if (incremental && entry._body._raw != null && text.startsWith(entry._body._raw)) {
+    const tail = text.slice(entry._body._raw.length);
+    entry._body._raw = text;
+    if (tail) appendPreText(entry._body, tail);
+  } else if (entry._body._raw !== text) {
+    setPreText(entry._body, text);
+  }
+
+  const foot = bashFootText(entry);
+  if (foot) {
+    entry._foot.classList.remove('hidden');
+    if (entry._foot._raw !== foot) {
+      entry._foot._raw = foot;
+      entry._foot.innerHTML = window.linkify(foot);
+    }
+  } else {
+    entry._foot.classList.add('hidden');
+  }
+}
+
+function updateBashCard(tab, entry, incremental = false) {
+  if (entry) paintBashCard(entry, incremental);
+}
+
 function buildMessageNode(tab, item) {
   const message = item.message;
   const role = message.role;
@@ -381,9 +483,8 @@ function buildMessageNode(tab, item) {
   }
 
   if (role === 'bashExecution') {
-    const note = el('div', 'note');
-    setPreText(note, `$ ${message.command}\n${truncate(message.output || '', 4000)}`);
-    return note;
+    // pi stores every `!cmd` run as a bashExecution message, so the card survives a reopen
+    return buildBashCard(tab, bashEntryFromMessage(message));
   }
 
   if (role === 'compactionSummary' || role === 'branchSummary') {
@@ -416,6 +517,10 @@ function buildNoteNode(item) {
 function buildItemNode(tab, item) {
   if (item.kind === 'note') return buildNoteNode(item);
   if (item.kind === 'tool') return buildToolCard(tab, item.toolCallId, item.toolName, item.args);
+  if (item.kind === 'bash') {
+    const entry = item.entry || tab.bashes.get(item.bashId) || bashEntryFromMessage(item.message || {});
+    return buildBashCard(tab, entry);
+  }
   return buildMessageNode(tab, item);
 }
 
@@ -772,8 +877,29 @@ function handleRecord(tab, record) {
     case 'extension_ui_request':
       handleExtensionUi(tab, record);
       break;
-    case 'bash_execution_update':
+    case 'bash_execution_update': {
+      // pi streams every output chunk of a running `!cmd`; the id matches the `bash` command
+      // we sent (see runBash). Commands we did not start (an extension running bash) get a card too.
+      let entry = record.id ? tab.bashes.get(record.id) : null;
+      if (!entry) {
+        const id = record.id || `ext${++state.bashSeq}`;
+        entry = {
+          id, command: '(bash started by an extension)', output: '', exitCode: null, cancelled: false,
+          truncated: false, fullOutputPath: '', excludeFromContext: false, error: '', status: 'running',
+          startedAt: Date.now(), durationMs: 0, fromHistory: false, el: null,
+        };
+        tab.bashes.set(id, entry);
+        if (!tab.bashRunning) tab.bashRunning = id;
+        appendItem(tab, { key: nextKey(tab), kind: 'bash', bashId: id });
+        renderComposerState();
+      }
+      if (record.delta) {
+        entry.output += record.delta;
+        updateBashCard(tab, entry, true);
+        autoscroll();
+      }
       break;
+    }
     default:
       break;
   }
@@ -1057,7 +1183,9 @@ function renderWidgets(tab) {
 
 function renderComposerState() {
   const tab = activeTab();
-  els.btnAbort.classList.toggle('hidden', !(tab && tab.isStreaming));
+  const bashRunning = !!(tab && tab.bashRunning);
+  els.btnAbort.classList.toggle('hidden', !(tab && (tab.isStreaming || bashRunning)));
+  els.btnAbort.title = bashRunning ? 'Stop the running bash command (Esc)' : 'Stop the current run (Esc)';
   if (els.btnCompact) {
     els.btnCompact.disabled = !tab || !tab.alive || !!tab.compacting;
     els.btnCompact.title = tab && tab.compacting ? 'Compaction in progress…' : 'Compact the context now';
@@ -1073,7 +1201,7 @@ function renderComposerState() {
   } else if (!tab.alive) {
     els.input.placeholder = 'This session process ended — press Send to restart it in the same folder';
   } else {
-    els.input.placeholder = 'Enter = send, Shift+Enter = newline, drop files anywhere to attach';
+    els.input.placeholder = 'Enter = send · Shift+Enter = newline · !cmd = run bash · / = commands · drop files to attach';
   }
 }
 
@@ -1120,6 +1248,7 @@ function activateTab(tabId) {
   else {
     els.transcript.textContent = '';
   }
+  closeSlashMenu();
   markCurrentSession();
   els.input.focus();
 }
@@ -1496,6 +1625,7 @@ async function bootstrap(tab) {
   if (levelsRes.success && levelsRes.data && levelsRes.data.levels) {
     tab.thinkingLevels = levelsRes.data.levels;
   }
+  await loadCommands(tab);
 
   const messagesRes = await api.cmd(tab.id, 'get_messages');
   if (messagesRes.success && messagesRes.data && messagesRes.data.messages) {
@@ -1509,7 +1639,11 @@ async function bootstrap(tab) {
         tab.tools.set(message.toolCallId, entry);
       }
     }
-    tab.items = messagesRes.data.messages.map((message) => ({ key: nextKey(tab), kind: 'message', message }));
+    tab.items = messagesRes.data.messages.map((message) =>
+      message.role === 'bashExecution'
+        ? { key: nextKey(tab), kind: 'bash', entry: bashEntryFromMessage(message) }
+        : { key: nextKey(tab), kind: 'message', message },
+    );
   }
 
   await refreshStats(tab);
@@ -2243,6 +2377,372 @@ function clearComposer() {
   renderAttachments();
 }
 
+/* ------------------------------------------------------------------ */
+/* bash mode: `!cmd` runs in the session folder, `!!cmd` also keeps    */
+/* the output out of the model context (same prefixes as pi's own TUI) */
+/* ------------------------------------------------------------------ */
+
+// pi's bash executor has no timeout of its own: it runs until the command exits or the
+// user aborts it (Esc -> abort_bash), so the RPC must not give up early.
+const BASH_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+function parseBashInput(text) {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('!')) return null;
+  const excludeFromContext = trimmed.startsWith('!!');
+  const command = trimmed.slice(excludeFromContext ? 2 : 1).trim();
+  if (!command) return null;
+  return { command, excludeFromContext };
+}
+
+async function runBash(tab, info) {
+  if (tab.bashRunning) {
+    toast('a bash command is already running in this session — Esc stops it', 'warning');
+    return false;
+  }
+  const bashId = `b${Date.now().toString(36)}${++state.bashSeq}`;
+  const entry = {
+    id: bashId,
+    command: info.command,
+    output: '',
+    exitCode: null,
+    cancelled: false,
+    truncated: false,
+    fullOutputPath: '',
+    excludeFromContext: info.excludeFromContext,
+    error: '',
+    status: 'running',
+    startedAt: Date.now(),
+    durationMs: 0,
+    fromHistory: false,
+    el: null,
+  };
+  tab.bashes.set(bashId, entry);
+  tab.bashRunning = bashId;
+  appendItem(tab, { key: nextKey(tab), kind: 'bash', bashId });
+  renderComposerState();
+  autoscroll(true);
+
+  // bash never touches the model, so it deliberately skips the serial queue: it runs while
+  // another tab is generating. pi records the output in the session and feeds it to the
+  // model with the NEXT prompt (unless `!!`).
+  const res = await api.cmd(tab.id, 'bash', { command: info.command, excludeFromContext: info.excludeFromContext, id: bashId }, BASH_TIMEOUT_MS);
+  if (tab.bashRunning === bashId) tab.bashRunning = null;
+  entry.durationMs = Date.now() - entry.startedAt;
+  if (res.success) {
+    const data = res.data || {};
+    // the response carries truncated output while the events streamed everything: keep the longer one
+    if (typeof data.output === 'string' && data.output.length > entry.output.length) entry.output = data.output;
+    entry.exitCode = data.exitCode === undefined ? null : data.exitCode;
+    entry.cancelled = !!data.cancelled;
+    entry.truncated = !!data.truncated;
+    entry.fullOutputPath = data.fullOutputPath || '';
+    entry.status = entry.cancelled ? 'cancelled' : entry.exitCode ? 'error' : 'done';
+  } else {
+    entry.status = 'error';
+    entry.error = res.error || 'bash failed';
+  }
+  updateBashCard(tab, entry);
+  renderComposerState();
+  refreshSessionsSoon();
+  return true;
+}
+
+async function abortBash(tab) {
+  const res = await api.cmd(tab.id, 'abort_bash');
+  if (!res.success) toast(res.error || 'abort_bash failed', 'error');
+  else toast('stopping the bash command…');
+}
+
+/* ------------------------------------------------------------------ */
+/* slash commands: what the GUI runs itself; everything else is handed */
+/* to pi, which expands extension commands, prompt templates, skills   */
+/* ------------------------------------------------------------------ */
+
+const GUI_COMMANDS = [
+  { name: 'compact', args: '[instructions]', desc: 'compact this context (asks first if the session is running)' },
+  { name: 'model', args: '[provider/id]', desc: 'pick a model, or set one by name' },
+  { name: 'thinking', args: '[level]', desc: 'show or set the thinking level' },
+  { name: 'new', args: '', desc: 'start a new session in this tab' },
+  { name: 'clear', args: '', desc: 'same as /new' },
+  { name: 'rename', args: '<name>', desc: 'name this session' },
+  { name: 'abort', args: '', desc: 'stop the current run or bash command' },
+  { name: 'resume', args: '', desc: 'search past sessions in the sidebar' },
+  { name: 'monitor', args: '', desc: 'toggle the Strata monitor' },
+  { name: 'stats', args: '', desc: 'print tokens, cost and context usage' },
+  { name: 'commands', args: '', desc: 'list the slash commands available here' },
+  { name: 'help', args: '', desc: 'show this list' },
+];
+
+async function loadCommands(tab) {
+  if (!tab || !tab.alive) return;
+  const res = await api.cmd(tab.id, 'get_commands');
+  if (res.success && res.data && Array.isArray(res.data.commands)) {
+    tab.commands = res.data.commands;
+    tab.commandsLoaded = true;
+  }
+}
+
+function slashCatalog(tab) {
+  const out = GUI_COMMANDS.map((c) => ({ name: c.name, args: c.args, desc: c.desc, source: 'app' }));
+  for (const c of (tab && tab.commands) || []) {
+    if (out.some((existing) => existing.name === c.name)) continue;
+    out.push({ name: c.name, args: '', desc: c.description || '', source: c.source });
+  }
+  return out;
+}
+
+async function setModelByKey(tab, key) {
+  const [provider, ...rest] = String(key).split('/');
+  const res = await api.cmd(tab.id, 'set_model', { provider, modelId: rest.join('/') });
+  if (!res.success) {
+    toast(res.error || 'model switch failed', 'error');
+    renderSelectors(tab);
+    return;
+  }
+  tab.model = res.data || tab.model;
+  const levels = await api.cmd(tab.id, 'get_available_thinking_levels');
+  if (levels.success && levels.data && levels.data.levels) tab.thinkingLevels = levels.data.levels;
+  renderSelectors(tab);
+  renderStats(tab);
+  toast(`model: ${provider}/${rest.join('/')}`);
+}
+
+/** Returns true when the GUI consumed the command (input already handled). */
+async function runSlashCommand(tab, text) {
+  const body = text.slice(1).trim();
+  const space = body.search(/\s/);
+  const name = (space === -1 ? body : body.slice(0, space)).toLowerCase();
+  const arg = space === -1 ? '' : body.slice(space + 1).trim();
+
+  switch (name) {
+    case 'compact': {
+      if (tab.compacting) {
+        const secs = tab.compactStartedAt ? Math.round((Date.now() - tab.compactStartedAt) / 1000) : 0;
+        toast(`compaction already running in ${tabLabel(tab)} (${secs}s)`, 'warning');
+        return true;
+      }
+      if (!arg) {
+        await compactNow(); // the modal also covers the "session is running" choice
+        clearComposer();
+        return true;
+      }
+      if (isWorking(tab)) {
+        tab.pendingCompact = arg;
+        pushNote(tab, `compaction queued — runs when this session goes idle: ${arg}`, 'compact');
+        clearComposer();
+        return true;
+      }
+      clearComposer();
+      await runCompact(tab, arg);
+      return true;
+    }
+    case 'model': {
+      const keys = tab.models.map((m) => `${m.provider}/${m.id}`);
+      if (!keys.length) {
+        toast('no models loaded for this session', 'warning');
+        return true;
+      }
+      if (!arg) {
+        const response = await openModal({ kind: 'select', title: 'Model for this session', options: keys });
+        if (response.cancelled) return true;
+        await setModelByKey(tab, response.value);
+        clearComposer();
+        return true;
+      }
+      const needle = arg.toLowerCase();
+      const match = keys.find((k) => k.toLowerCase() === needle) || keys.find((k) => k.toLowerCase().includes(needle));
+      if (!match) {
+        toast(`no model matches "${arg}"`, 'warning');
+        return true;
+      }
+      await setModelByKey(tab, match);
+      clearComposer();
+      return true;
+    }
+    case 'thinking': {
+      const levels = tab.thinkingLevels || [];
+      if (!arg) {
+        toast(`thinking: ${tab.thinking} — levels: ${levels.join(', ')}`, 'info', 8000);
+        return true;
+      }
+      const level = levels.find((l) => l.toLowerCase() === arg.toLowerCase());
+      if (!level) {
+        toast(`unknown thinking level. available: ${levels.join(', ')}`, 'warning');
+        return true;
+      }
+      const res = await api.cmd(tab.id, 'set_thinking_level', { level });
+      if (!res.success) {
+        toast(res.error || 'thinking level change failed', 'error');
+        return true;
+      }
+      tab.thinking = level;
+      renderSelectors(tab);
+      clearComposer();
+      return true;
+    }
+    case 'new':
+    case 'clear':
+      await resetCurrentTab();
+      return true;
+    case 'rename': {
+      let wanted = arg;
+      if (!wanted) {
+        const response = await openModal({ kind: 'input', title: 'Name this session', prefill: tab.name, placeholder: 'session name' });
+        if (response.cancelled) return true;
+        wanted = String(response.value || '').trim();
+      }
+      if (!wanted) return true;
+      const res = await api.cmd(tab.id, 'set_session_name', { name: wanted });
+      if (!res.success) {
+        toast(res.error || 'rename failed', 'error');
+        return true;
+      }
+      tab.name = wanted;
+      renderTabs();
+      scheduleSave();
+      clearComposer();
+      return true;
+    }
+    case 'abort':
+    case 'stop':
+      if (tab.bashRunning) await abortBash(tab);
+      else await abortRun();
+      clearComposer();
+      return true;
+    case 'resume':
+      els.search.focus();
+      els.search.select();
+      clearComposer();
+      return true;
+    case 'monitor':
+      toggleMonitor();
+      clearComposer();
+      return true;
+    case 'stats': {
+      const res = await api.cmd(tab.id, 'get_session_stats');
+      if (!res.success) {
+        toast(res.error || 'get_session_stats failed', 'error');
+        return true;
+      }
+      const d = res.data || {};
+      const t = d.tokens || {};
+      const ctx = d.contextUsage || {};
+      pushNote(
+        tab,
+        `stats — user ${d.userMessages || 0}, assistant ${d.assistantMessages || 0}, tool calls ${d.toolCalls || 0}\n`
+          + `tokens in ${fmtTokens(t.input || 0)} / out ${fmtTokens(t.output || 0)} / cache read ${fmtTokens(t.cacheRead || 0)} / total ${fmtTokens(t.total || 0)}\n`
+          + `cost $${Number(d.cost || 0).toFixed(4)} · context ${ctx.percent || 0}% (${fmtTokens(ctx.tokens || 0)} / ${fmtTokens(ctx.contextWindow || 0)})\n`
+          + `session: ${d.sessionFile || '(ephemeral)'}`,
+      );
+      clearComposer();
+      return true;
+    }
+    case 'commands':
+    case 'help': {
+      const lines = slashCatalog(tab).map((c) => `/${c.name}${c.args ? ` ${c.args}` : ''} — ${c.desc} [${c.source}]`);
+      pushNote(tab, `slash commands\n${lines.join('\n')}\n\n!command runs a shell command in this folder (!! keeps it out of the model context)`);
+      clearComposer();
+      return true;
+    }
+    default:
+      // not a GUI command: pi expands /extension-command, /template and /skill:name, and
+      // anything else simply reaches the model as text
+      if (tab.commandsLoaded && name && !tab.commands.some((c) => c.name.toLowerCase() === name)) {
+        toast(`/${name} is not a GUI command — sending it to pi as written`, 'info', 5000);
+      }
+      return false;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* slash command palette                                               */
+/* ------------------------------------------------------------------ */
+
+const slashMenu = { open: false, items: [], index: 0 };
+
+function closeSlashMenu() {
+  if (!slashMenu.open) return;
+  slashMenu.open = false;
+  els.slashMenu.classList.add('hidden');
+  els.slashMenu.textContent = '';
+  slashMenu.items = [];
+}
+
+/** null = not a command word; '' = bare "/" (list everything). */
+function slashQuery() {
+  const value = els.input.value;
+  if (!value.startsWith('/')) return null;
+  if (/\s/.test(value)) return null;
+  return value.slice(1).toLowerCase();
+}
+
+async function refreshSlashMenu() {
+  const query = slashQuery();
+  if (query === null) {
+    closeSlashMenu();
+    return;
+  }
+  const tab = activeTab();
+  if (tab && tab.alive && !tab.commandsLoaded) {
+    await loadCommands(tab);
+    if (slashQuery() !== query) return; // the user kept typing while pi answered
+  }
+  const catalog = slashCatalog(tab);
+  const matches = catalog
+    .filter((c) => {
+      if (!query) return true;
+      const n = c.name.toLowerCase();
+      return n.startsWith(query) || n.includes(query) || (c.desc || '').toLowerCase().includes(query);
+    })
+    .sort((a, b) => {
+      const rank = (c) => (c.name.toLowerCase().startsWith(query) ? 0 : 1);
+      return rank(a) - rank(b) || a.name.length - b.name.length;
+    })
+    .slice(0, 12);
+  if (!matches.length) {
+    closeSlashMenu();
+    return;
+  }
+  slashMenu.items = matches;
+  slashMenu.index = 0;
+  slashMenu.open = true;
+  els.slashMenu.classList.remove('hidden');
+  els.slashMenu.textContent = '';
+  matches.forEach((item, index) => {
+    const row = el('div', `slash-item${index === 0 ? ' active' : ''}`);
+    row.appendChild(el('span', 'slash-name', `/${item.name}${item.args ? ` ${item.args}` : ''}`));
+    if (item.desc) row.appendChild(el('span', 'slash-desc', item.desc));
+    row.appendChild(el('span', 'slash-src', item.source));
+    row.addEventListener('mousedown', (event) => {
+      event.preventDefault(); // keep the caret in the textarea
+      acceptSlashItem(item);
+    });
+    els.slashMenu.appendChild(row);
+  });
+}
+
+function moveSlashSelection(delta) {
+  const rows = [...els.slashMenu.children];
+  if (!rows.length) return;
+  slashMenu.index = (slashMenu.index + delta + rows.length) % rows.length;
+  rows.forEach((row, i) => row.classList.toggle('active', i === slashMenu.index));
+  rows[slashMenu.index].scrollIntoView({ block: 'nearest' });
+}
+
+function acceptSlashItem(item) {
+  els.input.value = `/${item.name}${item.args ? ' ' : ''}`;
+  closeSlashMenu();
+  els.input.focus();
+}
+
+function acceptSlashSelection() {
+  const item = slashMenu.items[slashMenu.index];
+  if (!item) return false;
+  acceptSlashItem(item);
+  return true;
+}
+
 /** Send one prompt straight to the session (bypasses the queue). */
 async function deliverPrompt(tab, item) {
   if (tab.compacting) {
@@ -2283,6 +2783,21 @@ async function send() {
     return;
   }
   if (!tab.alive && !(await respawnTab(tab))) return;
+
+  // `!cmd` / `!!cmd` and the GUI's own slash commands never reach the model directly
+  closeSlashMenu();
+  const raw = els.input.value.trim();
+  const hasExtras = tab.attachments.length || tab.images.length || tab.inlines.length;
+  if (!hasExtras) {
+    const bash = parseBashInput(raw);
+    if (bash) {
+      clearComposer();
+      await runBash(tab, bash);
+      return;
+    }
+    if (raw.startsWith('/') && (await runSlashCommand(tab, raw))) return;
+  }
+
   const message = collectMessage(tab);
   if (!message) return;
 
@@ -2337,6 +2852,14 @@ async function abortRun() {
   const tab = activeTab();
   if (!tab) return;
   await api.cmd(tab.id, 'abort');
+}
+
+/** The Stop button / Esc: a running bash command takes priority over an agent run. */
+async function stopActive() {
+  const tab = activeTab();
+  if (!tab) return;
+  if (tab.bashRunning) await abortBash(tab);
+  else await abortRun();
 }
 
 async function clearQueue() {
@@ -2579,7 +3102,7 @@ function wireUi() {
   $('btnNewSide').addEventListener('click', promptNewSession);
   $('btnRefresh').addEventListener('click', refreshSessions);
   $('btnSend').addEventListener('click', send);
-  $('btnAbort').addEventListener('click', abortRun);
+  $('btnAbort').addEventListener('click', stopActive);
   $('btnCompact').addEventListener('click', compactNow);
 
   els.autoCompactToggle.addEventListener('change', async () => {
@@ -2699,16 +3222,51 @@ function wireUi() {
   });
 
   els.input.addEventListener('keydown', (event) => {
+    if (slashMenu.open) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        moveSlashSelection(1);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        moveSlashSelection(-1);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation(); // do not let it reach the abort handler
+        closeSlashMenu();
+        return;
+      }
+      if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+        // first Enter completes the command name, the next one sends it
+        if (acceptSlashSelection()) {
+          event.preventDefault();
+          return;
+        }
+      }
+    }
     if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       send();
     }
   });
 
+  els.input.addEventListener('input', () => {
+    els.input.classList.toggle('bash-mode', els.input.value.trimStart().startsWith('!'));
+    refreshSlashMenu();
+  });
+  els.input.addEventListener('blur', () => closeSlashMenu());
+
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !modalOpen) {
       const tab = activeTab();
-      if (tab && tab.isStreaming) {
+      if (tab && tab.bashRunning) {
+        // a running `!cmd` is not an agent run: abort_bash, not abort
+        event.preventDefault();
+        abortBash(tab);
+      } else if (tab && tab.isStreaming) {
         event.preventDefault();
         abortRun();
       }
@@ -2897,6 +3455,10 @@ async function init() {
     setTimeout(() => smokeAutoCompactScenario().catch((err) => console.error('[smoke] auto-compact scenario failed', err)), 1200);
   }
 
+  if (state.info.smoke && state.info.smokeBash) {
+    setTimeout(() => smokeBashScenario().catch((err) => console.error('[smoke] bash scenario failed', err)), 1200);
+  }
+
   if (state.info.smoke && state.info.smokePrompt) {
     els.input.value = state.info.smokePrompt;
     setTimeout(() => {
@@ -2924,6 +3486,52 @@ async function smokeAutoCompactScenario() {
   console.log(
     `[smoke-autocompact] initial=${initial} tab.autoCompact=${tab.autoCompact} setOff=${off.success} now=${after1.success && after1.data.autoCompactionEnabled} setOn=${back.success} now=${after2.success && after2.data.autoCompactionEnabled} checkbox=${els.autoCompactToggle.checked}`,
   );
+}
+
+/**
+ * `!cmd` / `!!cmd` and the slash palette: the bash card must stream its output,
+ * settle with the right status, and `/commands` must land as a note.
+ */
+async function smokeBashScenario() {
+  const tab = activeTab();
+  if (!tab) {
+    console.log('[smoke-bash] no active tab');
+    return;
+  }
+  els.input.value = '!echo pi-bash-ok && echo second-line';
+  await send();
+  const cardText = (card) => (card ? (card.querySelector('.bash-out') || {}).textContent : '');
+  const cards = () => [...els.transcript.querySelectorAll('.bash-card')];
+  console.log(`[smoke-bash] after run: cards=${cards().length} class=${cards().map((c) => c.className).join('|')} bashRunning=${tab.bashRunning} output=${JSON.stringify(cardText(cards()[cards().length - 1]))}`);
+
+  els.input.value = '!!echo excluded-from-context';
+  await send();
+  const last = cards()[cards().length - 1];
+  console.log(`[smoke-bash] !! card: sign=${last && last.querySelector('.bash-sign').textContent} foot=${last && JSON.stringify((last.querySelector('.bash-foot') || {}).textContent)}`);
+
+  els.input.value = '!exit 3';
+  await send();
+  const failing = cards()[cards().length - 1];
+  console.log(`[smoke-bash] exit 3: class=${failing && failing.className} foot=${failing && JSON.stringify((failing.querySelector('.bash-foot') || {}).textContent)}`);
+
+  els.input.value = '/commands';
+  await send();
+  const notes = [...els.transcript.querySelectorAll('.note')];
+  const help = notes[notes.length - 1];
+  console.log(`[smoke-bash] /commands note lines=${help ? help.textContent.split('\n').length : 0}`);
+
+  // palette: typing a partial command word must open the list, Tab completes it
+  els.input.value = '/co';
+  els.input.dispatchEvent(new Event('input'));
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const rows = [...els.slashMenu.children];
+  console.log(`[smoke-bash] palette "/co": open=${slashMenu.open} rows=${rows.length} first=${rows[0] ? JSON.stringify(rows[0].textContent) : ''}`);
+  els.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+  console.log(`[smoke-bash] after Tab: value=${JSON.stringify(els.input.value)} menuOpen=${slashMenu.open}`);
+  els.input.value = '';
+  els.input.dispatchEvent(new Event('input'));
+
+  console.log(`[smoke-bash] composer empty=${els.input.value === ''} items=${tab.items.length} bashItems=${tab.items.filter((i) => i.kind === 'bash').length}`);
 }
 
 async function smokeOrderScenario() {
