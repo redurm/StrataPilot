@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { PiRpcProcess } = require('./lib/pi-process');
-const { resolvePiInvocation, TESTED_PI_VERSION } = require('./lib/pi-launch');
+const { resolvePiInvocation, TESTED_PI_VERSION, piVersionStatus } = require('./lib/pi-launch');
 const sessions = require('./lib/sessions');
 const appLog = require('./lib/log');
 const diagnostics = require('./lib/diagnostics');
@@ -387,14 +387,17 @@ function registerIpc() {
       arch: process.arch,
       appVersion: app.getVersion(),
       electronVersion: process.versions.electron,
-      piVersion: inv.piVersion,
+      // PI_ON_STRATA_SMOKE_PI_VERSION fakes the reported pi version so the version guard (C6)
+      // can be exercised without installing a different pi
+      piVersion: process.env.PI_ON_STRATA_SMOKE_PI_VERSION || inv.piVersion,
+      testedPiVersion: TESTED_PI_VERSION,
+      piVersionLevel: piVersionStatus(process.env.PI_ON_STRATA_SMOKE_PI_VERSION || inv.piVersion, TESTED_PI_VERSION).level,
       cliPath: inv.cliPath,
       nodePath: inv.nodePath,
       runAsNode: inv.runAsNode,
       sessionsRoot: sessions.sessionsRoot(),
       logPath: appLog.logPath(),
       settingsPath: SETTINGS_FILE(),
-      testedPiVersion: TESTED_PI_VERSION,
       defaultCwd: process.cwd(),
       home: os.homedir(),
       smoke: !!process.env.PI_ON_STRATA_SMOKE,

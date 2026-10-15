@@ -366,6 +366,14 @@ npm start            # electron .
 - Only **one instance** is allowed (`requestSingleInstanceLock`); running `npm start` again just gives
   focus to the window that is already open.
 - Tabs that were open are restored on the next launch (up to 4).
+- The env bar shows the pi version first and **turns amber when it is not the version this GUI was
+  tested against** (`TESTED_PI_VERSION` in `lib/pi-launch.js`, currently `1.2.0`). pi is resolved
+  through `~/.pi/agent/install/current-version`, so a pi upgrade can move the RPC contract under the
+  GUI: same major.minor is treated as safe, a different minor warns (pi adds RPC commands in minor
+  releases), a different major turns red (the framing may have changed). Hover the version for what
+  to do; the same comparison is printed in the diagnostics report. Set
+  `PI_ON_STRATA_SMOKE_PI_VERSION=1.4.2` to see the warning without installing another pi.
+- Restoring the previous tabs can be switched off in the Settings dialog (`restoreTabs: false`).
 - To start without a terminal: `start "" /b npm start`, or make a shortcut pointing at `electron .`.
 - There is **no packaging script** (no electron-builder config): for a standalone exe use
   `electron-packager` / `electron-builder` yourself, or keep using `npm start`.

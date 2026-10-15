@@ -162,6 +162,15 @@ textarea {
   text-overflow: ellipsis;
 }
 
+.env-pi.warn {
+  color: var(--amber);
+  font-weight: 600;
+}
+.env-pi.differ {
+  color: var(--red);
+  font-weight: 600;
+}
+
 /* ---------- body ---------- */
 .body {
   display: grid;

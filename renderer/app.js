@@ -4349,6 +4349,34 @@ function wireUi() {
   });
 }
 
+/**
+ * The env bar: pi version first, because it is the one thing that changes underneath the GUI
+ * (pi is resolved through ~/.pi/agent/install/current-version, so an automatic pi upgrade moves
+ * the RPC contract without anyone touching this repo). Amber when the minor version differs from
+ * the one this GUI was tested against, red when the major version does.
+ */
+function renderEnvBar() {
+  const info = state.info || {};
+  const level = info.piVersionLevel || 'ok';
+  els.envInfo.textContent = '';
+  const piNode = el('span', `env-pi${level === 'ok' ? '' : ` ${level}`}`, `pi ${info.piVersion || '?'}${level === 'ok' ? '' : ' \u26a0'}`);
+  if (level === 'warn') {
+    piNode.title =
+      `pi ${info.piVersion} is not the version this GUI was tested against (${info.testedPiVersion}).\n` +
+      'A minor pi upgrade normally only adds RPC commands, but if prompts, streaming or compaction start misbehaving,\n' +
+      `pin pi back to ${info.testedPiVersion} (or update TESTED_PI_VERSION in lib/pi-launch.js after testing).`;
+  } else if (level === 'differ') {
+    piNode.title =
+      `pi ${info.piVersion || '(not found)'} differs from the tested ${info.testedPiVersion} in its major version, or pi could not be resolved.\n` +
+      'The RPC framing and the event names may have changed: expect parts of the GUI to be wrong until this repo is updated.';
+  } else {
+    piNode.title = `pi ${info.piVersion} \u2014 the version this GUI is tested against`;
+  }
+  els.envInfo.appendChild(piNode);
+  els.envInfo.appendChild(el('span', '', ` \u00b7 electron ${info.electronVersion} \u00b7 ${info.sessionsRoot}`));
+  if (level !== 'ok') toast(`pi ${info.piVersion || '?'} differs from the tested ${info.testedPiVersion} \u2014 hover the env bar`, 'warning', 10000);
+}
+
 async function init() {
   state.info = await api.info();
   state.settings = (await api.settingsGet()) || {};
@@ -4357,7 +4385,11 @@ async function init() {
   els.serialToggle.checked = scheduler.enabled;
   if (state.settings.sidebarHidden) els.body.classList.add('sidebar-hidden');
 
-  els.envInfo.textContent = `pi ${state.info.piVersion || '?'} · electron ${state.info.electronVersion} · ${state.info.sessionsRoot}`;
+  renderEnvBar();
+  if (state.info.smoke) {
+    const node = els.envInfo.firstChild;
+    console.log(`[smoke-env] text=${JSON.stringify(els.envInfo.textContent.trim().slice(0, 60))} pi_class=${node ? node.className : ''} level=${state.info.piVersionLevel} tested=${state.info.testedPiVersion}`);
+  }
 
   wireUi();
   wireDragAndDrop();
