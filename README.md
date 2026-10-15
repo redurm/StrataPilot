@@ -1,352 +1,597 @@
 # Pi on Strata
 
-pi coding agent 跑在本地 Strata server 上的桌面圖形介面（Electron + pi RPC mode）。
-每個分頁 = 一個獨立的 `pi --mode rpc` 程序，所以可以**同時**開多個 session；
-因為 Strata 一次只能處理一個請求，跨 session 的發送由內建的**串行佇列**排序。
+A desktop GUI for the pi coding agent running against a local Strata server (Electron + pi RPC mode).
+Each tab is its own `pi --mode rpc` process, so you can have **several sessions open at the same
+time**; because Strata handles only one request at a time, sends across sessions are ordered by the
+built-in **serial queue**.
 
-> 名稱改自 `pi_gui`：應用名稱、設定檔（`%APPDATA%\Pi on Strata\pi_on_strata_settings.json`，
-> 舊檔首次啟動會自動搬過來）、環境變數前綴（`PI_GUI_*` → `PI_ON_STRATA_*`）都已改好。
-> **專案資料夾**要用 `..\rename_pi_gui.ps1` 改（必須先離開 pi 對話，否則 Windows 會擋掉），
-> 該腳本會一併處理：pi sessions 資料夾名稱、session 檔記錄的 cwd、app 設定裡的路徑。
+> Renamed from `pi_gui`: the app name, the settings file
+> (`%APPDATA%\Pi on Strata\pi_on_strata_settings.json`, the old file is carried over automatically on
+> first launch) and the environment variable prefix (`PI_GUI_*` → `PI_ON_STRATA_*`) are all updated.
+> The **project folder** itself has to be renamed with `..\rename_pi_gui.ps1` (you must leave the pi
+> conversation first, otherwise Windows blocks it). That script also fixes the pi sessions folder
+> name, the `cwd` recorded inside session files, and the paths stored in the app settings.
 
-## 功能
+## Quick start (TL;DR)
 
-- **New session**：`Ctrl+T` 開新分頁（可指定工作資料夾、session 名稱、是否 ephemeral 不存檔）；
-  `Ctrl+Shift+N` 在同一個分頁內用 RPC `new_session` 重置。
-- **Session switch**：左側欄列出 `~/.pi/agent/sessions/` 底下的 session（可搜「本資料夾」或「全部專案」）。
-  - 點一下 → 在新分頁開啟（`pi --session <path>`）
-  - `this tab` → 用 RPC `switch_session` 載入到目前分頁
-  - `name` / `del` → 重新命名（append `session_info` entry）／刪除檔案
-  - 分頁列：雙擊分頁或 `F2` 可命名 session
-- **拖拉檔案**：把檔案／資料夾拖到視窗任何位置 → 變成附件 chip
-  - 圖片（png/jpg/gif/webp，≤8MB）→ 以 RPC `images`（base64）送出
-  - 其他檔案／資料夾 → 插入**絕對路徑**清單，pi 用 `read` 工具去讀
-  - 拿不到絕對路徑時自動退回內文嵌入（inline）
-  - `Attach files` 按鈕走同樣的管線
-- **Serial queue（strata 單工）**：左側欄 `OPEN SESSIONS (QUEUE)` 把開著的分頁分成
-  **Working** 與 **Idle** 兩群，一次只跑一個 session，照清單順序（見下方說明）
-- **Strata Monitor**（`Ctrl+M`）：內建 Strata server 的監控頁（抄自 `C:\Strata\strata-src\serve\web`），
-  不用開瀏覽器就能看到模型狀態、速度、GPU/VRAM/溫度/功耗/PCIe/CPU/磁碟、context fill 與最近請求
-- **串流顯示**：assistant 文字／thinking（可摺疊）／tool call 卡片（args、即時 partial output、結果、耗時）
-- **Markdown 渲染**（`renderer/markdown.js`，零依賴）：標題、清單、引用、分隔線、程式碼區塊（附 copy）
-  與 **GFM 表格**（`:---` / `:---:` / `---:` 對齊、欄數不等會自動補空／截斷、支援跳脫 `\|`、
-  儲存格內可再放 bold／code span；串流中表格邊生成邊成形）
-- **超連結**：chat 裡所有文字（assistant、user、thinking、tool args/output、note）的
-  `http(s)://` 都會自動變成可點連結；點一下用**預設瀏覽器**開啟（不會開第二個 Electron 視窗）
-- **模型與 thinking**：下拉選單（`get_available_models` / `set_model` / `get_available_thinking_levels` / `set_thinking_level`）
-- **busy 時送訊息**：`steer` 或 `follow-up`（下拉切換），`Esc` 中止，`Clear queue` 把排隊訊息拿回編輯區
-- **Compact**：手動壓縮 context；狀態列顯示 context 使用率、token、cost；
-  編輯區旁有 **`auto-compact`** 核取方塊可開關這個 session 的自動壓縮（見下方說明）
-- **Extension UI 轉接**：extension 發出的 `select` / `confirm` / `input` / `editor` 會變成視窗內對話框，
-  `notify` / `setStatus` / `setWidget` / `setTitle` / `set_editor_text` 也會顯示
-- 重啟後自動還原上次開著的 session 分頁（最多 4 個）
+Four steps. The first two are one-time setup: **this repo is only the GUI — it ships no model and no
+pi**.
 
-## 左側欄的兩個清單（為什麼有的重複、有的不重複）
-
-它們是**不同來源**，所以會部分重疊：
-
-| | `OPEN SESSIONS (QUEUE)` | `SESSION FILES` |
-|---|---|---|
-| 來源 | 記憶體中**開著的分頁**（每頁＝一個 `pi --mode rpc` 程序） | 磁碟上的 session JSONL（`~/.pi/agent/sessions/`） |
-| 用途 | 串行執行順序、拖曳排序、outbox | 找回／開啟／載入／改名／刪除歷史對話 |
-| 生命週期 | 關分頁就消失 | 永久存在 |
-
-出現規則：
-
-- **兩邊都有**：這個 session 檔正在某個分頁裡 → Session files 那列會顯示藍色 **`open #n`**
-  徽章（`#n` 就是它在上面佇列的位置），並高亮目前分頁的那個
-- **只在上邊**：分頁還沒有對應的檔 → 佇列列顯示 **`unsaved`**（pi 要收到第一則訊息才建檔）
-  或 **`ephemeral`**（開分頁時選了不存檔，永遠不會出現在 Session files）
-- **只在下邊**：沒開在任何分頁的歷史 session
-- **看不到但其實存在**：Session files 會被 `Search…` 與 `this folder` / `all projects`
-  過濾（只影響這個清單，不影響上面佇列），且只列最近 400 筆
-- 另外：`this tab`（`switch_session`）或 `Ctrl+Shift+N` 會把分頁指向**另一個** session 檔，
-  舊檔仍留在 Session files 裡（所以你會看到「剛才有、現在不在上面」的情況）
-
-## Serial queue（一次只跑一個 session）
-
-strata 這類 provider 只能單工，所以 GUI 內建一個排程器（`renderer/app.js` 的 `scheduler`）。
-左上 `OPEN SESSIONS (QUEUE)` 的 **serial** 核取方塊可開關（預設開，會記在設定裡）。
-
-### 行為
-
-1. 清單順序（`state.order`）就是執行順序，**最上面的先跑**。
-2. 在其他分頁按 Send 時，如果已經有另一個 session 在跑 → 訊息不會直接送給 pi，
-   而是存進該分頁的 **outbox**（待送佇列），該分頁立刻進入 **Working** 群，
-   並且**自動插到 Working 群的最後**（不會插隊到原本就在排的 session 前面）。
-   已在 Working 群内的分頁再送 → 只排進自己 outbox 的後面（session 內 FIFO），位置不變。
-   要插隊：用該列的 `top` 按鈕或拖曳（手動順序不會被自動重排覆蓋，除非你又在新 session 按 Send）。
-3. 正在跑的 session 收到 `agent_settled` 後：
-   - 它自己的 outbox 還有東西 → 繼續送下一筆（「一直工作到 idle」）
-   - outbox 空了 → 移到 **Idle** 群，排程器接著跑 Working 群第一位
-4. 同一個 session 內部已经在跑時按 Send → 走 pi 自己的 in-session 佇列
-   （`steer` / `follow-up`，下拉選單切換），不會進 outbox。
-5. 分頁列與佇列列都會顯示狀態：
-   - 綠點＝running（正在跑）
-     - 琥珀色點＋`#n`＝queued（排隊中，第 n 位）
-   - 灰點＝idle
-   - `+1` / `outbox 1` 徽章＝該 session 待送訊息數
-
-### 操作
-
-| 動作 | 方法 |
-|---|---|
-| 改變執行順序 | **拖曳**佇列列（拖到另一列的上半部／下半部會插入對應位置），順序會同步到分頁列 |
-| 插到最前面 | 滑鼠移到該列 → `top` 按鈕 |
-| 新訊息插到最後 | 直接在 idle 分頁按 Send（自動行為，toast 會顯示 `back of the line`） |
-| 看待送訊息 | 點 `outbox n` 徽章 → 可 `next`（調整為下一筆）或 `remove` |
-| 清空待送 | 該列的 `drop` 按鈕 |
-| 開／關串行 | `serial` 核取方塊（關掉＝各分頁可並行，回復原本行為） |
-
-> 註：outbox 存在記憶體，重啟 GUI 不會自動重送（避免意外觸發請求）。
-
-## 安裝 / 啟動
+**1) Install Strata (the local LLM server)**
 
 ```bash
-cd pi-on-strata
-npm install          # 會裝 Electron（已快取過就很快）
+# On Windows you can also just download the zip from the Strata site and unzip it
+git clone https://github.com/Niko1221/Strata.git && cd Strata
+# Windows: double-click START-HERE.bat (first run installs Python, detects the GPU,
+#          picks a model that fits, downloads it and starts the server)
+# Linux: ./setup.sh    Mac (Apple Silicon): xcode-select --install once, then ./setup.sh
+```
+
+Once it is running, open `http://127.0.0.1:8081/metrics` in a browser — JSON means the server is up.
+
+**2) Install pi (the coding agent)**
+
+```powershell
+powershell -c "irm https://pi.dev/install.ps1 | iex"   # Windows
+# curl -fsSL https://pi.dev/install.sh | sh            # macOS / Linux
+pi --version    # pi requires Node.js 22.19+ (the installer provides it if missing)
+```
+
+**3) Point pi at Strata** (one-time setup)
+
+Add Strata as a provider in `~/.pi/agent/models.json` and set `defaultProvider` in
+`~/.pi/agent/settings.json`. Full example and field notes:
+[Connecting pi to Strata](#connecting-pi-to-strata-one-time-setup).
+After this, plain `pi` works in a terminal — and only then does the GUI's model dropdown have
+anything in it.
+
+**4) Install this repo and start it**
+
+```bash
+git clone <this repo> && cd pi-on-strata
+npm install     # single devDependency: Electron (~100 MB)
 npm start
 ```
 
-需要本機已經裝好 `pi`（`~/.pi/agent/bin/pi`）。pi 的 CLI 路徑是自動從
-`~/.pi/agent/install/current-version` 解析的；必要時可用環境變數覆蓋：
+In the window: `Ctrl+T` → pick a working folder → choose model / thinking in the top bar → type and
+send. `Ctrl+M` opens the Strata Monitor. All shortcuts: [Keyboard shortcuts](#keyboard-shortcuts).
+If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 
-```bash
-PI_ON_STRATA_PI_CLI=<path to pi cli.js> PI_ON_STRATA_NODE=<node 執行檔> npm start
+## Features
+
+- **New session**: `Ctrl+T` opens a new tab (choose working folder, session name, and whether it is
+  ephemeral / not saved); `Ctrl+Shift+N` resets the current tab in place via RPC `new_session`.
+- **Session switcher**: the sidebar lists the sessions under `~/.pi/agent/sessions/` (searchable,
+  scoped to "this folder" or "all projects").
+  - Click a row → open it in a new tab (`pi --session <path>`)
+  - `this tab` → load it into the current tab via RPC `switch_session`
+  - `name` / `del` → rename (appends a `session_info` entry) / delete the file
+  - Tab strip: double-click a tab or press `F2` to name the session
+- **Drag & drop files**: drop a file or folder anywhere on the window → it becomes an attachment chip
+  - Images (png/jpg/gif/webp, ≤8 MB) → sent as RPC `images` (base64)
+  - Anything else → a list of **absolute paths** is inserted, and pi reads them with the `read` tool
+  - If the absolute path cannot be resolved, it falls back to inlining the content
+  - The `Attach files` button uses the same pipeline
+- **Shell & slash commands**: `!cmd` runs a shell command in the session folder (streaming output
+  card, `!!cmd` keeps the output out of the model context); `/` opens a command palette
+  (`/compact`, `/model`, `/stats`, …) and hands anything else to pi
+- **Serial queue (Strata is half-duplex)**: the sidebar's `OPEN SESSIONS (QUEUE)` splits open tabs
+  into **Working** and **Idle** groups and runs one session at a time, in list order (see below)
+- **Strata Monitor** (`Ctrl+M`): a built-in monitor page for the Strata server (ported from
+  `C:\Strata\strata-src\serve\web`) — model state, speed, GPU/VRAM/temperature/power/PCIe/CPU/disk,
+  context fill and recent requests, without leaving the app
+- **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
+  output, result, duration)
+- **Markdown rendering** (`renderer/markdown.js`, zero dependencies): headings, lists, quotes,
+  rules, code blocks (with copy button) and **GFM tables** (`:---` / `:---:` / `---:` alignment,
+  automatic padding/truncation when column counts differ, `\|` escaping, bold/code spans inside
+  cells; tables take shape while streaming)
+- **Hyperlinks**: every `http(s)://` in all chat text (assistant, user, thinking, tool args/output,
+  notes) becomes clickable; clicking opens the **default browser** (never a second Electron window)
+- **Model & thinking**: dropdowns (`get_available_models` / `set_model` /
+  `get_available_thinking_levels` / `set_thinking_level`)
+- **Sending while busy**: `steer` or `follow-up` (dropdown), `Esc` to abort, `Clear queue` pulls the
+  queued messages back into the editor
+- **Compact**: manual context compaction; the status bar shows context usage, tokens and cost; the
+  **`auto-compact`** checkbox next to the editor toggles auto-compaction for this session (see below)
+- **Extension UI bridging**: `select` / `confirm` / `input` / `editor` emitted by an extension become
+  in-window dialogs; `notify` / `setStatus` / `setWidget` / `setTitle` / `set_editor_text` are shown too
+- Tabs that were open on exit are restored on next launch (up to 4)
+
+## The two sidebar lists (why some rows overlap and others don't)
+
+They come from **different sources**, so they partially overlap:
+
+| | `OPEN SESSIONS (QUEUE)` | `SESSION FILES` |
+|---|---|---|
+| Source | The **open tabs** held in memory (one `pi --mode rpc` process per tab) | Session JSONL files on disk (`~/.pi/agent/sessions/`) |
+| Purpose | Serial execution order, drag to reorder, outbox | Find / open / load / rename / delete past conversations |
+| Lifetime | Gone when the tab closes | Permanent |
+
+Display rules:
+
+- **In both lists**: that session file is open in a tab → the Session files row shows a blue
+  **`open #n`** badge (`#n` is its position in the queue above), and the row for the current tab is
+  highlighted
+- **Only in the top list**: the tab has no file yet → the queue row shows **`unsaved`** (pi creates the
+  file only after the first message) or **`ephemeral`** (chosen when opening the tab; it will never
+  appear in Session files)
+- **Only in the bottom list**: past sessions not open in any tab
+- **There but hidden**: Session files is filtered by `Search…` and by `this folder` / `all projects`
+  (this only affects that list, never the queue), and shows only the 400 most recent entries
+- Also: `this tab` (`switch_session`) or `Ctrl+Shift+N` repoints the tab at **another** session file,
+  while the old file stays in Session files — hence the "it was there a second ago, now it's not in
+  the queue" case
+
+## Serial queue (one session at a time)
+
+Providers like Strata are single-flight, so the GUI has a scheduler (`scheduler` in
+`renderer/app.js`). The **serial** checkbox in the top-left `OPEN SESSIONS (QUEUE)` turns it on or
+off (on by default, remembered in settings).
+
+### Behaviour
+
+1. The list order (`state.order`) *is* the execution order — **the top row runs first**.
+2. Pressing Send in another tab while some session is already running → the message is not handed to
+   pi directly; it goes into that tab's **outbox**, the tab immediately joins the **Working** group and
+   is **appended at the end of that group** (it never cuts in front of sessions that were already
+   queued). Sending again from a tab that is already in Working → it just appends to its own outbox
+   (FIFO within the session), position unchanged. To cut in line: use that row's `top` button or drag
+   it (a manual order is not overwritten by the automatic placement, unless you press Send in a new
+   session again).
+3. When the running session emits `agent_settled`:
+   - its own outbox still has items → the next one is sent ("keep working until idle")
+   - the outbox is empty → the tab moves to the **Idle** group and the scheduler starts the first row
+     of Working
+4. Pressing Send while the *same* session is already running → pi's own in-session queue
+   (`steer` / `follow-up`, switched in the dropdown); it does not go into the outbox.
+5. Both the tab strip and the queue rows show state:
+   - green dot = running
+   - amber dot + `#n` = queued (position n)
+   - grey dot = idle
+   - `+1` / `outbox 1` badge = number of messages waiting in that session's outbox
+
+### Controls
+
+| Action | How |
+|---|---|
+| Change execution order | **Drag** a queue row (dropping on the upper/lower half of another row inserts at that position); the order syncs to the tab strip |
+| Move to the front | Hover the row → `top` button |
+| Put a new message at the back | Just press Send in an idle tab (automatic; the toast says `back of the line`) |
+| Inspect pending messages | Click the `outbox n` badge → `next` (reorder to next) or `remove` |
+| Drop pending messages | That row's `drop` button |
+| Turn serial mode on/off | The `serial` checkbox (off = tabs run in parallel, original behaviour) |
+
+> Note: the outbox lives in memory; restarting the GUI does not resend it (to avoid triggering
+> requests by accident).
+
+## Bash mode (`!`) and slash commands (`/`)
+
+Same prefixes as pi's own TUI, wired to the RPC commands pi already exposes.
+
+### `!command` — run a shell command
+
+- Type `!git status` (the composer border turns amber while you type it) and Enter runs it through
+  pi's RPC `bash` in the session's working folder. A card appears, output streams in via
+  `bash_execution_update` events, then the exit code and duration land in the card footer.
+- `!!command` records the output in the session but keeps it **out of the model context**.
+- The output reaches the model with your **next** message: pi turns the recorded `bashExecution`
+  message into a user message (`Ran \`cmd\`` plus fenced output). Nothing is sent just because you
+  ran a command.
+- bash never touches the model, so it deliberately **skips the serial queue** — it can run while
+  another tab is generating.
+- `Esc` (or the `Stop` button) sends `abort_bash`. One bash command per tab at a time (pi's own
+  limit): a second `!cmd` while one runs is refused with a toast.
+- Very long output is truncated by pi; the card shows the `fullOutputPath` log file when that
+  happens.
+- Cards survive a reopen: pi stores every run as a `bashExecution` message in the session file, and
+  the GUI renders those with the same card style.
+- Commands started by an extension (not by you) also get a card, as soon as their first output event
+  arrives.
+
+### `/command` — the command palette
+
+Typing `/` opens a palette: `↑`/`↓` to move, `Tab` or `Enter` to complete the highlighted name (a
+second Enter sends it), `Esc` to close. Rows tagged `app` are executed by the GUI; everything else is
+passed to pi, which expands extension commands, prompt templates and `/skill:name`.
+
+| Command | What it does |
+|---|---|
+| `/compact [instructions]` | compact this context; while the session is running it asks first (inline instructions are queued until the session goes idle) |
+| `/model [provider/id]` | pick a model from a list, or set one by (partial) name |
+| `/thinking [level]` | show the available levels, or set one |
+| `/new`, `/clear` | start a new session in this tab |
+| `/rename <name>` | name the current session |
+| `/abort` | stop the current run or bash command |
+| `/resume` | focus the session search in the sidebar |
+| `/monitor` | toggle the Strata monitor |
+| `/stats` | print tokens / cost / context usage into the transcript |
+| `/commands`, `/help` | list the app commands plus everything `get_commands` reports from pi |
+
+pi's built-in TUI commands (`/settings`, `/hotkeys`, …) do not exist in RPC mode — the palette list
+comes from `get_commands`, which only reports extension commands, prompt templates and skills. An
+unrecognised `/foo` is sent to pi as written (it then reaches the model as plain text).
+
+## Installation, configuration and first run
+
+### 1. Prerequisites
+
+| Requirement | How to check | Notes |
+|---|---|---|
+| Windows 10/11 x64 | — | Developed on Windows (paths, `%APPDATA%`, PowerShell scripts) |
+| Strata server running locally | Open `http://127.0.0.1:8081/metrics` in a browser | e.g. `C:\Strata\strata-src\START-HERE.bat` (first run installs Python and a model). This app is only the GUI, **it brings no model** |
+| pi coding agent installed | `pi --version`, or look at `~/.pi/agent/install/current-version` | This app does not use the pi SDK; it spawns `pi --mode rpc` directly. Install command: see Quick start |
+| Node.js **22.19+** on PATH | `node -v` | Hard requirement of pi, and needed for `npm install`. The pi child process prefers the `node` on PATH (if none is found it falls back to `electron.exe` acting as node, see `lib/pi-launch.js`) |
+| Electron can be downloaded | `npm install` succeeds | Only one devDependency (`electron`); everything else is dependency-free (the markdown renderer and session parsing are hand-written) |
+
+### 2. Connecting pi to Strata (one-time setup)
+
+The GUI reads pi's own configuration, so **add Strata as a provider in pi first** — only then does the
+GUI's model dropdown list anything. `~/.pi/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "strata": {
+      "name": "Strata Flash-Next (local)",
+      "baseUrl": "http://127.0.0.1:8081/v1",
+      "api": "openai-completions",
+      "apiKey": "llama",
+      "models": [
+        {
+          "id": "qwen3.8-flash-next-iq3_s",
+          "name": "Qwen3.8-Flash-Next IQ3_S (Strata)",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 262144,
+          "maxTokens": 32768,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}
 ```
 
-## 自動 compact（和 CLI 完全相同）
+Set the defaults in `~/.pi/agent/settings.json` (you can still switch in the top bar after launch):
 
-每個分頁就是一個真正的 `pi --mode rpc` 程序，讀的是同一份 `~/.pi/agent/settings.json`，
-所以**自動壓縮本來就開著**，不需要 GUI 額外實作：
+```json
+{ "defaultProvider": "strata", "defaultModel": "qwen3.8-flash-next-iq3_s" }
+```
 
-| pi 設定（`compaction`） | 預設值 |
+> Get `contextWindow` / `maxTokens` right: both the auto-compaction trigger point and the Monitor's
+> context-fill donut are driven by these two values. `apiKey` here is Strata's local key (different
+> from `PI_ON_STRATA_KEY` below: the one in `models.json` is what pi uses for requests, the other is
+> what the Monitor uses to fetch `/metrics`).
+
+### 3. Installing and starting this repo
+
+```bash
+cd pi-on-strata
+npm install          # installs Electron (fast if cached)
+npm start            # electron .
+```
+
+- Only **one instance** is allowed (`requestSingleInstanceLock`); running `npm start` again just gives
+  focus to the window that is already open.
+- Tabs that were open are restored on the next launch (up to 4).
+- To start without a terminal: `start "" /b npm start`, or make a shortcut pointing at `electron .`.
+- There is **no packaging script** (no electron-builder config): for a standalone exe use
+  `electron-packager` / `electron-builder` yourself, or keep using `npm start`.
+- To check the environment without the UI (no Electron, no prompt sent):
+
+  ```bash
+  node test/smoke-rpc.js C:/some/project
+  # prints cli: / node: / pi version: / sessions root: and then does one RPC round trip
+  ```
+
+  The first four lines are exactly what `lib/pi-launch.js` resolved; `cli: null` means pi was not
+  found and you need the environment variables from the next section.
+
+### 4. Environment variables (all prefixed `PI_ON_STRATA_*`)
+
+Normally you set **nothing**; only override when auto-detection fails.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `PI_ON_STRATA_PI_CLI` | Path to pi's `cli.js` | Resolved from `~/.pi/agent/install/current-version` → `releases/<ver>/node_modules/@earendil-works/pi-coding-agent` |
+| `PI_ON_STRATA_NODE` | Node executable used to run pi | `node` on PATH; otherwise `electron.exe` + `ELECTRON_RUN_AS_NODE=1` |
+| `PI_MANAGED_INSTALL_ROOT` | pi installation root | `~/.pi/agent/install` |
+| `PI_ON_STRATA_KEY` / `STRATA_API_KEY` | API key the Monitor uses for `/metrics` | Empty (no key); can also come from the tab model's `apiKey` |
+| `PI_CODING_AGENT_SESSION_DIR` | Session JSONL root folder | `~/.pi/agent/sessions` |
+| `PI_ON_STRATA_SMOKE*` | Developer smoke mode | See [Smoke mode](#smoke-mode-for-development) |
+
+Example:
+
+```bash
+PI_ON_STRATA_PI_CLI="C:/Users/you/.pi/agent/install/releases/1.2.0/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" \
+PI_ON_STRATA_NODE="C:/Program Files/nodejs/node.exe" \
+PI_ON_STRATA_KEY=llama npm start
+```
+
+### 5. Application settings file
+
+`%APPDATA%\Pi on Strata\pi_on_strata_settings.json` (written by the GUI itself; you normally do not
+edit it — `strataUrl` is the one worth adding by hand):
+
+| Key | Meaning |
+|---|---|
+| `windowBounds` | Window size / position |
+| `cwd` / `scope` | Default working folder for new tabs, and session search scope (`project` / `all`) |
+| `openTabs` | Tabs to restore (session paths), up to 4 |
+| `serialQueue` | Serial queue on/off |
+| `sidebarHidden` / `monitorOpen` / `monitorWidth` | Sidebar, Monitor panel state and width |
+| `strataUrl` | **Add manually**: fixed Strata address for the Monitor (e.g. `http://127.0.0.1:8081/v1`); if absent it is derived from the current tab's `model.baseUrl` |
+
+The old `pi-gui` settings file is migrated automatically on first launch (see the note at the top).
+
+## Auto-compaction (identical to the CLI)
+
+Every tab is a real `pi --mode rpc` process reading the same `~/.pi/agent/settings.json`, so
+**auto-compaction is already on** — the GUI does not have to implement anything:
+
+| pi setting (`compaction`) | Default |
 |---|---|
 | `enabled` | `true` |
-| `reserveTokens` | `16,384`（預留給下一次請求的空間） |
-| `keepRecentTokens` | `20,000`（壓縮後仍保留的最近內容） |
-| `modelOverrides["provider/model"]` | 可 per-model 覆寫上面三個值 |
+| `reserveTokens` | `16,384` (space reserved for the next request) |
+| `keepRecentTokens` | `20,000` (recent content kept after compaction) |
+| `modelOverrides["provider/model"]` | Can override those three values per model |
 
-觸發時機：pi 在 agent 迴圈裡（assistant 訊息結束後、下一段開始前）檢查 context 是否
-快滿／overflow，會話就自己壓縮。**自動 compact 不會砍掉正在生成的回答**；
-只有**手動**按 Compact 才會先 `abort()`（原因見上方〈Compact 與進行中的請求〉）。
+When it triggers: pi checks inside the agent loop (after the assistant message ends, before the next
+one starts) whether the context is nearly full / overflowing, and compacts by itself. **Auto
+compaction never cuts off a reply that is being generated**; only a **manual** Compact calls
+`abort()` first (reason: [Compaction and an in-flight request](#compaction-and-an-in-flight-request-not-a-bug-but-confusing)).
 
-GUI 裡看得到也改得動：
+What the GUI shows and lets you change:
 
-- 發生時 transcript 會出現 `compacting (auto)…`，完成後 `compacted 183k → ~24k tokens`
-- 編輯區旁的 **`auto-compact`** 核取方塊：用 RPC `set_auto_compaction` 切換**目前這個 session**
-  （每個分頁獨立），狀態從 `get_state.autoCompactionEnabled` 讀回
-  （重啟分頁後會回到全域設定的值）
-- 若你把 auto-compact 關掉、而 ctx 已 ≥85%，狀態列會出現琥珀警告
-  `auto-compact off · compact before it overflows`，避免直接撞到 overflow
-- 要**永久**關掉：改 `~/.pi/agent/settings.json` 的 `"compaction": { "enabled": false }`
+- When it happens the transcript shows `compacting (auto)…`, then `compacted 183k → ~24k tokens`
+- The **`auto-compact`** checkbox next to the editor: toggles **this session** via RPC
+  `set_auto_compaction` (each tab independently); the state is read back from
+  `get_state.autoCompactionEnabled` (reopening a tab goes back to the global setting)
+- If you turn auto-compact off and ctx is already ≥85%, the status bar shows an amber warning
+  `auto-compact off · compact before it overflows`, so you do not hit overflow blind
+- To turn it off **permanently**: set `"compaction": { "enabled": false }` in
+  `~/.pi/agent/settings.json`
 
-## Compact 與進行中的請求（不是 bug，但容易誤會）
+## Compaction and an in-flight request (not a bug, but confusing)
 
-pi 1.2.0 的 `AgentSession.compact()` 第一行就是 `await this.abort()`，原始碼註解寫得很明確：
+In pi 1.2.0 the first line of `AgentSession.compact()` is `await this.abort()`, and the source
+comment is explicit:
 
 > *Aborts the current agent operation first. Manual compaction never retries or continues the interrupted agent turn.*
 
-所以**在 session 還在跑的時候按 Compact**，進行中的那個請求會被中止，Strata 的
-`Recent requests` 就會出現一筆 `Closed`（client disconnect）。更糟的是：如果 session 太小
-（`Nothing to compact (session too small)`），回答照樣被砍、但什麼都沒壓縮。
-這是 pi 的設計行為，不是 Strata 或 Pi on Strata 的問題。
+So **pressing Compact while a session is running** aborts the in-flight request, and Strata's
+`Recent requests` gets a `Closed` row (client disconnect). Worse: if the session is too small
+(`Nothing to compact (session too small)`), the reply is still killed and nothing was compacted.
+That is pi's designed behaviour, not a Strata or Pi on Strata bug.
 
-Pi on Strata 的防護：session 正在跑（streaming / outbox / 串行佇列執行中）時按 Compact，會先問：
+Pi on Strata's guard: pressing Compact while a session is running (streaming / outbox / running in the
+serial queue) asks first:
 
-1. **等它跑完再壓縮（建議，預設）** — 排入 `pendingCompact`，收到 `agent_settled` 後自動執行
-   （而且會先壓縮，再跑這個 session 排隊中的 outbox 訊息）
-2. **立刻中止，現在壓縮** — 維持 pi 原生行為（會看到 disconnect）
+1. **Wait for it to finish, then compact (recommended, default)** — queued as `pendingCompact`,
+   executed automatically on `agent_settled` (and it compacts *before* running that session's queued
+   outbox messages)
+2. **Abort now and compact** — keeps pi's native behaviour (you will see the disconnect)
 
-實測對照（同一個 smoke session、同一個 prompt）：
+Measured comparison (same smoke session, same prompt):
 
-| 行為 | Strata 結果 |
+| Behaviour | Strata result |
 |---|---|
-| 修正前：生成中直接送 `compact` | `finish=disconnect`、out=494、dur=8.9s（回答被砍） |
-| 修正後：排隊等 idle 再 compact | `finish=stop`、out=1608、dur=22.9s（完整跑完，settle 後才 compact） |
+| Before the fix: `compact` sent during generation | `finish=disconnect`, out=494, dur=8.9 s (reply cut off) |
+| After the fix: wait for idle, then compact | `finish=stop`, out=1608, dur=22.9 s (finished fully, compacted after settle) |
 
-> 自動壓縮（context 快滿時 pi 自己觸發的 `compaction_start reason=auto`）走的也是同一條路，
-> 但那是 pi 在 agent 空閒時才檢查，不會砍正在生成的回答。
+> Automatic compaction (`compaction_start reason=auto`, triggered when the context is nearly full)
+> goes down the same road, but pi only checks it while the agent is idle, so it never cuts off a
+> reply that is being generated.
 
-## Compact 不會再假 timeout（已修正）
+## Compact no longer reports a fake timeout (fixed)
 
-`rpc-mode` 的處理是 `const result = await session.compact(...)` — 也就是**整個壓縮跑完才回應 RPC**。
-大 session 的壓縮真的很慢，實測（86MB / 141k tokens 的 session）：
+`rpc-mode` handles it as `const result = await session.compact(...)` — meaning **the RPC reply only
+comes after the whole compaction finished**. Compacting a big session really is slow, measured
+(86 MB / 141k token session):
 
-| 階段 | 實際花時間 |
+| Stage | Actual time |
 |---|---|
-| 摘要 model call（prompt 82,310 → out 295） | **71.4 s** |
-| 重寫 86MB 的 session JSONL + 掃描 | **約 3–4 分鐘** |
-| 整個 `compact()` | **約 5 分鐘** |
+| Summary model call (prompt 82,310 → out 295) | **71.4 s** |
+| Rewriting the 86 MB session JSONL + scanning | **about 3–4 minutes** |
+| The whole `compact()` | **about 5 minutes** |
 
-舊版 GUI 把 compact RPC 的 timeout 設成 **180 秒**，所以 pi 其實還在跑、最後也成功了
-（Monitor 的 context 從 93.7% 掉到 40%），transcript 卻先出現紅字
-`compaction failed: timeout after 180000ms`，而且 footer 的 `ctx` 還停在舊值。
+The old GUI had a **180 second** timeout on the compact RPC, so pi was still running — and eventually
+succeeded (the Monitor's context dropped from 93.7% to 40%) — while the transcript already showed red
+text `compaction failed: timeout after 180000ms`, and the footer `ctx` stayed at the old value.
 
-現在的行為：
+Current behaviour:
 
-- timeout 拉長到 **30 分鐘**（`COMPACT_TIMEOUT_MS`），因為 pi 本來就要幾分鐘
-- **以事件為準**：`compaction_start` / `compaction_end` 才是權威訊號。完成/失敗的訊息由
-  `compaction_end` 顯示（`compacted 141k → ~24k tokens`），RPC 回應只做 log，
-  不會再重複推一筆錯誤（失敗時會等 500ms，確認事件已報過就闭嘴）
-- 真的 timeout 時，會去查 `get_state.isCompacting`：
-  - 還在跑 → 琥珀色提示 `compaction still running after Ns (big session) — 這不是失敗…`，
-    並保留等待狀態，等 `compaction_end` 落地
-  - 不在跑了 → 才報真正的失敗（附 elapsed 秒數）
-- 壓縮結束後一律 `refreshStats()`，footer 的 `ctx` 不會再停在壓縮前的數字
+- Timeout raised to **30 minutes** (`COMPACT_TIMEOUT_MS`), because pi genuinely needs minutes
+- **Events are authoritative**: `compaction_start` / `compaction_end` are the real signals. The
+  success/failure line comes from `compaction_end` (`compacted 141k → ~24k tokens`); the RPC reply is
+  only logged and no longer pushes a duplicate error (on failure it waits 500 ms and stays quiet if
+  the event already reported it)
+- On a real timeout it queries `get_state.isCompacting`:
+  - still running → amber notice `compaction still running after Ns (big session)` and the waiting
+    state is kept until `compaction_end` lands
+  - no longer running → only then is a real failure reported (with the elapsed seconds)
+- After compaction ends `refreshStats()` always runs, so the footer `ctx` no longer sticks at the
+  pre-compaction number
 
-連帶修好的三個相關問題：
+Three related problems fixed along the way:
 
-1. **串行佇列會把壓縮當成「忙碌」**：pi 在壓縮中收到 prompt 會直接丟
+1. **The serial queue treated compaction as "busy"**: pi rejects a prompt sent during compaction with
    `Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.`
-   現在 `pump()` 會跳過正在壓縮的 session，`deliverPrompt()` 遇到那個錯誤會把訊息留在
-   outbox（不報錯、不丟失），等 `compaction_end` 再跑
-2. **壓縮中按 Compact** 不會再疊第二個壓縮：直接 toast `compaction already running (Ns)`，
-   而且 `Compact` 按鈕在壓縮期間是 disabled
-3. **pi 程序掛掉**會清掉 `compacting` 旗標，不會把佇列永久卡死
+   Now `pump()` skips a session that is compacting, and `deliverPrompt()` keeps the message in the
+   outbox on that error (no error shown, nothing lost) and retries after `compaction_end`
+2. **Pressing Compact during compaction** no longer stacks a second one: it toasts
+   `compaction already running (Ns)`, and the `Compact` button is disabled while compacting
+3. **If the pi process dies**, the `compacting` flag is cleared, so the queue cannot deadlock forever
 
-> 想中止一個跑太久的壓縮：按 **Esc** 就可以。`session.abort()` 裡面會呼叫
-> `abortCompaction()`，pi 接著發出 `compaction_end`（`aborted: true`），
-> GUI 會顯示 `compaction cancelled`。
+> Want to abort a compaction that runs too long? Just press **Esc**. `session.abort()` calls
+> `abortCompaction()`, pi then emits `compaction_end` (`aborted: true`) and the GUI shows
+> `compaction cancelled`.
 
-## Strata Monitor（伺服器監控）
+## Strata Monitor (server monitoring)
 
-頂欄 `Monitor` 按鈕或 `Ctrl+M` 開啟／關閉。資料來源是 Strata 的 `GET /metrics`（JSON），
-跟 Strata 自己的 Monitor 頁同一個端點；**由 main process 代理抓取**，所以不會被 renderer 的 CSP 擋掉。
+Toggle with the `Monitor` button in the top bar or `Ctrl+M`. The data source is Strata's
+`GET /metrics` (JSON) — the same endpoint Strata's own Monitor page uses; it is **fetched by the main
+process as a proxy**, so the renderer's CSP does not block it.
 
-顯示內容（每 1 秒自動輪詢，面板收起來就停止；面板本身沒有 Refresh／Hide 按鈕，
-開關只用頂欄 `Monitor` 或 `Ctrl+M`，點標題的 URL 會在瀏覽器開 Strata 網頁版）：
+What it shows (polled once per second, stops while the panel is collapsed; the panel has no
+Refresh/Hide buttons of its own — toggle only via the top bar `Monitor` or `Ctrl+M`; clicking the URL
+in the header opens Strata's web page in a browser):
 
-- **Model state**：Idle / Reading / Generating / Queued / Error 徽章 + 進度條
-  （reading 顯示 prompt 讀取百分比，generating 顯示已生成 token 與即時 tok/s）
-- **8 張卡片**（帶 sparkline 歷史曲線）：Speed（decode + prefill 雙曲線）、GPU load、VRAM、
-  GPU temp、Power、PCIe（Gen/寬度/到 GPU 的 MB/s）、CPU、Disk read
-- **Context fill** 環形圖：目前（或最後一次）請求的 prompt+output 佔 context window 的比例
-  （≥75% 轉琥珀色、≥90% 轉紅色；環形用 inline style 驅動，不是 presentation attribute）
-- **Experts in VRAM / System RAM / GPU temperature** 條 + engine 資訊（model、ctx、kv、版本）
-- **Recent requests** 表格：時間、狀態、prompt、reused、output、prefill t/s、decode t/s、
-  VRAM hit rate（`+x%P` ＝ PCIe 份額，滑鼠移上去有說明）、duration；`Show all (N)` 切換全部
-  （對應 `metrics?requests=all`）+ 底部 totals 統計行
+- **Model state**: Idle / Reading / Generating / Queued / Error badge + progress bar (reading shows
+  the prompt read percentage, generating shows generated tokens and live tok/s)
+- **8 cards** (with sparkline history): Speed (decode + prefill as two curves), GPU load, VRAM,
+  GPU temp, Power, PCIe (Gen/width/MB/s to the GPU), CPU, Disk read
+- **Context fill** donut: how much of the context window the current (or last) request's
+  prompt+output takes (turns amber at ≥75%, red at ≥90%; the ring is driven by inline style, not a
+  presentation attribute)
+- **Experts in VRAM / System RAM / GPU temperature** bars + engine info (model, ctx, kv, version)
+- **Recent requests** table: time, status, prompt, reused, output, prefill t/s, decode t/s, VRAM hit
+  rate (`+x%P` = PCIe share, hover for an explanation), duration; `Show all (N)` toggles everything
+  (maps to `metrics?requests=all`) + a totals row at the bottom
 
-### 位址與金鑰
+### Address and key
 
-- 預設從目前分頁的 `model.baseUrl` 推導（例如 `http://127.0.0.1:8081/v1` → `http://127.0.0.1:8081/metrics`）
-- 要固定位址：設定 `strataUrl`（例：`{"strataUrl": "http://127.0.0.1:8081/v1"}` 在
-  `%APPDATA%\Pi on Strata\pi_on_strata_settings.json`）
-- 伺服器需要 API key 時：設環境變數 `PI_ON_STRATA_KEY` 或 `STRATA_API_KEY`
-- 點標題列的 URL 會在預設瀏覽器開啟 Strata 網頁版
-- 連不上時標題會變紅並顯示錯誤（連續 3 次失敗會標 `server not reachable`）
+- By default derived from the current tab's `model.baseUrl` (e.g. `http://127.0.0.1:8081/v1` →
+  `http://127.0.0.1:8081/metrics`)
+- To pin an address: set `strataUrl` (e.g. `{"strataUrl": "http://127.0.0.1:8081/v1"}` in
+  `%APPDATA%\Pi on Strata\pi_on_strata_settings.json`)
+- If the server requires an API key: set `PI_ON_STRATA_KEY` or `STRATA_API_KEY`
+- Clicking the URL in the header opens Strata's web page in the default browser
+- When unreachable the header turns red and shows the error (after 3 consecutive failures it marks
+  `server not reachable`)
 
-> `/metrics` 的 `requests`（延遲、token、hit rate 等統計）一直都有，不需要額外開關。
-> 只有「請求的 prompt / 答案原文」是另一個頁面 `/api-monitor` 的功能，需要 Strata 執行時加
-> `--api-monitor`（或 config `"api_monitor": true`）才會保留；本應用的 Monitor 不讀那個頁面。
+> The `requests` data in `/metrics` (latency, tokens, hit rate and other statistics) is always
+> available, no switch needed. Only the **verbatim prompt / answer text of each request** belongs to
+> the separate `/api-monitor` page, which requires Strata to run with `--api-monitor` (or config
+> `"api_monitor": true`) to retain it; this app's Monitor does not read that page.
 
-## 連結怎麼處理
+## How links are handled
 
-- `renderer/markdown.js` 的 `linkify()`：escape 後再把 bare URL 包成 `<a>`；
-  結尾的 `, . ; : ! ?` 不會吃進 URL，中文全形標點（`，。、；：！？（）`）直接當 URL 邊界，
-  但 `https://en.wikipedia.org/wiki/Foo_(bar)` 這種半形括號會完整保留
-- assistant 文字走完整 markdown（`[text](url)` 與 bare URL 都支援）；user 訊息、thinking、
-  tool 卡片、note 走 `linkify()`（只加連結、不跑其他 markdown，換行照舊）
-- 串流中的 thinking / tool output 用 `setPreText()` / `appendPreText()`：只有文字裡出現
-  `http` 時才重套 innerHTML，長輸出也不會每 delta 重渲染
-- 點擊由 `document` 層級接住 → `api.openExternal(href)` → `shell.openExternal`
-- 保險：main process 有 `setWindowOpenHandler`（deny）與 `will-navigate`（擋掉非當前頁的導覽），
-  所以就算有 `target="_blank"` 也不會多開 Electron 視窗
+- `linkify()` in `renderer/markdown.js`: escapes first, then wraps bare URLs in `<a>`; trailing
+  `, . ; : ! ?` are not swallowed into the URL, CJK full-width punctuation (`，。、；：！？（）`)
+  acts as a URL boundary, while ASCII parentheses in
+  `https://en.wikipedia.org/wiki/Foo_(bar)` are kept intact
+- Assistant text goes through the full markdown renderer (`[text](url)` and bare URLs both work);
+  user messages, thinking, tool cards and notes go through `linkify()` (links only, no other markdown,
+  line breaks preserved)
+- Streaming thinking / tool output uses `setPreText()` / `appendPreText()`: innerHTML is re-applied
+  only when the text contains `http`, so long output is not re-rendered per delta
+- Clicks are caught at the `document` level → `api.openExternal(href)` → `shell.openExternal`
+- Belt and braces: the main process has `setWindowOpenHandler` (deny) and `will-navigate` (blocks
+  navigation away from the current page), so even `target="_blank"` never opens an extra Electron
+  window
 
-## 串流效能（收合 thinking 會影響 TPS 嗎？）
+## Streaming performance (does collapsing thinking change TPS?)
 
-**不會。** GUI 的渲染速度無法回頭拖慢 Strata 的 decode：main process 自己會把 pi 的 stdout
-（JSONL）抽乾，`webContents.send` 到 renderer 是非同步的，renderer 再慢也不會把管線塞回去，
-所以不存在從 GUI 到伺服器的反壓路徑。
+**No.** The GUI's rendering speed cannot slow Strata's decode in reverse: the main process drains pi's
+stdout (JSONL) by itself, `webContents.send` to the renderer is asynchronous, and however slow the
+renderer is it cannot push back on the pipe — there is no back-pressure path from the GUI to the
+server.
 
-實測（同一台機器、同一個 prompt、同一份程式碼只改一個開關）：
+Measured (same machine, same prompt, same code with one switch flipped):
 
-| 情境 | output tokens | duration | decode tok/s |
+| Case | output tokens | duration | decode tok/s |
 |---|---|---|---|
-| 每個 thinking delta 故意把 renderer 主執行緒卡死 40ms | 1,126 | 24.9 s | **51.2** |
-| 完全不卡（正常） | 1,126 | 25.3 s | **50.3** |
+| Deliberately blocking the renderer main thread 40 ms per thinking delta | 1,126 | 24.9 s | **51.2** |
+| No blocking at all (normal) | 1,126 | 25.3 s | **50.3** |
 
-對照組：同一份程式碼、同樣 prompt 連跑多次，decode 本來就會落在 **33–65 tok/s** 之間
-（VRAM hit rate、prompt 長度、expert offload 都會影響）。所以「收合時 TPS 看起來比較高」
-多數是（1）請求間的自然變異，與（2）展開時 GUI 自己卡頓、文字一段一段跳出來的**感受差**。
+Control: the same code and prompt run several times naturally lands decode between **33–65 tok/s**
+(VRAM hit rate, prompt length and expert offload all matter). So "TPS looks higher when collapsed" is
+mostly (1) natural run-to-run variance and (2) the **perceived** difference caused by the GUI stuttering
+and text appearing in chunks when expanded.
 
-不過收合確實比較省 renderer，而且現在真的實作了這個優化：
+Collapsing is still cheaper for the renderer, and the optimization is now really implemented:
 
-- `appendPreText()`：每個 delta 只 `appendChild(textNode)`（O(1)），不再整個字串重新赋值；
-  `<details>` **收合時完全跳過 DOM 寫入**，展開時才從 `_raw` 重繪一次
-- 連結化（linkify）只在結尾做一次（`thinking_end` / tool 結束），串流中絕不重解析 innerHTML
-- `autoscroll()`：讀 `scrollHeight` 會強制同步 layout，改成 **rAF 節流**（每 frame 最多一次）
-- tool 的 partial output 只 append 新增的尾端，不再每次重繪整張卡片（最多 4,000 字元）
-- Monitor 的 `Show all` 最多只渲染最近 **150** 列（原本 500 列 × 每秒重建）
+- `appendPreText()`: each delta only does `appendChild(textNode)` (O(1)) instead of reassigning the
+  whole string; when a `<details>` is **collapsed all DOM writes are skipped**, and it is redrawn once
+  from `_raw` when expanded
+- Linkification runs exactly once at the end (`thinking_end` / tool end); innerHTML is never re-parsed
+  mid-stream
+- `autoscroll()`: reading `scrollHeight` forces a synchronous layout, so it is now **rAF-throttled**
+  (at most once per frame)
+- Tool partial output only appends the new tail instead of redrawing the whole card each time
+  (capped at 4,000 characters)
+- The Monitor's `Show all` renders at most the most recent **150** rows (previously 500 rows rebuilt
+  every second)
 
-> 還有一個沒動的大項：開啟超大 session（例如 86MB / 600+ 訊息）時 `renderAll()` 會把
-> 整個 transcript 一次建進 DOM。需要的话可以做 lazy render（先只建最近 N 則，往上捲再補）。
+> One big item still untouched: opening a huge session (e.g. 86 MB / 600+ messages) makes `renderAll()`
+> build the whole transcript into the DOM at once. If needed, lazy rendering (build the last N first,
+> fill in on scroll up) is the next step.
 
-## 快捷鍵
+## Keyboard shortcuts
 
-| 按鍵 | 動作 |
+| Key | Action |
 |---|---|
-| `Enter` | 送出（`Shift+Enter` 換行） |
-| `Ctrl+T` | 新 session（新分頁） |
-| `Ctrl+Shift+N` | 目前分頁內新 session |
-| `Ctrl+O` | 聚焦搜尋框（找 session） |
-| `Ctrl+W` | 關閉分頁（會結束該 pi 程序） |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 切換分頁 |
-| `Ctrl+B` | 顯示／隱藏左側欄 |
-| `Ctrl+M` | 開啟／關閉 Strata Monitor |
-| `F2` | 命名目前 session |
-| `Esc` | 中止執行中（或關閉對話框） |
+| `Enter` | Send (`Shift+Enter` for a newline) |
+| `Ctrl+T` | New session (new tab) |
+| `Ctrl+Shift+N` | New session inside the current tab |
+| `Ctrl+O` | Focus the session search box |
+| `Ctrl+W` | Close tab (terminates that pi process) |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Switch tabs |
+| `Ctrl+B` | Show / hide the sidebar |
+| `Ctrl+M` | Show / hide the Strata Monitor |
+| `F2` | Name the current session |
+| `Tab` | Complete the highlighted slash command (while the palette is open) |
+| `Esc` | Abort what is running (agent run, or a running `!cmd`), close a dialog, or close the slash palette |
 
-## 架構
+## Architecture
 
 ```
-main.js            Electron 主程序：視窗、選單、IPC、pi 程序管理
-preload.js         contextBridge（window.piGui）+ webUtils.getPathForFile
-lib/pi-launch.js   解析 pi CLI 與 node 執行檔
-lib/pi-process.js  pi --mode rpc 的 JSONL 框架（只用 LF 切行）+ 命令/回應配對
-lib/sessions.js    掃描/解析 session JSONL（標題、名稱、first message、token…）
+main.js            Electron main process: window, menu, IPC, pi process management
+preload.js         contextBridge (window.piGui) + webUtils.getPathForFile
+lib/pi-launch.js   resolves the pi CLI and the node executable
+lib/pi-process.js  JSONL framing for pi --mode rpc (LF-only line splitting) + command/response pairing
+lib/sessions.js    scanning/parsing session JSONL (title, name, first message, tokens…)
 renderer/          index.html / styles.css / markdown.js / app.js
-test/smoke-rpc.js  無 UI 的 RPC 冒煙測試
-scripts/screenshot.ps1  截圖用（開發時驗證 UI）
+test/smoke-rpc.js  headless RPC smoke test
+docs/TROUBLESHOOTING.md  troubleshooting (split out of the README)
+scripts/screenshot.ps1  screenshots (used while developing the UI)
 ```
 
-協定細節見 pi 文件：`docs/rpc.md`、`docs/rpc-commands.md`、`docs/json.md`、`docs/session-format.md`。
+Protocol details: see the pi docs `docs/rpc.md`, `docs/rpc-commands.md`, `docs/json.md`,
+`docs/session-format.md`.
 
-### 開發用的 smoke 模式
+### Smoke mode for development
 
 ```bash
 PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=30000 PI_ON_STRATA_SMOKE_PROMPT="Reply OK" npm start
 ```
 
-會用 ephemeral session（不寫檔）、把 renderer console 印到 stderr，並在 `PI_ON_STRATA_SMOKE_MS` 後自動結束。
-smoke 模式會用獨立的 profile（`%TEMP%/pi_on_strata_smoke_profile`）並跳過單實例鎖，
-所以不會影向你正常開著的 GUI。
+Uses an ephemeral session (writes no file), prints the renderer console to stderr, and quits after
+`PI_ON_STRATA_SMOKE_MS`. Smoke mode uses a separate profile
+(`%TEMP%/pi_on_strata_smoke_profile`) and skips the single-instance lock, so it does not disturb the
+GUI you already have open.
 
-其他 smoke 開關：
+Other smoke switches:
 
-| 變數 | 作用 |
+| Variable | Effect |
 |---|---|
-| `PI_ON_STRATA_SMOKE_PROMPT="…"` | 啟動後自動送一次 prompt（測串流／markdown／tool 卡片） |
-| `PI_ON_STRATA_SMOKE_STEER=1` | 再補一則訊息，測 busy 時的 steer 路徑 |
-| `PI_ON_STRATA_SMOKE_SESSION=<path>` | 啟動後用 `switch_session` 載入指定 session（測 session switch／歷史渲染） |
-| `PI_ON_STRATA_SMOKE_QUEUE=1` | 自動開 4 個分頁、送 3 則訊息，測串行佇列（Working/Idle、outbox、順序） |
-| `PI_ON_STRATA_SMOKE_MONITOR=1` | 啟動後直接開啟 Monitor 頁（配合 `PI_ON_STRATA_SMOKE_PROMPT` 可看到 generating 狀態） |
-| `PI_ON_STRATA_SMOKE_COMPACT=1` | 長生成中排入 compact，測「等 idle 再壓縮」不會砍掉請求（Strata 應為 `stop` 而非 `disconnect`） |
-| `PI_ON_STRATA_SMOKE_ORDER=1` | 開 A/B/C 三個分頁，先讓 B 跑、再在 C 與 A 送訊息；應看到順序變成 `B C A`（A 從第一位插到 Working 群最後），執行順序 B → C → A |
-| `PI_ON_STRATA_SMOKE_AUTO_COMPACT=1` | 測 `get_state.autoCompactionEnabled` → `set_auto_compaction off/on` → 再讀回，應為 `initial=true … now=false … now=true` |
+| `PI_ON_STRATA_SMOKE_PROMPT="…"` | Sends one prompt after startup (tests streaming / markdown / tool cards) |
+| `PI_ON_STRATA_SMOKE_STEER=1` | Sends a second message to exercise the steer path while busy |
+| `PI_ON_STRATA_SMOKE_SESSION=<path>` | Loads a given session with `switch_session` after startup (tests session switching / history rendering) |
+| `PI_ON_STRATA_SMOKE_QUEUE=1` | Opens 4 tabs and sends 3 messages to test the serial queue (Working/Idle, outbox, order) |
+| `PI_ON_STRATA_SMOKE_MONITOR=1` | Opens the Monitor panel right after startup (with `PI_ON_STRATA_SMOKE_PROMPT` you can watch the generating state) |
+| `PI_ON_STRATA_SMOKE_COMPACT=1` | Queues a compact during a long generation: "wait for idle" must not kill the request (Strata should show `stop`, not `disconnect`) |
+| `PI_ON_STRATA_SMOKE_ORDER=1` | Opens tabs A/B/C, starts B, then sends in C and A; the order should become `B C A` (A moves from first to the back of Working), execution order B → C → A |
+| `PI_ON_STRATA_SMOKE_AUTO_COMPACT=1` | Tests `get_state.autoCompactionEnabled` → `set_auto_compaction off/on` → read back; should print `initial=true … now=false … now=true` |
+| `PI_ON_STRATA_SMOKE_BASH=1` | Runs `!echo …`, `!!echo …` and `!exit 3`, then `/commands`, and checks the slash palette (`/co` + `Tab`): expect `cards=1 class=bash-card done`, `sign=!!`, `class=bash-card error … exit 3`, and `open=true rows=5` |
 
 ```bash
-# 測串行佇列：應該看到 first 跑完才換 second，groups 從 WWWI 變成 IWWI 再到 IIII
+# serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII
 PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=30000 PI_ON_STRATA_SMOKE_QUEUE=1 npm start
 ```
 
-## 已知限制
+## Known limitations
 
-- RPC 模式不支援 pi TUI 的 `custom()` 元件、主題切換等（pi 文件說明了 RPC 模式的降級行為）。
-- `get_messages` 只顯示目前 active branch；`/tree` 的分支切換尚未做成 UI（可用 `get_tree` 之後再加）。
-- 拖曳資料夾只會插入路徑，不會展開成多個附件。
-- 每個分頁一個 pi 程序，開很多分頁會比較吃記憶體。
-- 排程器只能保證**由 GUI 送出**的 prompt 串行；extension 自己發起的執行無法被擋住
-  （此時會直接接管 `runningTabId` 並在佇列顯示）。
-- outbox 不跨重啟保存。
+- RPC mode does not support pi TUI `custom()` components, theme switching and similar (the pi docs
+  describe the RPC-mode degradations).
+- `get_messages` only shows the current active branch; `/tree` branch switching has no UI yet (could be
+  added on top of `get_tree`).
+- Dropping a folder only inserts its path; it is not expanded into multiple attachments.
+- One pi process per tab, so many tabs cost memory.
+- Only one bash command per tab at a time (pi's own limit), and a bash command started by an
+  extension without output events gets no card until its first `bash_execution_update`.
+- The scheduler can only serialize prompts **sent from the GUI**; executions started by an extension
+  cannot be blocked (in that case it takes over `runningTabId` directly and shows it in the queue).
+- The outbox is not persisted across restarts.
