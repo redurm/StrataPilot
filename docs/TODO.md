@@ -7,6 +7,10 @@ Status legend: `todo` (not started) · `doing` · `done` · `wontfix`
 Effort: `S` (< half a day) · `M` (half a day – 1 day) · `L` (> 1 day)
 Priority: `P0` (do next) · `P1` (worth doing) · `P2` (nice to have)
 
+**Every item in this backlog is implemented (28/28 done).** New findings go in the section that fits them,
+with the same columns; each one was committed separately and is verified by a unit test or a
+`PI_ON_STRATA_SMOKE_*` scenario named in its row.
+
 ## A. Input / output loop still open
 
 Cheap to close, and used every day.

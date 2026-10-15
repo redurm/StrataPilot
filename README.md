@@ -1076,7 +1076,9 @@ The full backlog, with effort and priority, is in [`docs/TODO.md`](docs/TODO.md)
 
 - RPC mode does not support pi TUI `custom()` components, theme switching and similar (the pi docs
   describe the RPC-mode degradations).
-- `get_messages` only shows the current active branch; `/tree` branch switching has no UI yet (could be
+- The transcript shows the branch you are on; `/tree` shows the whole entry tree and can fork from an
+  earlier prompt or clone the branch, but there is no way to move the leaf onto an abandoned branch - pi
+  exposes no RPC for that, only `fork` (user messages) and `clone`.
   added on top of `get_tree`).
 - Dropping a folder only inserts its path; it is not expanded into multiple attachments.
 - One pi process per tab, so many tabs cost memory.
