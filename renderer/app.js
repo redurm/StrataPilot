@@ -20,6 +20,7 @@ const els = {
   busySel: $('busySel'),
   stats: $('stats'),
   queueBar: $('queueBar'),
+  nowBar: $('nowBar'),
   btnSend: $('btnSend'),
   btnAbort: $('btnAbort'),
   btnClearQueue: $('btnClearQueue'),
@@ -188,6 +189,10 @@ function makeTab({ cwd, sessionPath, name, ephemeral, extraArgs = [] }) {
     alive: false,
     starting: true,
     queued: { steering: [], followUp: [] },
+    // the user request this session is working on right now (pinned at the top of the chat)
+    currentRequest: null, // {key, text, at, startedAt, endedAt, source}
+    // texts we queued through steer/follow_up, so a later message_start can label its source
+    pendingQueued: [], // {text, source}
     models: [],
     commands: [], // slash commands pi knows about (get_commands)
     commandsLoaded: false,
@@ -748,6 +753,7 @@ function handleRecord(tab, record) {
       tab.isStreaming = true;
       renderTabs();
       renderComposerState();
+      renderPinnedBars(tab);
       scheduler.onAgentStart(tab);
       break;
     case 'agent_end':
@@ -756,6 +762,7 @@ function handleRecord(tab, record) {
     case 'agent_settled':
       tab.isStreaming = false;
       tab.streaming = null;
+      finishRequest(tab);
       if (record.aborted) pushNote(tab, 'run aborted', 'warn');
       renderTabs();
       renderComposerState();
@@ -779,9 +786,19 @@ function handleRecord(tab, record) {
         const text = contentToText(message.content);
         const at = tab.pendingUserTexts.indexOf(text);
         if (at >= 0) {
+          // pi echoing back the prompt we already appended in deliverPrompt()
           tab.pendingUserTexts.splice(at, 1);
+          if (!tab.currentRequest || tab.currentRequest.text !== text) {
+            setCurrentRequest(tab, { text, at: message.timestamp, source: 'prompt' });
+          }
         } else {
-          appendItem(tab, { key: nextKey(tab), kind: 'message', message });
+          // a user message we never appended: pi delivering a queued steering / follow-up
+          // message, another client driving the same session, or an extension prompt
+          const key = nextKey(tab);
+          appendItem(tab, { key, kind: 'message', message });
+          const queuedAt = tab.pendingQueued.findIndex((item) => item.text === text);
+          const source = queuedAt >= 0 ? tab.pendingQueued.splice(queuedAt, 1)[0].source : 'prompt';
+          setCurrentRequest(tab, { key, text, at: message.timestamp, source });
         }
       }
       break;
@@ -846,6 +863,7 @@ function handleRecord(tab, record) {
       renderTabs();
       renderOpenSessions();
       renderComposerState();
+      renderPinnedBars(tab);
       break;
     case 'compaction_end':
       tab.compacting = false;
@@ -860,6 +878,7 @@ function handleRecord(tab, record) {
       renderTabs();
       renderOpenSessions();
       renderComposerState();
+      renderPinnedBars(tab);
       scheduler.pumpSoon(400); // a running compaction was holding the serial queue
       break;
     case 'auto_retry_start':
@@ -1157,18 +1176,171 @@ function renderStats(tab) {
   for (const [key, text] of tab.statuses) add(key, text);
 }
 
+/* ------------------------------------------------------------------ */
+/* pinned request bars                                                 */
+/*   top    (nowBar):   the user request this session is working on    */
+/*   bottom (queueBar): everything pi/GUI still has to process         */
+/* ------------------------------------------------------------------ */
+
+const REQUEST_SOURCE_LABEL = {
+  prompt: 'prompt',
+  steer: 'steering',
+  follow_up: 'follow-up',
+  bash: 'bash',
+  history: 'earlier',
+};
+
+function toMillis(value) {
+  if (!value) return 0;
+  const ms = typeof value === 'number' ? value : new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function fmtDuration(ms) {
+  const total = Math.max(0, Math.round((ms || 0) / 1000));
+  if (total < 60) return `${total}s`;
+  const mins = Math.floor(total / 60);
+  if (mins < 60) return `${mins}m${String(total % 60).padStart(2, '0')}s`;
+  return `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}m`;
+}
+
+/** Single-line preview used by both pinned bars. */
+function oneLine(text, limit = 240) {
+  const flat = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
+}
+
+/** Remember which user request this session is now working on (top bar). */
+function setCurrentRequest(tab, { key = null, text, at = 0, source = 'prompt' }) {
+  const clean = String(text == null ? '' : text).trim();
+  if (!clean) return;
+  tab.currentRequest = {
+    key,
+    text: clean,
+    at: toMillis(at) || Date.now(),
+    startedAt: Date.now(),
+    endedAt: 0,
+    source,
+  };
+  renderPinnedBars(tab);
+}
+
+function finishRequest(tab) {
+  const req = tab.currentRequest;
+  if (!req || req.endedAt) return;
+  req.endedAt = Date.now();
+  renderPinnedBars(tab);
+}
+
+function requestIsBusy(tab) {
+  return !!(tab && (tab.isStreaming || tab.compacting || tab.bashRunning));
+}
+
+function renderPinnedBars(tab) {
+  const target = tab || activeTab();
+  renderNowBar(target);
+  renderQueueBar(target);
+}
+
+function requestElapsed(req) {
+  return req.startedAt ? (req.endedAt || Date.now()) - req.startedAt : 0;
+}
+
+function paintRequestTime(node, req) {
+  if (!node || !req || !req.startedAt) return;
+  node.textContent = req.endedAt ? fmtDuration(requestElapsed(req)) : `${fmtDuration(requestElapsed(req))}…`;
+}
+
+function jumpToItem(tab, key) {
+  const node = tab.nodes.get(key);
+  if (!node) return;
+  node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  node.classList.add('flash');
+  setTimeout(() => node.classList.remove('flash'), 1400);
+}
+
+function renderNowBar(tab) {
+  if (tab !== activeTab()) return; // the bars always describe the visible session
+  const bar = els.nowBar;
+  const req = tab && tab.currentRequest;
+  bar.textContent = '';
+  delete bar._req;
+  if (!req) {
+    bar.classList.add('hidden');
+    return;
+  }
+  bar.classList.remove('hidden');
+  const busy = requestIsBusy(tab);
+  bar.classList.toggle('busy', busy);
+
+  const label = busy ? (tab.bashRunning ? 'running bash' : tab.compacting ? 'compacting' : 'working on') : 'last request';
+  bar.appendChild(el('span', `nb-state ${busy ? 'busy' : 'idle'}`, label));
+  bar.appendChild(el('span', `nb-src ${req.source}`, REQUEST_SOURCE_LABEL[req.source] || req.source));
+
+  const text = el('span', 'nb-text', oneLine(req.text));
+  text.title = `${req.text}\n\n${REQUEST_SOURCE_LABEL[req.source] || req.source} · ${new Date(req.at).toLocaleString()}`;
+  bar.appendChild(text);
+
+  const time = el('span', 'nb-time');
+  paintRequestTime(time, req);
+  bar.appendChild(time);
+
+  if (req.key) {
+    const jump = el('button', 'nb-jump', '↓ jump');
+    jump.title = 'Scroll to this request in the transcript';
+    jump.addEventListener('click', (event) => {
+      event.stopPropagation();
+      jumpToItem(tab, req.key);
+    });
+    bar.appendChild(jump);
+  }
+  bar._req = req;
+}
+
 function renderQueueBar(tab) {
+  if (tab !== activeTab()) return; // the bars always describe the visible session
   const steering = (tab && tab.queued.steering) || [];
   const followUp = (tab && tab.queued.followUp) || [];
-  if (!steering.length && !followUp.length) {
+  const outbox = (tab && tab.outbox) || [];
+  els.btnClearQueue.classList.toggle('hidden', !(steering.length || followUp.length));
+  if (!steering.length && !followUp.length && !outbox.length) {
     els.queueBar.classList.add('hidden');
-    els.btnClearQueue.classList.add('hidden');
+    els.queueBar.textContent = '';
     return;
   }
   els.queueBar.classList.remove('hidden');
-  els.btnClearQueue.classList.remove('hidden');
-  els.queueBar.textContent = `queued — steer: ${steering.length} | follow-up: ${followUp.length}`;
+  els.queueBar.textContent = '';
+
+  const bits = [];
+  if (steering.length) bits.push(`steering ${steering.length}`);
+  if (followUp.length) bits.push(`follow-up ${followUp.length}`);
+  if (outbox.length) bits.push(`outbox ${outbox.length}`);
+  const head = el('div', 'qb-head');
+  head.appendChild(el('span', 'qb-title', `not processed yet (${steering.length + followUp.length + outbox.length})`));
+  head.appendChild(el('span', 'qb-count', bits.join(' · ')));
+  els.queueBar.appendChild(head);
+
+  const addRow = (kind, text, note) => {
+    const row = el('div', `qb-item ${kind}`);
+    row.appendChild(el('span', 'qb-tag', kind === 'steer' ? 'steering' : kind === 'follow' ? 'follow-up' : 'outbox'));
+    const body = el('span', 'qb-text', oneLine(text));
+    body.title = String(text);
+    row.appendChild(body);
+    if (note) row.appendChild(el('span', 'qb-note', note));
+    els.queueBar.appendChild(row);
+  };
+
+  steering.forEach((text, index) => addRow('steer', text, index === 0 ? 'next turn' : ''));
+  followUp.forEach((text, index) => addRow('follow', text, index === 0 ? 'after this run' : ''));
+  outbox.forEach((item, index) => addRow('outbox', item.text || '(attachment only)', `#${index + 1} in serial queue`));
 }
+
+// keeps the elapsed counter of the pinned request alive without re-rendering the whole bar
+setInterval(() => {
+  const bar = els.nowBar;
+  if (!bar || bar.classList.contains('hidden') || !bar._req) return;
+  paintRequestTime(bar.querySelector('.nb-time'), bar._req);
+}, 1000);
 
 function renderWidgets(tab) {
   els.extWidgets.textContent = '';
@@ -1239,7 +1411,7 @@ function activateTab(tabId) {
   renderTabs();
   renderSelectors(tab);
   renderStats(tab);
-  renderQueueBar(tab);
+  renderPinnedBars(tab);
   renderWidgets(tab);
   renderAttachments();
   renderComposerState();
@@ -1455,6 +1627,7 @@ function renderOpenSessions() {
     els.queueList.appendChild(el('div', 'qgroup idle', `Idle (${idle.length})`));
     idle.forEach((tab) => els.queueList.appendChild(queueRow(tab, 0)));
   }
+  renderPinnedBars(); // the bottom bar mirrors the outbox, so it refreshes with the queue
   markCurrentSession();
 }
 
@@ -1644,6 +1817,22 @@ async function bootstrap(tab) {
         ? { key: nextKey(tab), kind: 'bash', entry: bashEntryFromMessage(message) }
         : { key: nextKey(tab), kind: 'message', message },
     );
+    // pin the last user request of the reopened session so the top bar is not empty
+    for (let i = tab.items.length - 1; i >= 0; i--) {
+      const item = tab.items[i];
+      if (item.kind !== 'message' || item.message.role !== 'user') continue;
+      const text = contentToText(item.message.content);
+      if (!text) continue;
+      tab.currentRequest = {
+        key: item.key,
+        text,
+        at: toMillis(item.message.timestamp) || Date.now(),
+        startedAt: toMillis(item.message.timestamp),
+        endedAt: tab.isStreaming ? 0 : toMillis(item.message.timestamp),
+        source: 'history',
+      };
+      break;
+    }
   }
 
   await refreshStats(tab);
@@ -1654,6 +1843,7 @@ async function bootstrap(tab) {
   renderComposerState();
   renderOpenSessions();
   if (state.activeId === tab.id) renderAll(tab);
+  renderPinnedBars(tab);
   markCurrentSession();
   scheduleSave();
   scheduler.pumpSoon(400);
@@ -1815,6 +2005,8 @@ async function resetCurrentTab() {
   tab.items = [];
   tab.tools.clear();
   tab.streaming = null;
+  tab.currentRequest = null;
+  tab.pendingQueued = [];
   tab.name = '';
   tab.sessionPath = null;
   await bootstrap(tab);
@@ -1844,6 +2036,8 @@ async function switchCurrentTabTo(meta) {
   tab.items = [];
   tab.tools.clear();
   tab.streaming = null;
+  tab.currentRequest = null;
+  tab.pendingQueued = [];
   tab.sessionPath = meta.path;
   tab.name = meta.name || '';
   await bootstrap(tab);
@@ -2340,6 +2534,8 @@ async function respawnTab(tab) {
   tab.items = [];
   tab.tools.clear();
   tab.streaming = null;
+  tab.currentRequest = null;
+  tab.pendingQueued = [];
   tab.alive = true;
   tab.starting = true;
   await bootstrap(tab);
@@ -2419,7 +2615,11 @@ async function runBash(tab, info) {
   };
   tab.bashes.set(bashId, entry);
   tab.bashRunning = bashId;
-  appendItem(tab, { key: nextKey(tab), kind: 'bash', bashId });
+  const bashKey = nextKey(tab);
+  appendItem(tab, { key: bashKey, kind: 'bash', bashId });
+  // a model run in this tab keeps the pin: `!cmd` does not interrupt it
+  const trackRequest = !tab.isStreaming;
+  if (trackRequest) setCurrentRequest(tab, { key: bashKey, text: info.command, source: 'bash' });
   renderComposerState();
   autoscroll(true);
 
@@ -2443,6 +2643,7 @@ async function runBash(tab, info) {
     entry.error = res.error || 'bash failed';
   }
   updateBashCard(tab, entry);
+  if (trackRequest) finishRequest(tab);
   renderComposerState();
   refreshSessionsSoon();
   return true;
@@ -2764,8 +2965,10 @@ async function deliverPrompt(tab, item) {
     pushNote(tab, `send failed: ${res.error}`, 'error');
     return { ok: false, error: res.error };
   }
-  appendItem(tab, { key: nextKey(tab), kind: 'message', message: { role: 'user', content: item.text, timestamp: item.at || Date.now() } });
+  const key = nextKey(tab);
+  appendItem(tab, { key, kind: 'message', message: { role: 'user', content: item.text, timestamp: item.at || Date.now() } });
   tab.pendingUserTexts.push(item.text);
+  setCurrentRequest(tab, { key, text: item.text, at: item.at, source: 'prompt' });
   autoscroll(true);
   const disposition = res.data && res.data.disposition;
   if (disposition === 'handled') {
@@ -2812,6 +3015,9 @@ async function send() {
       return;
     }
     clearComposer();
+    // pi will echo this back as a user message once it delivers it: remember the kind so the
+    // pinned top bar can label it, and the bottom bar already lists it from queue_update
+    tab.pendingQueued.push({ text: message.text, source: type });
     if (res.data && res.data.disposition === 'queued') toast(`queued as ${type === 'steer' ? 'steering' : 'follow-up'} in this session`);
     return;
   }
@@ -3459,6 +3665,10 @@ async function init() {
     setTimeout(() => smokeBashScenario().catch((err) => console.error('[smoke] bash scenario failed', err)), 1200);
   }
 
+  if (state.info.smoke && state.info.smokeBars) {
+    setTimeout(() => smokeBarsScenario().catch((err) => console.error('[smoke] bars scenario failed', err)), 1200);
+  }
+
   if (state.info.smoke && state.info.smokePrompt) {
     els.input.value = state.info.smokePrompt;
     setTimeout(() => {
@@ -3604,6 +3814,43 @@ async function smokeQueueScenario() {
     );
     if (ticks >= 20) clearInterval(interval);
   }, 2000);
+}
+
+// The two pinned bars: the request being worked on stays pinned on top of the chat, the steering
+// message waits at the bottom, and once pi delivers it that message becomes the pinned one.
+async function smokeBarsScenario() {
+  const tab = activeTab();
+  const snap = (label) => {
+    const top = els.nowBar.classList.contains('hidden') ? '(hidden)' : els.nowBar.textContent.replace(/\s+/g, ' ').trim();
+    const bottom = els.queueBar.classList.contains('hidden') ? '(hidden)' : els.queueBar.textContent.replace(/\s+/g, ' ').trim();
+    console.log(`[smoke-bars] ${label}: top="${top}" bottom="${bottom}"`);
+  };
+
+  els.input.value = 'List the numbers 1 to 150, one per line, with no other text. Do not use tools.';
+  await send();
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  els.input.value = 'Ignore the previous instruction and reply with exactly: STEER-OK';
+  await send(); // busy path -> steer, so it must show up in the bottom bar
+  snap('busy+steer');
+
+  let ticks = 0;
+  const interval = setInterval(() => {
+    ticks++;
+    snap(`t=${2.5 + ticks * 3}s streaming=${tab.isStreaming} steerQueue=${tab.queued.steering.length} src=${tab.currentRequest && tab.currentRequest.source}`);
+    if (ticks === 5) {
+      clearInterval(interval);
+      const jump = els.nowBar.querySelector('.nb-jump');
+      const node = tab.nodes.get(tab.currentRequest.key);
+      els.transcript.scrollTop = els.transcript.scrollHeight;
+      if (jump) jump.click();
+      setTimeout(() => {
+        console.log(
+          `[smoke-bars] jump: present=${!!jump} node=${!!node} flashed=${!!(node && node.classList.contains('flash'))} scrollTop=${els.transcript.scrollTop}/${els.transcript.scrollHeight - els.transcript.clientHeight}`,
+        );
+        snap('after-jump');
+      }, 400);
+    }
+  }, 3000);
 }
 
 init().catch((err) => {

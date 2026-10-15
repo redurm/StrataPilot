@@ -82,6 +82,11 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   context fill and recent requests, without leaving the app
 - **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
   output, result, duration)
+- **Pinned request bars**: the chat pane keeps the request pi is working on **right now** pinned at the
+  very top (`WORKING ON` + where it came from + elapsed time + `↓ jump` scrolls to that message), and
+  lists everything **not processed yet** just above the editor — queued `steering`, `follow-up` and this
+  session's serial-queue outbox, one row each with its full text in the tooltip. Both bars describe the
+  visible tab only, and hide themselves when there is nothing to pin.
 - **Markdown rendering** (`renderer/markdown.js`, zero dependencies): headings, lists, quotes,
   rules, code blocks (with copy button) and **GFM tables** (`:---` / `:---:` / `---:` alignment,
   automatic padding/truncation when column counts differ, `\|` escaping, bold/code spans inside
@@ -91,7 +96,8 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
 - **Model & thinking**: dropdowns (`get_available_models` / `set_model` /
   `get_available_thinking_levels` / `set_thinking_level`)
 - **Sending while busy**: `steer` or `follow-up` (dropdown), `Esc` to abort, `Clear queue` pulls the
-  queued messages back into the editor
+  queued messages back into the editor; while they wait, the bottom bar shows their text (the top bar keeps
+  showing the request that is running, and switches to the steering message once pi delivers it)
 - **Compact**: manual context compaction; the status bar shows context usage, tokens and cost; the
   **`auto-compact`** checkbox next to the editor toggles auto-compaction for this session (see below)
 - **Extension UI bridging**: `select` / `confirm` / `input` / `editor` emitted by an extension become
@@ -576,6 +582,7 @@ Other smoke switches:
 | `PI_ON_STRATA_SMOKE_ORDER=1` | Opens tabs A/B/C, starts B, then sends in C and A; the order should become `B C A` (A moves from first to the back of Working), execution order B → C → A |
 | `PI_ON_STRATA_SMOKE_AUTO_COMPACT=1` | Tests `get_state.autoCompactionEnabled` → `set_auto_compaction off/on` → read back; should print `initial=true … now=false … now=true` |
 | `PI_ON_STRATA_SMOKE_BASH=1` | Runs `!echo …`, `!!echo …` and `!exit 3`, then `/commands`, and checks the slash palette (`/co` + `Tab`): expect `cards=1 class=bash-card done`, `sign=!!`, `class=bash-card error … exit 3`, and `open=true rows=5` |
+| `PI_ON_STRATA_SMOKE_BARS=1` | Sends a long prompt, queues a steer while it runs and prints both pinned bars: expect `top="working on prompt …"` with `bottom="… steering … next turn"`, then `top="last request steering …"` and `bottom="(hidden)"` after the steer is delivered; also checks `↓ jump` (`node=true flashed=true`) |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII
