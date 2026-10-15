@@ -92,6 +92,8 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   context fill and recent requests, without leaving the app
 - **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
   output, result, duration)
+- **`@` path completion** in the composer: type `@` and the session folder's contents appear; Enter inserts
+  the path (a folder keeps the menu open for the next level), and the listing never leaves the session folder
 - **Several Strata servers at once**: the Monitor gets a pill per address with its own health dot, so two
   engines on two ports can be compared without editing settings by hand
 - **Session storage**: the footer shows how much disk the sessions take; a dialog cleans up by age or by
@@ -304,6 +306,19 @@ pi's built-in TUI commands (`/settings`, `/hotkeys`, …) do not exist in RPC mo
 comes from `get_commands`, which only reports extension commands, prompt templates and skills. An
 unrecognised `/foo` is sent to pi as written (it then reaches the model as plain text).
 
+### `@` path completion (D1)
+
+Typing `@` after a space (or at the start) opens the same palette, but with the **contents of the
+session's working folder**:
+
+| | |
+|---|---|
+| Trigger | `@` at the caret, e.g. `read @lib/dia` - the token under the caret is what is matched, not the whole line |
+| Listing | the main process lists one directory level (`fs:complete`); it never goes above the session folder, and `node_modules`, `.git`, `.venv`, `__pycache__`, `dist`, `build`, `out`, `.next`, `.cache` are hidden unless you type them on purpose |
+| Pick | `Up` / `Down`, then `Enter` or `Tab` inserts the path (`@lib/diagnostics.js`); a folder keeps the menu open for the next level (`@src/`), `Esc` closes it |
+| Two Enters | the first completes the path, the second sends the prompt - the same rule as the command palette |
+| Not an attachment | the path is inserted as **text**; the model reads the file with its own tools. Drag & drop or **Attach files** is still what actually uploads content |
+
 ## Installation, configuration and first run
 
 ### 1. Prerequisites
@@ -497,6 +512,7 @@ theme` (keeps following `prefers-color-scheme` while the app runs).
 | `PI_ON_STRATA_SMOKE_A11Y=1` | D3: expect `dialog=true role=dialog aria_modal=true labelled_by_heading=true focus_inside=true tab_wraps=true esc_closes=true focus_restored=true nameless_buttons=0 toasts_live=polite tabs_role=tablist` plus the `aria-label` of a queue row |
 | `PI_ON_STRATA_SMOKE_STORAGE=1` | D7: reads the totals and three plans (absurd age, absurd cap, everything), checks the open session is filtered out and that the dialog opens and closes: expect `ok=true files=15 bytes=8562058 groups=2 none=0 also_none=0 everything=15 scanned=15 open_in_list=false footer="15 / 15 sessionsStorage: 8.2 MB in 15 files" dialog=true dialog_closed=true`. **Nothing is deleted by the scenario** |
 | `PI_ON_STRATA_SMOKE_SERVERS=1` | D6: adds an unreachable address (`http://127.0.0.1:9/v1`) through Settings, checks the pill and its red health dot, points the cards at it, then removes it through the pill's `x`: expect `pills=4 bogus_pill=true dot_before="mon-dot bad" dot_after="mon-dot bad" active=127.0.0.1:9× removed=true pills_after=3` |
+| `PI_ON_STRATA_SMOKE_PATH=1` | D1: types `@lib/d` in the composer, waits for the palette, presses Enter: expect `rows=1 first="@lib/diagnostics.js…" inserted="read @lib/diagnostics.js" menu_open_after=false sent_instead=false` (the path is inserted, the prompt is **not** sent) |
 
 ## Scheduled prompts (cron)
 

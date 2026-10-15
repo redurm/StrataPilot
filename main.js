@@ -622,6 +622,7 @@ function registerIpc() {
       smokeA11y: !!process.env.PI_ON_STRATA_SMOKE_A11Y,
       smokeStorage: !!process.env.PI_ON_STRATA_SMOKE_STORAGE,
       smokeServers: !!process.env.PI_ON_STRATA_SMOKE_SERVERS,
+      smokePath: !!process.env.PI_ON_STRATA_SMOKE_PATH,
     };
   });
 
@@ -839,6 +840,37 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
     return { ok: true, path: result.filePaths[0] };
   });
 
+
+  // D1: `@path` completion in the composer. Only the folder part of the fragment is listed, and only
+  // inside the session's own working folder - the composer is not a file browser.
+  ipcMain.handle('fs:complete', (_event, { cwd, fragment = '' } = {}) => {
+    const base = cwd && fs.existsSync(cwd) ? cwd : process.cwd();
+    const cleaned = String(fragment).replace(/\/+$/g, '').replace(/\\/g, '/');
+    const lastSlash = cleaned.lastIndexOf('/');
+    const dirPart = lastSlash >= 0 ? cleaned.slice(0, lastSlash) : '';
+    const prefix = (lastSlash >= 0 ? cleaned.slice(lastSlash + 1) : cleaned).toLowerCase();
+    const dir = path.resolve(base, dirPart || '.');
+    const rel = path.relative(base, dir);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return { ok: false, error: 'outside the session folder' };
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      return { ok: false, error: err.code === 'ENOENT' ? 'no such folder' : err.message };
+    }
+    // noise that nobody wants to page through, unless they typed it on purpose
+    const NOISE = ['node_modules', '.git', '.venv', '__pycache__', 'dist', 'build', 'out', '.next', '.cache'];
+    const typedNoise = dirPart.toLowerCase().split('/').some((part) => NOISE.includes(part));
+    const out = [];
+    for (const entry of entries) {
+      if (!entry.isFile() && !entry.isDirectory()) continue;
+      if (!typedNoise && NOISE.includes(entry.name.toLowerCase())) continue;
+      if (prefix && !entry.name.toLowerCase().startsWith(prefix)) continue;
+      out.push({ name: entry.name, isDirectory: entry.isDirectory(), path: `${dirPart ? `${dirPart}/` : ''}${entry.name}` });
+    }
+    out.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name));
+    return { ok: true, dir: dirPart, prefix, entries: out.slice(0, 40), total: out.length };
+  });
   ipcMain.handle('fs:choose-file', async (_event, { title = 'Choose a file', filters = null } = {}) => {
     if (!win) return { ok: false };
     const result = await dialog.showOpenDialog(win, {

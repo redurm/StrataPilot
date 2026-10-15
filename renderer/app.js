@@ -4112,6 +4112,94 @@ function acceptSlashSelection() {
   return true;
 }
 
+/*
+ * D1: `@path` completion. The composer had a command palette but no way to name a file without
+ * dragging it in or typing the whole path from memory. Typing `@` next to whitespace opens the same
+ * palette with the folder contents of the session's working folder; the listing is done by the main
+ * process and never leaves that folder.
+ */
+const pathMenu = { open: false, items: [], index: 0, requestId: 0 };
+
+/** The `@token` under the caret: null when the caret is not inside one. */
+function atQuery() {
+  const caret = els.input.selectionStart == null ? els.input.value.length : els.input.selectionStart;
+  const upto = els.input.value.slice(0, caret);
+  const match = /(?:^|\s)@([^\s]*)$/.exec(upto);
+  if (!match) return null;
+  return { fragment: match[1], start: caret - match[1].length - 1, end: caret };
+}
+
+async function refreshPathMenu() {
+  const query = atQuery();
+  if (!query) {
+    if (pathMenu.open) closePathMenu();
+    return;
+  }
+  const tab = activeTab();
+  if (!tab) return;
+  const request = ++pathMenu.requestId;
+  const res = await api.fsComplete({ cwd: tab.cwd, fragment: query.fragment });
+  if (request !== pathMenu.requestId) return; // a faster typist won
+  const fresh = atQuery();
+  if (!fresh || fresh.fragment !== query.fragment) return; // the caret moved while the list was built
+  if (!res.ok || !res.entries.length) {
+    closePathMenu();
+    return;
+  }
+  pathMenu.items = res.entries;
+  pathMenu.index = 0;
+  pathMenu.open = true;
+  els.slashMenu.classList.remove('hidden');
+  els.slashMenu.textContent = '';
+  res.entries.forEach((entry, index) => {
+    const row = el('div', `slash-item${index === 0 ? ' active' : ''}`);
+    row.appendChild(el('span', 'slash-name', `@${entry.path}${entry.isDirectory ? '/' : ''}`));
+    row.appendChild(el('span', 'slash-desc', entry.isDirectory ? 'folder' : 'file'));
+    row.appendChild(el('span', 'slash-src', res.total > res.entries.length ? `${res.entries.length} of ${res.total}` : tab.cwd.split(/[\/]/).pop() || ''));
+    row.addEventListener('mousedown', (event) => {
+      event.preventDefault(); // keep the caret in the textarea
+      acceptPathItem(entry);
+    });
+    els.slashMenu.appendChild(row);
+  });
+}
+
+function closePathMenu() {
+  if (!pathMenu.open) return;
+  pathMenu.open = false;
+  pathMenu.items = [];
+  els.slashMenu.classList.add('hidden');
+  els.slashMenu.textContent = '';
+}
+
+function movePathSelection(delta) {
+  const rows = [...els.slashMenu.children];
+  if (!rows.length) return;
+  pathMenu.index = (pathMenu.index + delta + rows.length) % rows.length;
+  rows.forEach((row, index) => row.classList.toggle('active', index === pathMenu.index));
+  rows[pathMenu.index].scrollIntoView({ block: 'nearest' });
+}
+
+/** Replace the `@token` with the chosen path; a folder keeps the menu open for the next level. */
+function acceptPathItem(entry) {
+  const query = atQuery();
+  if (!query) return;
+  const insert = `@${entry.path}${entry.isDirectory ? '/' : ''}`;
+  els.input.value = `${els.input.value.slice(0, query.start)}${insert}${els.input.value.slice(query.end)}`;
+  const caret = query.start + insert.length;
+  els.input.setSelectionRange(caret, caret);
+  closePathMenu();
+  els.input.focus();
+  if (entry.isDirectory) refreshPathMenu();
+}
+
+function acceptPathSelection() {
+  const entry = pathMenu.items[pathMenu.index];
+  if (!entry) return false;
+  acceptPathItem(entry);
+  return true;
+}
+
 /** Send one prompt straight to the session (bypasses the queue). */
 async function deliverPrompt(tab, item) {
   if (tab.compacting) {
@@ -5068,7 +5156,7 @@ function pastedFiles(clipboardData) {
 async function handlePaste(event) {
   // Never hijack a paste while a dialog (including the extension UI modals) or the
   // slash palette owns the keyboard.
-  if (modalOpen || slashMenu.open) return;
+  if (modalOpen || slashMenu.open || pathMenu.open) return;
   const data = event.clipboardData;
   if (!data) return;
   const files = pastedFiles(data);
@@ -5310,6 +5398,31 @@ function wireUi() {
   });
 
   els.input.addEventListener('keydown', (event) => {
+    if (pathMenu.open) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        movePathSelection(1);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        movePathSelection(-1);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        closePathMenu();
+        return;
+      }
+      if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+        // first Enter completes the path, the next one sends the prompt
+        if (acceptPathSelection()) {
+          event.preventDefault();
+          return;
+        }
+      }
+    }
     if (slashMenu.open) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
@@ -5343,9 +5456,13 @@ function wireUi() {
 
   els.input.addEventListener('input', () => {
     els.input.classList.toggle('bash-mode', els.input.value.trimStart().startsWith('!'));
-    refreshSlashMenu();
+    if (els.input.value.startsWith('/')) refreshSlashMenu();
+    else refreshPathMenu();
   });
-  els.input.addEventListener('blur', () => closeSlashMenu());
+  els.input.addEventListener('blur', () => {
+    closeSlashMenu();
+    closePathMenu();
+  });
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !modalOpen) {
@@ -5674,6 +5791,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeExport) {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokePath) {
+    setTimeout(() => smokePathScenario().catch((err) => console.error('[smoke] path scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeServers) {
@@ -6307,6 +6428,33 @@ async function smokeServersScenario() {
   console.log(
     `[smoke-servers] pills=${pills.length} bogus_pill=${!!bogusPill} dot_before=${JSON.stringify(dotBefore)} dot_after=${JSON.stringify(dotAfter)} target=${monitorTargetUrl()} active=${activePill ? activePill.textContent.trim() : 'none'} removed=${!after.includes(bogus)} pills_after=${pillsAfter} src=${JSON.stringify(src.slice(0, 70))}`,
   );
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_PATH=1: D1. Types `@lib/d` in the composer, waits for the completion list, presses
+ * Enter and checks the path was inserted instead of the prompt being sent.
+ */
+async function smokePathScenario() {
+  const tab = activeTab();
+  els.input.focus();
+  els.input.value = 'read @lib/d';
+  els.input.setSelectionRange(els.input.value.length, els.input.value.length);
+  els.input.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const rows = [...els.slashMenu.querySelectorAll('.slash-item')];
+  const first = rows.length ? rows[0].textContent : '';
+  const outboxBefore = tab.outbox.length;
+  els.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  const value = els.input.value;
+  const sent = tab.outbox.length > outboxBefore;
+  console.log(
+    `[smoke-path] cwd=${tab.cwd} rows=${rows.length} first=${JSON.stringify(first.slice(0, 40))} inserted=${JSON.stringify(value)} menu_open_after=${pathMenu.open} sent_instead=${sent}`,
+  );
+  closePathMenu();
+  closeSlashMenu();
+  els.input.value = '';
+  els.input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.

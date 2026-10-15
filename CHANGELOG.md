@@ -7,6 +7,10 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **`@` path completion in the composer** - typing `@` opens the palette with the contents of the
+  session's working folder (one level at a time, listed by the background process, never above that
+  folder; `node_modules`/`.git`/`dist`/... are hidden unless typed on purpose). `Up`/`Down` then
+  `Enter` or `Tab` inserts the path, and picking a folder keeps the menu open for the next level.
 - **Several Strata servers in the Monitor** - a pill per address (`active tab`, every known server,
   `+ add server`, `x` to remove). Clicking one points the cards at that server, and each watched address
   carries its own `/health` dot (green with latency, red with the error), polled every 4 seconds. Extra
