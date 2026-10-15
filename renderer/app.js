@@ -44,6 +44,7 @@ const els = {
   btnMonitor: $('btnMonitor'),
   monitorView: $('monitorView'),
   monSrc: $('monSrc'),
+  monServers: $('monServers'),
   monBadges: $('monBadges'),
   monStateLabel: $('monStateLabel'),
   monStateDetail: $('monStateDetail'),
@@ -3021,6 +3022,20 @@ function openSettingsModal() {
       modal.appendChild(wrap);
       controls.push({ key, box, kind: 'select' });
     };
+    // D6: a list setting (one entry per line) - the extra Strata servers to watch
+    const listRow = (key, label, hint, options = {}) => {
+      const wrap = el('div', 'field');
+      wrap.appendChild(el('label', '', label));
+      const box = el('textarea');
+      box.dataset.setting = key;
+      box.rows = 3;
+      box.value = (Array.isArray(s[key]) ? s[key] : []).join(String.fromCharCode(10));
+      box.placeholder = options.placeholder || '';
+      wrap.appendChild(box);
+      if (hint) wrap.appendChild(el('div', 'set-hint', hint));
+      modal.appendChild(wrap);
+      controls.push({ key, box, kind: 'list' });
+    };
 
     group('Sessions and queue');
     textRow('cwd', 'Default working folder for new tabs', 'used when a session file records a folder that no longer exists, and for every new tab', { folderPicker: true });
@@ -3041,6 +3056,7 @@ function openSettingsModal() {
     group('Strata server');
     textRow('strataUrl', 'Fixed Strata address (Monitor and diagnostics)', 'leave empty to derive it from the active tab model baseUrl, e.g. http://127.0.0.1:8081/v1', { placeholder: 'http://127.0.0.1:8081/v1', clear: true });
     textRow('strataConfigPath', 'Strata engine config (only for the diagnostics report)', 'e.g. C:\\Strata\\strata-src\\strata-<model>.json \u2014 copied into the report with keys redacted', { filePicker: true, fileTitle: 'Strata engine config', filters: [{ name: 'JSON', extensions: ['json'] }], clear: true });
+    listRow('strataUrls', 'Other Strata servers to watch (one address per line)', 'D6: the Monitor gets a button per address, so two servers on two ports can be compared; the first entry is still the one the cards show unless you pick another)', { placeholder: 'http://127.0.0.1:8082/v1' });
 
     group('Interface')
     ;
@@ -3101,7 +3117,9 @@ function openSettingsModal() {
     const collect = () => {
       const patch = {};
       for (const control of controls) {
-        if (control.kind === 'checkbox') {
+        if (control.kind === 'list') {
+          patch[control.key] = [...new Set(control.box.value.split(String.fromCharCode(10)).map((line) => line.trim()).filter(Boolean))];
+        } else if (control.kind === 'checkbox') {
           // write only real changes for the default-true keys, so the file stays close to its old shape
           patch[control.key] = control.box.checked;
         } else if (control.kind === 'number') {
@@ -3194,6 +3212,10 @@ const monitor = {
   built: false,
   failures: 0,
   lastData: null,
+  baseUrl: '', // D6: which server the cards follow ('' = the active tab's)
+  health: new Map(), // serverKey -> { ok, ms } or { ok: false, error }
+  serversSignature: null,
+  tick: 0,
 };
 
 const nfmt = (n, d = 0) => (n == null || Number.isNaN(n) ? '–' : Number(n).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }));
@@ -3214,6 +3236,137 @@ function strataBaseUrl() {
 function setMonSrc(text, isError = false) {
   els.monSrc.textContent = text;
   els.monSrc.classList.toggle('err', isError);
+}
+
+/*
+ * D6: more than one Strata server. The Monitor used to show whatever strataBaseUrl() derived from the
+ * active tab, which made two servers on two ports impossible to compare. Now every known address gets a
+ * pill: click it to point the cards at that server, and each pill carries its own /health dot so the
+ * reachability of all of them is visible at once.
+ */
+function serverKey(url) {
+  return String(url || '').replace(/\/+$/, '').replace(/\/v1$/i, '').toLowerCase();
+}
+
+/** The address the cards should follow: the picked one, or the active tab's model server. */
+function monitorTargetUrl() {
+  return monitor.baseUrl || strataBaseUrl();
+}
+
+/** Every address worth a pill: the derived one, the ones from Settings, and the ones the tabs use. */
+function monitorServerUrls() {
+  const out = [strataBaseUrl()];
+  const extras = Array.isArray(state.settings.strataUrls) ? state.settings.strataUrls : [];
+  const fromTabs = [...state.tabs.values()].map((tab) => tab.model && tab.model.baseUrl).filter(Boolean);
+  for (const url of [...extras, ...fromTabs]) {
+    if (!out.some((entry) => serverKey(entry) === serverKey(url))) out.push(url);
+  }
+  return out;
+}
+
+function renderMonitorServers() {
+  if (!els.monServers) return;
+  const urls = monitorServerUrls();
+  const signature = `${urls.join('|')}#${monitor.baseUrl || ''}`;
+  if (signature === monitor.serversSignature) return;
+  monitor.serversSignature = signature;
+  els.monServers.textContent = '';
+
+  const follow = el('button', `mon-server${monitor.baseUrl ? '' : ' active'}`, 'active tab');
+  follow.title = `follow the active tab's server (${strataBaseUrl()})`;
+  follow.dataset.url = '';
+  follow.addEventListener('click', () => {
+    monitor.baseUrl = '';
+    monitor.serversSignature = null;
+    renderMonitorServers();
+    pollMonitor();
+  });
+  els.monServers.appendChild(follow);
+
+  for (const url of urls) {
+    const pill = el('button', `mon-server${monitor.baseUrl && serverKey(monitor.baseUrl) === serverKey(url) ? ' active' : ''}`, serverLabel(url));
+    pill.title = url;
+    pill.dataset.url = url;
+    const dot = el('span', 'mon-dot unknown');
+    dot.title = 'health unknown';
+    pill.appendChild(dot);
+    pill.addEventListener('click', () => {
+      monitor.baseUrl = url;
+      monitor.serversSignature = null;
+      renderMonitorServers();
+      pollMonitor();
+    });
+    if (serverKey(url) !== serverKey(strataBaseUrl())) {
+      const remove = el('span', 'mon-server-x', '×');
+      remove.title = `stop watching ${url} (removes it from Settings)`;
+      remove.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const kept = (Array.isArray(state.settings.strataUrls) ? state.settings.strataUrls : []).filter((entry) => serverKey(entry) !== serverKey(url));
+        const merged = await api.settingsSet({ strataUrls: kept });
+        state.settings = merged || { ...state.settings, strataUrls: kept };
+        if (monitor.baseUrl && serverKey(monitor.baseUrl) === serverKey(url)) monitor.baseUrl = '';
+        monitor.serversSignature = null;
+        renderMonitorServers();
+        pollMonitor();
+      });
+      pill.appendChild(remove);
+    }
+    els.monServers.appendChild(pill);
+    applyHealthDot(pill, url);
+  }
+
+  const add = el('button', 'mon-server mon-server-add', '+ add server');
+  add.title = 'watch another Strata address (saved in Settings)';
+  add.addEventListener('click', async () => {
+    const answer = await openModal({ kind: 'input', title: 'Add a Strata server', message: 'Base address, e.g. http://127.0.0.1:8082/v1', placeholder: 'http://127.0.0.1:8082/v1', okLabel: 'Watch it' });
+    if (!answer || answer.cancelled || !String(answer.value || '').trim()) return;
+    const url = String(answer.value).trim();
+    const current = Array.isArray(state.settings.strataUrls) ? state.settings.strataUrls : [];
+    const merged = await api.settingsSet({ strataUrls: [...new Set([...current, url])] });
+    state.settings = merged || { ...state.settings, strataUrls: [...current, url] };
+    monitor.baseUrl = url;
+    monitor.serversSignature = null;
+    renderMonitorServers();
+    pollMonitor();
+    toast(`watching ${url}`, 'info', 3000);
+  });
+  els.monServers.appendChild(add);
+}
+
+function serverLabel(url) {
+  const text = String(url).replace(/\/+$/, '').replace(/\/v1$/i, '');
+  const match = text.match(/^https?:\/\/([^/]+)/i);
+  return match ? match[1] : text;
+}
+
+function applyHealthDot(pill, url) {
+  const dot = pill.querySelector('.mon-dot');
+  if (!dot) return;
+  const health = monitor.health.get(serverKey(url));
+  if (!health) {
+    dot.className = 'mon-dot unknown';
+    dot.title = 'health not checked yet';
+    return;
+  }
+  if (health.ok) {
+    dot.className = 'mon-dot ok';
+    dot.title = `reachable in ${health.ms}ms`;
+  } else {
+    dot.className = 'mon-dot bad';
+    dot.title = health.error || 'not reachable';
+  }
+}
+
+async function pollServerHealth() {
+  const urls = monitorServerUrls();
+  const results = await Promise.all(urls.map((url) => api.strataHealth({ baseUrl: url })));
+  urls.forEach((url, index) => {
+    const result = results[index];
+    monitor.health.set(serverKey(url), result.ok ? { ok: true, ms: result.ms } : { ok: false, error: result.error || `HTTP ${result.status}` });
+  });
+  for (const pill of els.monServers.querySelectorAll('.mon-server')) {
+    if (pill.dataset.url) applyHealthDot(pill, pill.dataset.url);
+  }
 }
 
 function buildMonitorCards() {
@@ -3443,11 +3596,15 @@ function renderMonitor(data) {
 
 async function pollMonitor() {
   if (!monitor.open) return;
-  const result = await api.strataMetrics({ baseUrl: strataBaseUrl(), all: monitor.showAll });
+  monitor.tick += 1;
+  renderMonitorServers();
+  if (monitor.tick % 4 === 1) pollServerHealth(); // D6: health of every watched server, once every 4s
+  const target = monitorTargetUrl();
+  const result = await api.strataMetrics({ baseUrl: target, all: monitor.showAll });
   if (!monitor.open) return;
   if (!result.ok) {
     monitor.failures++;
-    setMonSrc(`${result.url || strataBaseUrl()} · ${result.error}${monitor.failures === 3 ? ' (server not reachable)' : ''}`, true);
+    setMonSrc(`${result.url || target} · ${result.error}${monitor.failures === 3 ? ' (server not reachable)' : ''}`, true);
     return;
   }
   monitor.failures = 0;
@@ -3467,6 +3624,8 @@ function openMonitor() {
   els.body.classList.add('monitor-open');
   els.btnMonitor.classList.add('monitor-on');
   buildMonitorCards();
+  monitor.serversSignature = null;
+  renderMonitorServers();
   clearInterval(monitor.timer);
   monitor.timer = setInterval(pollMonitor, 1000);
   pollMonitor();
@@ -5517,6 +5676,10 @@ async function init() {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
   }
 
+  if (state.info.smoke && state.info.smokeServers) {
+    setTimeout(() => smokeServersScenario().catch((err) => console.error('[smoke] servers scenario failed', err)), 1500);
+  }
+
   if (state.info.smoke && state.info.smokeStorage) {
     setTimeout(() => smokeStorageScenario().catch((err) => console.error('[smoke] storage scenario failed', err)), 1500);
   }
@@ -6112,6 +6275,37 @@ async function smokeStorageScenario() {
   const closed = !els.modalRoot.querySelector('.modal');
   console.log(
     `[smoke-storage] ok=${stats.ok} files=${stats.totalFiles} bytes=${stats.totalBytes} groups=${stats.groups.length} none=${none.candidates.length} also_none=${alsoNone.candidates.length} everything=${everything.candidates.length} scanned=${everything.scannedFiles} open_in_list=${openListed} footer=${JSON.stringify(footer)} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
+  );
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_SERVERS=1: D6. Adds a second (unreachable) Strata address through Settings,
+ * checks the Monitor gives it a pill with a health dot that turns red, points the cards at it, then
+ * removes it again through the pill's x - so the settings round trip is proven both ways.
+ */
+async function smokeServersScenario() {
+  const before = Array.isArray(state.settings.strataUrls) ? [...state.settings.strataUrls] : [];
+  const bogus = 'http://127.0.0.1:9/v1';
+  const merged = await api.settingsSet({ strataUrls: [...before, bogus] });
+  state.settings = merged || { ...state.settings, strataUrls: [...before, bogus] };
+  openMonitor();
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const pills = [...els.monServers.querySelectorAll('.mon-server')];
+  const bogusPill = pills.find((pill) => pill.dataset.url === bogus);
+  const dotBefore = bogusPill ? bogusPill.querySelector('.mon-dot').className : 'none';
+  if (bogusPill) bogusPill.click();
+  await new Promise((resolve) => setTimeout(resolve, 1800));
+  const dotAfter = bogusPill ? bogusPill.querySelector('.mon-dot').className : 'none';
+  const activePill = els.monServers.querySelector('.mon-server.active');
+  const removeBox = bogusPill ? bogusPill.querySelector('.mon-server-x') : null;
+  if (removeBox) removeBox.click();
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const after = Array.isArray(state.settings.strataUrls) ? state.settings.strataUrls : [];
+  const pillsAfter = els.monServers.querySelectorAll('.mon-server').length;
+  const src = els.monSrc.textContent;
+  closeMonitor();
+  console.log(
+    `[smoke-servers] pills=${pills.length} bogus_pill=${!!bogusPill} dot_before=${JSON.stringify(dotBefore)} dot_after=${JSON.stringify(dotAfter)} target=${monitorTargetUrl()} active=${activePill ? activePill.textContent.trim() : 'none'} removed=${!after.includes(bogus)} pills_after=${pillsAfter} src=${JSON.stringify(src.slice(0, 70))}`,
   );
 }
 

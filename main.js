@@ -621,6 +621,7 @@ function registerIpc() {
       smokeTheme: !!process.env.PI_ON_STRATA_SMOKE_THEME,
       smokeA11y: !!process.env.PI_ON_STRATA_SMOKE_A11Y,
       smokeStorage: !!process.env.PI_ON_STRATA_SMOKE_STORAGE,
+      smokeServers: !!process.env.PI_ON_STRATA_SMOKE_SERVERS,
     };
   });
 
@@ -920,6 +921,32 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
       }
     } catch (err) {
       return { ok: false, error: err.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : err.message, url: target.href };
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  // D6: a cheap reachability probe per server, used by the Monitor's server switcher
+  ipcMain.handle('strata:health', async (_event, { baseUrl, apiKey = '', timeoutMs = 2500 } = {}) => {
+    if (!baseUrl) return { ok: false, error: 'no base url' };
+    let target;
+    try {
+      target = new URL(`${String(baseUrl).replace(/\/+$/, '').replace(/\/v1$/i, '')}/health`);
+    } catch {
+      return { ok: false, error: `invalid base url: ${baseUrl}` };
+    }
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') return { ok: false, error: 'unsupported protocol' };
+    const key = apiKey || process.env.PI_ON_STRATA_KEY || process.env.STRATA_API_KEY || '';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    timer.unref?.();
+    const startedAt = Date.now();
+    try {
+      const response = await fetch(target, { headers: { accept: 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) }, cache: 'no-store', signal: controller.signal });
+      const text = await response.text();
+      return { ok: response.ok, status: response.status, url: target.href, ms: Date.now() - startedAt, body: text.slice(0, 200) };
+    } catch (err) {
+      return { ok: false, error: err.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : err.message, url: target.href, ms: Date.now() - startedAt };
     } finally {
       clearTimeout(timer);
     }

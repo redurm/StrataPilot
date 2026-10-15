@@ -38,6 +38,7 @@ const api = {
 
   /* strata server monitor (proxied from main to dodge CSP/CORS) --------- */
   strataMetrics: (payload) => ipcRenderer.invoke('strata:metrics', payload),
+  strataHealth: (payload) => ipcRenderer.invoke('strata:health', payload),
 
   /* scheduled jobs (B5) -------------------------------------------------
    * The scheduler runs in main (it survives a renderer reload) but only announces due jobs:

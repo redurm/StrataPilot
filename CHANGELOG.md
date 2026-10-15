@@ -7,6 +7,10 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **Several Strata servers in the Monitor** - a pill per address (`active tab`, every known server,
+  `+ add server`, `x` to remove). Clicking one points the cards at that server, and each watched address
+  carries its own `/health` dot (green with latency, red with the error), polled every 4 seconds. Extra
+  addresses live in the new `strataUrls` setting.
 - **Session storage dialog** - the sidebar footer now shows what the sessions folder costs
   (`Storage: 8.2 MB in 15 files`); clicking it lists every working-folder group by size and offers two
   cleanup rules (age, or keep the N newest per folder) with a mandatory preview and a second

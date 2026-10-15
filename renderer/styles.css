@@ -2140,3 +2140,51 @@ button:disabled {
   font-size: 11.5px;
   padding: 1px 6px;
 }
+
+/* D6: the Monitor's server switcher */
+.mon-servers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px 0;
+}
+.mon-server {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.mon-server.active {
+  border-color: var(--accent-border);
+  color: var(--text);
+  background: var(--accent-soft);
+}
+.mon-server-add {
+  font-style: italic;
+}
+.mon-server-x {
+  opacity: 0.6;
+  padding: 0 2px;
+}
+.mon-server-x:hover {
+  opacity: 1;
+  color: var(--red);
+}
+.mon-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.mon-dot.ok {
+  background: var(--green);
+}
+.mon-dot.bad {
+  background: var(--red);
+}

@@ -92,6 +92,8 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   context fill and recent requests, without leaving the app
 - **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
   output, result, duration)
+- **Several Strata servers at once**: the Monitor gets a pill per address with its own health dot, so two
+  engines on two ports can be compared without editing settings by hand
 - **Session storage**: the footer shows how much disk the sessions take; a dialog cleans up by age or by
   "keep the N newest per folder", always after a preview, and never touching a session that is open
 - **Accessibility**: dialogs are real dialogs (role, label, focus trapped and restored, `Esc`), icon-only
@@ -458,6 +460,7 @@ the file still works — press `Ctrl+R` to reload, or reopen the Settings dialog
 | `sidebarHidden` / `monitorOpen` / `monitorWidth` | Sidebar, Monitor panel state and width |
 | `strataUrl` | Fixed Strata address for the Monitor (e.g. `http://127.0.0.1:8081/v1`); if absent it is derived from the current tab's `model.baseUrl` |
 | `jobs[]` | Scheduled prompts (B5): `{ id, name, schedule, prompt, target, cwd, ephemeral, enabled, lastRun, nextRun }` - edited in the Jobs dialog rather than by hand |
+| `strataUrls` | Extra Strata addresses the Monitor should watch (array, one per line in the Settings dialog) - see [More than one Strata server](#more-than-one-strata-server) |
 | `theme` | `dark` (default), `light` or `system` - see [Theme (dark / light)](#theme-dark--light) |
 | `strataConfigPath` | Optional path of the Strata engine config (`C:\Strata\strata-src\strata-<model>.json`): only used to include that file, keys redacted, in the diagnostics report |
 
@@ -493,6 +496,7 @@ theme` (keeps following `prefers-color-scheme` while the app runs).
 | Screenshots | `PI_ON_STRATA_SMOKE_THEME=1` switches theme, prints the computed colours and writes both screenshots to the temp folder (see the smoke table) |
 | `PI_ON_STRATA_SMOKE_A11Y=1` | D3: expect `dialog=true role=dialog aria_modal=true labelled_by_heading=true focus_inside=true tab_wraps=true esc_closes=true focus_restored=true nameless_buttons=0 toasts_live=polite tabs_role=tablist` plus the `aria-label` of a queue row |
 | `PI_ON_STRATA_SMOKE_STORAGE=1` | D7: reads the totals and three plans (absurd age, absurd cap, everything), checks the open session is filtered out and that the dialog opens and closes: expect `ok=true files=15 bytes=8562058 groups=2 none=0 also_none=0 everything=15 scanned=15 open_in_list=false footer="15 / 15 sessionsStorage: 8.2 MB in 15 files" dialog=true dialog_closed=true`. **Nothing is deleted by the scenario** |
+| `PI_ON_STRATA_SMOKE_SERVERS=1` | D6: adds an unreachable address (`http://127.0.0.1:9/v1`) through Settings, checks the pill and its red health dot, points the cards at it, then removes it through the pill's `x`: expect `pills=4 bogus_pill=true dot_before="mon-dot bad" dot_after="mon-dot bad" active=127.0.0.1:9× removed=true pills_after=3` |
 
 ## Scheduled prompts (cron)
 
@@ -662,6 +666,21 @@ in the header opens Strata's web page in a browser):
 - If the server requires an API key: set `PI_ON_STRATA_KEY` or `STRATA_API_KEY`
 - Clicking the URL in the header opens Strata's web page in the default browser
 - When unreachable the header turns red and shows the error (after 3 consecutive failures it marks
+
+### More than one Strata server
+
+Two engines on two ports (say `:8081` and `:8082`) can be watched at the same time:
+
+- The Monitor header row gets a **pill per address**: `active tab` (follow the active tab's model
+  server), one for every known address, and `+ add server`.
+- Known addresses = the derived one + `strataUrls` in Settings (one per line) + whatever the open tabs
+  are actually using.
+- Clicking a pill points the cards at that server; the pill carries a **health dot** (`/health`, polled
+  every 4 s for every watched server): green with the latency, red with the error, grey before the
+  first check.
+- `+ add server` saves the address into `strataUrls`; the `×` on a pill removes it again. Nothing else
+  about the Monitor changes - the cards, sparklines and state badges are the same, they just follow the
+  picked address.
   `server not reachable`)
 
 > The `requests` data in `/metrics` (latency, tokens, hit rate and other statistics) is always
