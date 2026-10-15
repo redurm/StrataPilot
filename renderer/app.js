@@ -224,6 +224,9 @@ function makeTab({ cwd, sessionPath, name, ephemeral, extraArgs = [] }) {
     compactStartedAt: 0,
     compactEventSeen: false, // pi already reported this compaction through compaction_end
     compactEventResult: undefined, // outcome carried by the compaction_end event
+    exporting: false, // an export_html RPC is in flight for this tab
+    exportStartedAt: 0,
+    lastExport: null, // {ok, path|error} of the latest /export (also read by the smoke test)
     counters: 0,
     nodes: new Map(), // item key -> rendered node
     streaming: null,
@@ -2156,6 +2159,7 @@ async function switchCurrentTabTo(meta) {
   tab.currentRequest = null;
   tab.pendingQueued = [];
   tab.sessionPath = meta.path;
+  tab.ephemeral = false; // the tab now points at a real session file (queue badge)
   tab.name = meta.name || '';
   await bootstrap(tab);
   toast(`switched to ${meta.title || meta.fileName}`);
@@ -2779,6 +2783,7 @@ async function abortBash(tab) {
 
 const GUI_COMMANDS = [
   { name: 'compact', args: '[instructions]', desc: 'compact this context (asks first if the session is running)' },
+  { name: 'export', args: '[path]', desc: 'save this session as HTML' },
   { name: 'model', args: '[provider/id]', desc: 'pick a model, or set one by name' },
   { name: 'thinking', args: '[level]', desc: 'show or set the thinking level' },
   { name: 'new', args: '', desc: 'start a new session in this tab' },
@@ -2855,6 +2860,9 @@ async function runSlashCommand(tab, text) {
       await runCompact(tab, arg);
       return true;
     }
+    case 'export':
+      await runExport(tab, arg);
+      return true;
     case 'model': {
       const keys = tab.models.map((m) => `${m.provider}/${m.id}`);
       if (!keys.length) {
@@ -3322,6 +3330,92 @@ async function runCompact(tab, instructions) {
     renderTabs();
     renderOpenSessions();
     renderComposerState();
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* /export — session -> HTML via pi's export_html RPC                  */
+/* ------------------------------------------------------------------ */
+
+// export_html never calls the model, but pi re-reads the whole session JSONL and rewrites
+// it as HTML (the same cost as the JSONL rewrite during compaction: minutes for an 86 MB
+// session), so give the RPC the same grace period as compaction.
+const EXPORT_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** tab.name / the session file name / the session id, sanitised for Windows file names. */
+function exportBaseName(tab) {
+  let base = tab.name || '';
+  if (!base && tab.sessionPath) {
+    base = String(tab.sessionPath).split(/[\\/]+/).pop().replace(/\.jsonl$/i, '');
+  }
+  if (!base) base = tab.sessionId ? `session-${tab.sessionId}` : 'session';
+  return base.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').trim() || 'session';
+}
+
+/**
+ * `/export [path]`: pi writes the HTML file itself and returns the path it used, the GUI
+ * only picks the path. An argument must be an absolute `*.html`, otherwise the native Save
+ * dialog is shown (cancelling it is silent). Like `!` bash, export is model-free, so it
+ * deliberately skips the serial queue.
+ */
+async function runExport(tab, arg) {
+  if (tab.exporting) {
+    const secs = tab.exportStartedAt ? Math.round((Date.now() - tab.exportStartedAt) / 1000) : 0;
+    toast(`export already running in ${tabLabel(tab)} (${secs}s) — big sessions take minutes`, 'warning');
+    return;
+  }
+  // pi has no session file to export: unsaved (no message yet) or ephemeral (--no-session)
+  if (tab.ephemeral || !tab.sessionPath) {
+    toast('this session has no session file yet (unsaved or ephemeral) — send a message first, or open a saved session', 'warning', 8000);
+    return;
+  }
+  // pi appends to the session file while it runs or compacts: exporting mid-write is racy
+  if (tab.compacting || isWorking(tab)) {
+    toast('cannot export while this session is running or compacting — try again when it is idle', 'warning');
+    return;
+  }
+  let outputPath = '';
+  if (arg) {
+    if (/^(?:[a-zA-Z]:[\\/]|[\\/])/.test(arg) && /\.html$/i.test(arg)) outputPath = arg;
+    else toast('export path must be absolute and end with .html — opening the Save dialog instead', 'warning', 8000);
+  }
+  if (!outputPath) {
+    const sep = tab.cwd.includes('\\') ? '\\' : '/';
+    const defaultPath = `${String(tab.cwd).replace(/[\\/]+$/, '')}${sep}${exportBaseName(tab)}.html`;
+    const dialogRes = await api.saveFile({ defaultPath, title: 'Export session as HTML' });
+    if (!dialogRes.ok) {
+      // cancelling the dialog is the normal silent case
+      if (!dialogRes.cancelled) toast(dialogRes.error || 'save dialog failed', 'error');
+      return;
+    }
+    outputPath = dialogRes.path;
+  }
+  tab.exporting = true;
+  tab.exportStartedAt = Date.now();
+  tab.lastExport = null;
+  clearComposer();
+  console.log(`[export] tab=${tab.id} path=${outputPath}`);
+  try {
+    const res = await api.cmd(tab.id, 'export_html', { outputPath }, EXPORT_TIMEOUT_MS);
+    const elapsed = Math.round((Date.now() - tab.exportStartedAt) / 1000);
+    if (res.success && res.data && res.data.path) {
+      tab.lastExport = { ok: true, path: res.data.path };
+      pushNote(tab, `exported this session to ${res.data.path} (${elapsed}s)`, 'compact');
+      toast(`exported: ${res.data.path}`, 'info', 8000);
+      api.openPath(res.data.path, true); // reveal the file in the file manager
+      console.log(`[export] tab=${tab.id} ok after ${elapsed}s path=${res.data.path}`);
+    } else {
+      // pi's own error text only (unwritable path, RPC error): never a stack trace
+      tab.lastExport = { ok: false, error: res.error || 'export_html failed' };
+      toast(res.error || 'export failed', 'error', 8000);
+      console.log(`[export] tab=${tab.id} failed: ${res.error}`);
+    }
+  } catch (err) {
+    tab.lastExport = { ok: false, error: err.message };
+    toast(err.message || 'export failed', 'error', 8000);
+  } finally {
+    tab.exporting = false;
+    tab.exportStartedAt = 0;
   }
 }
 
@@ -3946,6 +4040,10 @@ async function init() {
     setTimeout(() => smokeCopyScenario().catch((err) => console.error('[smoke] copy scenario failed', err)), 1200);
   }
 
+  if (state.info.smoke && state.info.smokeExport) {
+    setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
+  }
+
   if (state.info.smoke && state.info.smokePrompt) {
     els.input.value = state.info.smokePrompt;
     setTimeout(() => {
@@ -4218,6 +4316,37 @@ async function smokeCopyScenario() {
   } finally {
     navigator.clipboard.writeText = realWrite;
   }
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_EXPORT=1 (with PI_ON_STRATA_SMOKE_SESSION=<path>): `/export <abs>.html`
+ * must skip the dialog, let pi write the file (export_html) and print the returned path;
+ * the file is then stat'd from the renderer through the read-only fs:stat-paths.
+ */
+async function smokeExportScenario() {
+  const tab = activeTab();
+  if (!tab) {
+    console.log('[smoke-export] no active tab');
+    return;
+  }
+  const out = state.info.smokeExportOut || '';
+  if (!out) {
+    console.log('[smoke-export] no export output path (smokeExportOut empty)');
+    return;
+  }
+  els.input.value = `/export ${out}`;
+  await send(); // send() awaits runSlashCommand, so the RPC is done when it returns
+  const result = tab.lastExport || { ok: false, error: 'no export result recorded' };
+  let exists = false;
+  let bytes = 0;
+  if (result.ok && result.path) {
+    const [stat] = await api.statPaths([result.path]);
+    exists = !!(stat && !stat.error && !stat.isDirectory);
+    bytes = exists ? stat.size : 0;
+  }
+  console.log(
+    `[smoke-export] ok=${result.ok} path=${result.path || ''} exists=${exists} bytes=${bytes}${result.error ? ` error=${JSON.stringify(result.error)}` : ''}`,
+  );
 }
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.

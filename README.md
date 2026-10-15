@@ -148,6 +148,24 @@ Display rules:
   while the old file stays in Session files — hence the "it was there a second ago, now it's not in
   the queue" case
 
+### Export a session
+
+`/export [path]` (composer or palette) turns the current session into a standalone HTML page.
+pi writes the file itself (RPC `export_html`) and returns the path it used; the GUI only picks
+the path: no argument opens the native Save dialog (default name from the session name / session
+file / session id, inside the session's working folder; cancelling the dialog does nothing), an
+argument must be an absolute path ending in `.html`. Afterwards the file manager opens with the
+file selected and the path is printed into the transcript.
+
+- A tab with **no session file** cannot be exported (`unsaved` before the first message, or
+  `ephemeral`): pi has nothing to export, the GUI says so in a toast instead of calling the RPC.
+- Refused while the session is **running or compacting** — pi is appending to the file, exporting
+  mid-write is racy (same guard style as `/compact`). A second `/export` while one is in flight
+  does not stack: it toasts `export already running (Ns)`.
+- Export never calls the model, so like `!` bash it deliberately **skips the serial queue**. A huge
+  session still takes minutes (pi re-reads the whole JSONL and rewrites it as HTML), so the RPC
+  timeout is 30 minutes like compaction's.
+
 ## Serial queue (one session at a time)
 
 Providers like Strata are single-flight, so the GUI has a scheduler (`scheduler` in
@@ -223,6 +241,7 @@ passed to pi, which expands extension commands, prompt templates and `/skill:nam
 | Command | What it does |
 |---|---|
 | `/compact [instructions]` | compact this context; while the session is running it asks first (inline instructions are queued until the session goes idle) |
+| `/export [path]` | save this session as HTML (pi's `export_html`); no argument opens the native Save dialog, an argument must be an absolute `*.html` — see "Export a session" under the sidebar lists |
 | `/model [provider/id]` | pick a model from a list, or set one by (partial) name |
 | `/thinking [level]` | show the available levels, or set one |
 | `/new`, `/clear` | start a new session in this tab |
@@ -641,6 +660,7 @@ Other smoke switches:
 | `PI_ON_STRATA_SMOKE_BARS=1` | Sends a long prompt, queues a steer while it runs and prints both pinned bars: expect `top="working on prompt …"` with `bottom="… steering … next turn"`, then `top="last request steering …"` and `bottom="(hidden)"` after the steer is delivered; also checks `↓ jump` (`node=true flashed=true`) |
 | `PI_ON_STRATA_SMOKE_PASTE=1` | Synthesises `paste` events carrying a generated 1×1 PNG: expect `files=1 images=1 chips=1 first=pasted-1.png size=70b`, then `images=2 chips=2 first=pasted-2.png`; also checks a two-image paste, `bmp` → "unsupported image type" toast, an 8 MB+ image → "image too large" toast, plain-text paste (`prevented=false`) and the modal guard (`modalOpen=true prevented=false images` unchanged) |
 | `PI_ON_STRATA_SMOKE_COPY=1` | Sends a prompt, waits for `agent_settled`, then clicks the user message's `copy` / `resend` (clipboard write is captured in JS): expect `copy_ok=true resend_ok=true composer="" queued=1 label_copied=true assistant_copy_ok=true`. A second tab is generating, so the resent text must land in the **outbox** (queue-aware path), not reach the model; also checks the draft guard (`modal=true` and the draft survives a cancel) and that the buttons survive `renderAll()` |
+| `PI_ON_STRATA_SMOKE_EXPORT=1` | Use with `PI_ON_STRATA_SMOKE_SESSION=<path>`: runs `/export <temp>\pi_on_strata_smoke_export.html` (no dialog; override the target with `PI_ON_STRATA_SMOKE_EXPORT_OUT`), then stats pi's returned path through the read-only `fs:stat-paths`: expect `ok=true path=… exists=true bytes=N` |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII

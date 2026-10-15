@@ -291,6 +291,8 @@ function registerIpc() {
       smokeBars: !!process.env.PI_ON_STRATA_SMOKE_BARS,
       smokePaste: !!process.env.PI_ON_STRATA_SMOKE_PASTE,
       smokeCopy: !!process.env.PI_ON_STRATA_SMOKE_COPY,
+      smokeExport: !!process.env.PI_ON_STRATA_SMOKE_EXPORT,
+      smokeExportOut: process.env.PI_ON_STRATA_SMOKE_EXPORT_OUT || path.join(os.tmpdir(), 'pi_on_strata_smoke_export.html'),
     };
   });
 
@@ -382,6 +384,19 @@ function registerIpc() {
     });
     if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
     return { ok: true, path: result.filePaths[0] };
+  });
+
+  // Plain dialog wrapper only: the renderer never writes through this, pi's export_html
+  // does the writing. Cancelling is a normal outcome (cancelled:true), not an error.
+  ipcMain.handle('fs:save-file', async (_event, { defaultPath = '', title = 'Save file' } = {}) => {
+    if (!win) return { ok: false };
+    const result = await dialog.showSaveDialog(win, {
+      title,
+      defaultPath,
+      filters: [{ name: 'HTML', extensions: ['html'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+    return { ok: true, path: result.filePath };
   });
 
   ipcMain.handle('fs:stat-paths', (_event, { paths: items = [] }) => {

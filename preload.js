@@ -25,6 +25,7 @@ const api = {
 
   /* filesystem -------------------------------------------------------- */
   chooseFolder: () => ipcRenderer.invoke('fs:choose-folder'),
+  saveFile: (payload = {}) => ipcRenderer.invoke('fs:save-file', payload),
   statPaths: (paths) => ipcRenderer.invoke('fs:stat-paths', { paths }),
   readText: (filePath, maxBytes) => ipcRenderer.invoke('fs:read-text', { filePath, maxBytes }),
   openPath: (target, reveal) => ipcRenderer.invoke('app:open-path', { target, reveal }),

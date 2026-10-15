@@ -68,6 +68,14 @@ parent [`README.md`](../README.md).
 | Auto-compaction never happens | Check `compaction.enabled` in `~/.pi/agent/settings.json`; the `auto-compact` checkbox next to the editor is per-session (reopening a tab goes back to the global value). With ctx ≥85% and it off, the status bar shows an amber warning |
 | Footer `ctx` still shows the pre-compaction number | Should no longer happen (`refreshStats()` runs after `compaction_end`); if you see it, report it together with stderr |
 
+## Export (`/export`)
+
+| Symptom | Cause / fix |
+|---|---|
+| Export says the session has no session file | The tab has no file to export: pi creates it only after the **first message** (queue row shows `unsaved`), and a tab opened with `--no-session` never has one (`ephemeral`). Send a message first, or open a saved session from `SESSION FILES` |
+| Export takes very long | Expected for big sessions: export is model-free (no tokens, no Strata request, and it **skips the serial queue** like `!` bash), but pi re-reads the whole JSONL and rewrites it as HTML — the same cost as the JSONL rewrite during compaction (minutes for 86 MB). The RPC timeout is 30 minutes; the result (or pi's own error text) arrives as a toast when it finishes |
+| `export already running (Ns)` | A previous `/export` is still writing (they never stack). Wait for its toast/note, or check the file in the file manager |
+
 ## Monitor
 
 | Symptom | Cause / fix |
