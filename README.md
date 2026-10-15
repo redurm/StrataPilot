@@ -92,6 +92,15 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   context fill and recent requests, without leaving the app
 - **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
   output, result, duration)
+- **Message actions on hover**: hovering a message (or tabbing into it) reveals small actions in its
+  head — `copy` puts the **raw markdown source** of that message on the clipboard (never the rendered
+  HTML, and never thinking / tool output), and user messages also get `resend`, which puts the original
+  text back into the editor and sends it through the normal Send path, so busy mode (`steering` /
+  `follow-up`) and the serial queue behave exactly as for a typed message; if the editor already holds a
+  draft you are asked first (and can edit it before sending). `resend` does not re-attach the original
+  images (their base64 blobs may be gone), and an image-only message has no `resend`. The buttons are
+  invisible until hover, so they never shift the layout, and they exist on messages rendered from
+  history as well as live ones.
 - **Pinned request bars**: the chat pane keeps the request pi is working on **right now** pinned at the
   very top (`WORKING ON` + where it came from + elapsed time + `↓ jump` scrolls to that message), and
   lists everything **not processed yet** just above the editor — queued `steering`, `follow-up` and this
@@ -622,7 +631,7 @@ Other smoke switches:
 |---|---|
 | `PI_ON_STRATA_SMOKE_PROMPT="…"` | Sends one prompt after startup (tests streaming / markdown / tool cards) |
 | `PI_ON_STRATA_SMOKE_STEER=1` | Sends a second message to exercise the steer path while busy |
-| `PI_ON_STRATA_SMOKE_SESSION=<path>` | Loads a given session with `switch_session` after startup (tests session switching / history rendering) |
+| `PI_ON_STRATA_SMOKE_SESSION=<path>` | Loads a given session with `switch_session` after startup (tests session switching / history rendering); with A2 it also prints `msg_actions=… copy=… resend=…` so you can see the hover actions exist on history-rendered messages |
 | `PI_ON_STRATA_SMOKE_QUEUE=1` | Opens 4 tabs and sends 3 messages to test the serial queue (Working/Idle, outbox, order) |
 | `PI_ON_STRATA_SMOKE_MONITOR=1` | Opens the Monitor panel right after startup (with `PI_ON_STRATA_SMOKE_PROMPT` you can watch the generating state) |
 | `PI_ON_STRATA_SMOKE_COMPACT=1` | Queues a compact during a long generation: "wait for idle" must not kill the request (Strata should show `stop`, not `disconnect`) |
@@ -631,6 +640,7 @@ Other smoke switches:
 | `PI_ON_STRATA_SMOKE_BASH=1` | Runs `!echo …`, `!!echo …` and `!exit 3`, then `/commands`, and checks the slash palette (`/co` + `Tab`): expect `cards=1 class=bash-card done`, `sign=!!`, `class=bash-card error … exit 3`, and `open=true rows=5` |
 | `PI_ON_STRATA_SMOKE_BARS=1` | Sends a long prompt, queues a steer while it runs and prints both pinned bars: expect `top="working on prompt …"` with `bottom="… steering … next turn"`, then `top="last request steering …"` and `bottom="(hidden)"` after the steer is delivered; also checks `↓ jump` (`node=true flashed=true`) |
 | `PI_ON_STRATA_SMOKE_PASTE=1` | Synthesises `paste` events carrying a generated 1×1 PNG: expect `files=1 images=1 chips=1 first=pasted-1.png size=70b`, then `images=2 chips=2 first=pasted-2.png`; also checks a two-image paste, `bmp` → "unsupported image type" toast, an 8 MB+ image → "image too large" toast, plain-text paste (`prevented=false`) and the modal guard (`modalOpen=true prevented=false images` unchanged) |
+| `PI_ON_STRATA_SMOKE_COPY=1` | Sends a prompt, waits for `agent_settled`, then clicks the user message's `copy` / `resend` (clipboard write is captured in JS): expect `copy_ok=true resend_ok=true composer="" queued=1 label_copied=true assistant_copy_ok=true`. A second tab is generating, so the resent text must land in the **outbox** (queue-aware path), not reach the model; also checks the draft guard (`modal=true` and the draft survives a cancel) and that the buttons survive `renderAll()` |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII

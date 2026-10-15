@@ -435,6 +435,36 @@ function updateBashCard(tab, entry, incremental = false) {
   if (entry) paintBashCard(entry, incremental);
 }
 
+/**
+ * Hover actions in the message head. `copy` always takes the raw markdown source
+ * (contentToText), never the rendered HTML; `resend` is user-only. The wrapper carries
+ * `data-key` so the delegated click handler can map a click back to the item.
+ */
+function buildMessageActions(item, role, text) {
+  const actions = el('div', 'msg-actions');
+
+  const copy = el('button', 'copy-btn msg-action', 'copy');
+  copy.dataset.msgAction = 'copy';
+  copy.dataset.key = item.key;
+  copy.title = 'copy this message as raw markdown';
+  actions.appendChild(copy);
+
+  if (role === 'user') {
+    const resend = el('button', 'copy-btn msg-action', 'resend');
+    resend.dataset.msgAction = 'resend';
+    resend.dataset.key = item.key;
+    if (text) {
+      resend.title = 'put this message back in the composer and send it (images are not re-attached)';
+    } else {
+      // an image-only message has nothing to send: do not offer an empty prompt
+      resend.disabled = true;
+      resend.title = 'this message has no text to resend';
+    }
+    actions.appendChild(resend);
+  }
+  return actions;
+}
+
 function buildMessageNode(tab, item) {
   const message = item.message;
   const role = message.role;
@@ -448,6 +478,8 @@ function buildMessageNode(tab, item) {
     head.appendChild(el('span', '', 'you'));
     const ts = message.timestamp ? new Date(message.timestamp) : null;
     if (ts) head.appendChild(el('span', '', ts.toLocaleTimeString()));
+    wrap.dataset.key = item.key;
+    head.appendChild(buildMessageActions(item, 'user', contentToText(message.content)));
     wrap.appendChild(head);
     const body = el('div', 'msg-body');
     if (typeof message.content === 'string') {
@@ -483,6 +515,8 @@ function buildMessageNode(tab, item) {
     if (message.stopReason && message.stopReason !== 'stop' && message.stopReason !== 'toolUse') {
       head.appendChild(el('span', '', `stop: ${message.stopReason}`));
     }
+    wrap.dataset.key = item.key;
+    head.appendChild(buildMessageActions(item, 'assistant', contentToText(message.content)));
     wrap.appendChild(head);
 
     for (const block of message.content || []) {
@@ -1055,6 +1089,7 @@ function openSimpleModal({ title, message, kind, options, prefill, placeholder, 
     } else if (kind === 'input') {
       valueEl = el('input');
       valueEl.type = 'text';
+      valueEl.value = prefill || '';
       valueEl.placeholder = placeholder || '';
       modal.appendChild(valueEl);
     } else if (kind === 'editor') {
@@ -3136,6 +3171,39 @@ async function send() {
   renderOpenSessions();
 }
 
+/**
+ * Resend = put the original text back into the composer and call send(), so attachments,
+ * busy mode (steer/follow_up) and the serial queue behave exactly as for a normal send.
+ * Never call api.cmd('prompt') from here: that would break the single-flight guarantee.
+ * The original images are not re-attached (their base64 blobs may be gone from memory).
+ */
+async function resendMessage(tab, item) {
+  const text = contentToText(item.message.content);
+  if (!text) {
+    toast('this message has no text to resend', 'warning');
+    return;
+  }
+  if (els.input.value.trim()) {
+    const answer = await openModal({
+      kind: 'input',
+      title: 'Resend this message',
+      message: 'The composer already has text. Replace it with the original message (edit it here first if you want), or cancel to keep your draft.',
+      prefill: text,
+      okLabel: 'Replace and send',
+    });
+    if (!answer || answer.cancelled) return;
+    if (!(answer.value || '').trim()) {
+      toast('nothing to resend', 'warning');
+      return;
+    }
+    els.input.value = answer.value;
+  } else {
+    els.input.value = text;
+  }
+  els.input.dispatchEvent(new Event('input'));
+  await send();
+}
+
 async function abortRun() {
   const tab = activeTab();
   if (!tab) return;
@@ -3660,6 +3728,35 @@ function wireUi() {
     }
   });
 
+  // Per-message hover actions (copy / resend). Delegated like the code-block button above:
+  // the node carries data-key, so it also works for messages rebuilt by renderAll().
+  els.transcript.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-msg-action]');
+    if (!button || button.disabled) return;
+    const tab = activeTab();
+    if (!tab) return;
+    const item = tab.items.find((it) => it.key === button.dataset.key && it.kind === 'message');
+    if (!item) return;
+    if (button.dataset.msgAction === 'copy') {
+      const text = contentToText(item.message.content); // raw source, never innerHTML
+      if (!text) {
+        toast('this message has no text to copy', 'warning');
+        return;
+      }
+      navigator.clipboard
+        .writeText(text)
+        .then(() => {
+          button.textContent = 'copied';
+          setTimeout(() => (button.textContent = 'copy'), 1500);
+        })
+        .catch((err) => toast(`copy failed: ${err.message}`, 'error'));
+      return;
+    }
+    if (button.dataset.msgAction === 'resend') {
+      resendMessage(tab, item).catch((err) => toast(`resend failed: ${err.message}`, 'error'));
+    }
+  });
+
   // menu accelerators come from the main process
   api.on('menu', async (action) => {
     switch (action) {
@@ -3782,7 +3879,12 @@ async function init() {
     } else {
       await switchCurrentTabTo(res.meta);
       const tab = activeTab();
-      console.log(`[smoke] switched session; rendered items=${tab ? tab.items.length : 0}`);
+      const actions = els.transcript.querySelectorAll('[data-msg-action]');
+      const copies = els.transcript.querySelectorAll('[data-msg-action="copy"]').length;
+      const resends = els.transcript.querySelectorAll('[data-msg-action="resend"]:not([disabled])').length;
+      console.log(
+        `[smoke] switched session; rendered items=${tab ? tab.items.length : 0} msg_actions=${actions.length} copy=${copies} resend=${resends}`,
+      );
     }
   }
 
@@ -3838,6 +3940,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokePaste) {
     setTimeout(() => smokePasteScenario().catch((err) => console.error('[smoke] paste scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokeCopy) {
+    setTimeout(() => smokeCopyScenario().catch((err) => console.error('[smoke] copy scenario failed', err)), 1200);
   }
 
   if (state.info.smoke && state.info.smokePrompt) {
@@ -4022,6 +4128,96 @@ async function smokeBarsScenario() {
       }, 400);
     }
   }, 3000);
+}
+
+// PI_ON_STRATA_SMOKE_COPY=1 — the per-message hover actions. `copy` must hand over the raw markdown
+// source (never innerHTML), and `resend` must go through send(): while another tab owns the
+// single-flight provider the resent text has to land in this tab's outbox, not reach the model.
+async function smokeCopyScenario() {
+  const tab = activeTab();
+  const prompt = 'Reply with exactly: COPY-OK';
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const waitFor = async (fn, ms = 30000) => {
+    for (let i = 0; i < Math.ceil(ms / 250) && !fn(); i++) await sleep(250);
+    return fn();
+  };
+  // capture what copy puts on the clipboard (reading the real clipboard needs focus + permission)
+  const copied = [];
+  const realWrite = navigator.clipboard.writeText.bind(navigator.clipboard);
+  navigator.clipboard.writeText = (value) => {
+    copied.push(value);
+    return Promise.resolve();
+  };
+  const button = (key, action) => {
+    const node = tab.nodes.get(key);
+    return node && node.querySelector(`[data-msg-action="${action}"][data-key="${key}"]`);
+  };
+  const snap = () =>
+    state.order
+      .map((id) => {
+        const t = state.tabs.get(id);
+        return `${id === tab.id ? 'A' : 'B'}:${isWorking(t) ? 'W' : 'I'}${t.outbox.length ? `(${t.outbox.length})` : ''}`;
+      })
+      .join(' ');
+
+  try {
+    els.input.value = prompt;
+    await send();
+    await waitFor(() => !tab.isStreaming);
+
+    // another tab takes the single-flight provider, so a resend here must be queued
+    const other = await createTab({ cwd: state.cwd, ephemeral: true });
+    els.input.value = 'List the numbers 1 to 250, one per line, with no other text. Do not use tools.';
+    await send();
+    activateTab(tab.id);
+
+    const userKey = tab.items.find((it) => it.kind === 'message' && it.message.role === 'user').key;
+    const asstKey = [...tab.items].reverse().find((it) => it.kind === 'message' && it.message.role === 'assistant').key;
+
+    const copyBtn = button(userKey, 'copy');
+    if (copyBtn) copyBtn.click();
+    await waitFor(() => copied.length >= 1, 3000);
+    const labelCopied = !!copyBtn && copyBtn.textContent === 'copied';
+
+    const asstBtn = button(asstKey, 'copy');
+    if (asstBtn) asstBtn.click();
+    await waitFor(() => copied.length >= 2, 3000);
+
+    const resendBtn = button(userKey, 'resend');
+    if (resendBtn) resendBtn.click();
+    await waitFor(() => tab.outbox.length > 0 || tab.isStreaming, 5000);
+    const composer = els.input.value;
+    const queued = tab.outbox.length;
+
+    console.log(
+      `[smoke-copy] copy_ok=${copied[0] === prompt} resend_ok=${composer === '' && queued >= 1} composer="${composer}" queued=${queued} label_copied=${labelCopied} assistant_copy_ok=${!!(copied[1] || '').trim()} assistant_copy="${(copied[1] || '').replace(/\s+/g, ' ').trim().slice(0, 40)}"`,
+    );
+    console.log(
+      `[smoke-copy] queue: running=${scheduler.runningTabId === other.id ? 'other' : scheduler.runningTabId === tab.id ? 'self' : 'none'} working=${isWorking(tab)} position=${scheduler.workingPosition(tab.id)} tabs=${snap()} outbox_text="${(tab.outbox[0] && tab.outbox[0].text) || ''}"`,
+    );
+
+    // a draft in the composer must be asked about, not overwritten
+    const before = queued;
+    els.input.value = 'draft that must survive';
+    const resendAgain = button(userKey, 'resend');
+    if (resendAgain) resendAgain.click();
+    await sleep(400);
+    const modalShown = !!modalOpen;
+    if (modalOpen) modalOpen.finish({ cancelled: true });
+    await sleep(300);
+    console.log(
+      `[smoke-copy] draft guard: modal=${modalShown} composer="${els.input.value}" queued=${tab.outbox.length} (was ${before})`,
+    );
+
+    // renderAll() rebuilds every node: the actions must come back with their data-key
+    activateTab(other.id);
+    activateTab(tab.id);
+    console.log(
+      `[smoke-copy] after renderAll: copy=${!!button(userKey, 'copy')} resend=${!!button(userKey, 'resend')} assistant_copy=${!!button(asstKey, 'copy')}`,
+    );
+  } finally {
+    navigator.clipboard.writeText = realWrite;
+  }
 }
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.

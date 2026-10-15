@@ -14,7 +14,7 @@ Cheap to close, and used every day.
 | # | Item | What is missing today | Where | RPC / source | Effort | Priority | Status |
 |---|---|---|---|---|---|---|---|
 | A1 | Paste an image with `Ctrl+V` | Only drag & drop and the `Attach files` button exist; pasting a screenshot does nothing | `renderer/app.js` drop handler (~L3343), attachment pipeline (~L3286) | reuse the existing `images` payload path | S | P0 | done |
-| A2 | Per-message `copy` / `resend` | Only fenced code blocks have a copy button; no "copy this message (raw markdown)", no "resend the last request" | `renderer/app.js` ~L3553 | `get_last_assistant_text` | S | P0 | todo |
+| A2 | Per-message `copy` / `resend` | Only fenced code blocks have a copy button; no "copy this message (raw markdown)", no "resend the last request" | `renderer/app.js` ~L3553 | `get_last_assistant_text` | S | P0 | done |
 | A3 | `/export` a session to HTML | RPC command exists, no UI, no palette entry | `renderer/app.js` slash palette | `export_html` | S | P0 | todo |
 | A4 | Retry controls | `auto_retry_start` / `auto_retry_end` events are already rendered as notes, but the two commands are not wired; Strata disconnects make "retry N times / stop retrying" useful | `renderer/app.js` ~L915 | `set_auto_retry`, `abort_retry` | S | P1 | todo |
 | A5 | Settings dialog | `strataUrl`, default `cwd`, `serialQueue`, `monitorWidth` all require hand-editing `%APPDATA%\Pi on Strata\pi_on_strata_settings.json` (the README even tells the reader to add `strataUrl` by hand) | `main.js` settings block, new panel in `renderer/index.html` | `app:settings-get/set` already exist | M | P0 | todo |
@@ -25,7 +25,7 @@ Cheap to close, and used every day.
 | Command | What it would unlock | Priority |
 |---|---|---|
 | `export_html` | A3 — export a session as HTML | P0 |
-| `get_last_assistant_text` | A2 — copy the last reply | P0 |
+| `get_last_assistant_text` | A2 — copy the last reply (not needed: A2's per-message `copy` covers it) | P0 |
 | `set_auto_retry`, `abort_retry` | A4 — retry policy per session | P1 |
 | `get_tree`, `get_entries` | B1 — session tree / branch switching | P1 |
 | `fork`, `clone`, `get_fork_messages` | B1 — branch from an earlier message, "redo from here" | P1 |

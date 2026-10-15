@@ -52,6 +52,7 @@ parent [`README.md`](../README.md).
 | Symptom | Cause / fix |
 |---|---|
 | Pressing Send in another tab does nothing | Expected: the message went into that tab's **outbox** and waits for the previous session to reach `agent_settled`. Click the `outbox n` badge to `next` / `remove` |
+| A message's `resend` did not send immediately | Expected: `resend` puts the text back in the editor and goes through the same send path as the Send button, so the queue decides — while **another** session is working (or this one already has pending work) it lands in the tab's **outbox**, and while **this** session is streaming it goes into pi's in-session queue (`steering` / `follow-up`). Check `OPEN SESSIONS (QUEUE)` (the `outbox n` badge) and the pinned bar above the editor |
 | The order is not the order I clicked | A new message is automatically appended at the **back of the Working group** (it does not cut in line). Use that row's `top` button, or drag it, to cut in line |
 | A message went out without serialization | Executions started by an extension cannot be blocked (the scheduler only controls prompts sent from the GUI); or the `serial` checkbox in the top-left is off |
 | Queued messages disappeared after a restart | By design: the outbox lives in memory and is not persisted across restarts (so requests are not triggered by accident) |

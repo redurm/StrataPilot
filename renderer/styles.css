@@ -800,6 +800,28 @@ table.md-table td.al-right {
   color: var(--text);
 }
 
+/* Per-message hover actions: opacity only, so the head never shifts the layout. */
+.msg-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.msg:hover .msg-actions,
+.msg:focus-within .msg-actions,
+.msg-actions:focus-within {
+  opacity: 1;
+}
+.msg-action {
+  line-height: 1.35;
+  padding: 0 6px;
+}
+.msg-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 details.thinking {
   border: 1px dashed var(--border);
   border-radius: 6px;
