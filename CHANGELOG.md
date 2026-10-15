@@ -48,6 +48,10 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   sidebar refresh: metadata is cached per file and only re-read when the file's `mtimeMs`/`size`
   changed (an 86 MB session used to be re-scanned after almost every message).
 
+- **Windowed transcript** - opening a big session renders only the last 120 messages instead of
+  building every node at once; `show 150 earlier` at the top pulls in older pages without moving the
+  part you are looking at, and jumping to an older message renders the page that holds it.
+
 ### Changed
 
 - `package.json` gained a `test` script and `engines: { "node": ">=22.19" }`, the version the README

@@ -220,6 +220,7 @@ function makeTab({ tabId = '', cwd, sessionPath, name, ephemeral, extraArgs = []
     args,
     ephemeral: !!ephemeral,
     items: [], // {key, kind:'message'|'note'|'bash', ...}
+    renderFrom: 0, // first item currently built into the DOM (see renderAll / B2)
     tools: new Map(), // toolCallId -> {name,args,status,result,isError,durationMs,el}
     bashes: new Map(), // bashId -> {command,output,exitCode,status,…} (`!` commands)
     bashRunning: null, // bashId of the command pi is running for this tab
@@ -645,6 +646,39 @@ function isScrolledUp() {
 
 let scrollScheduled = false;
 
+/**
+ * Transcript windowing (B2). A session can hold 600+ messages (the README's worst case is an 86 MB
+ * file), and building every message node at once is what made opening such a session feel like a
+ * freeze. Only the tail is rendered; a control at the top pulls in earlier pages on demand.
+ *
+ * tab.items always holds the whole conversation (search, jump and the pinned bars work on all of
+ * it); tab.nodes only exists for what is on screen.
+ */
+const TRANSCRIPT_WINDOW = 120;
+const TRANSCRIPT_PAGE = 150;
+
+function transcriptMore(tab, start) {
+  const row = el('div', 'transcript-more');
+  row.appendChild(el('div', 'tm-note', `${start} earlier message${start === 1 ? '' : 's'} not shown`));
+  const button = el('button', 'ghost', `show ${Math.min(TRANSCRIPT_PAGE, start)} earlier`);
+  button.title = 'Rendering only the tail keeps big sessions fast; this adds the page above';
+  button.addEventListener('click', () => showEarlierMessages(tab));
+  row.appendChild(button);
+  return row;
+}
+
+/** Prepend one page of history without moving the part of the transcript you are looking at. */
+function showEarlierMessages(tab) {
+  const anchorKey = tab.items[tab.renderFrom] ? tab.items[tab.renderFrom].key : '';
+  const anchor = tab.nodes.get(anchorKey);
+  const anchorTop = anchor ? anchor.offsetTop : 0;
+  const from = Math.max(0, tab.renderFrom - TRANSCRIPT_PAGE);
+  renderAll(tab, { from });
+  const moved = tab.nodes.get(anchorKey);
+  if (moved) els.transcript.scrollTop = Math.max(0, moved.offsetTop - anchorTop);
+  else els.transcript.scrollTop = 0;
+}
+
 function autoscroll(force = false) {
   // reading scrollHeight forces a synchronous layout, and thinking/text deltas arrive
   // many times per second -> throttle to one layout read per animation frame
@@ -660,25 +694,34 @@ function autoscroll(force = false) {
   });
 }
 
-function renderAll(tab) {
+function renderAll(tab, { from = null } = {}) {
   els.transcript.textContent = '';
   tab.nodes.clear();
   if (!tab.items.length) {
+    tab.renderFrom = 0;
     const hint = el('div', 'empty-hint');
     hint.innerHTML =
       'No messages yet.<br />Type a prompt, or drop files anywhere in the window to attach them.<br /><kbd>Ctrl</kbd> + <kbd>T</kbd> new session &nbsp; <kbd>Ctrl</kbd> + <kbd>O</kbd> open session &nbsp; <kbd>Ctrl</kbd> + <kbd>B</kbd> sidebar';
     els.transcript.appendChild(hint);
     return;
   }
+  const start = from == null ? Math.max(0, tab.items.length - TRANSCRIPT_WINDOW) : Math.max(0, Math.min(from, tab.items.length - 1));
+  tab.renderFrom = start;
   const frag = document.createDocumentFragment();
-  for (const item of tab.items) {
+  if (start > 0) frag.appendChild(transcriptMore(tab, start));
+  let built = 0;
+  for (const item of tab.items.slice(start)) {
     const node = buildItemNode(tab, item);
     if (!node) continue;
     tab.nodes.set(item.key, node);
     frag.appendChild(node);
+    built += 1;
   }
   els.transcript.appendChild(frag);
   els.transcript.scrollTop = els.transcript.scrollHeight;
+  if (start > 0) {
+    console.log(`[transcript] ${tab.id}: rendered ${built} of ${tab.items.length} items (window from ${start})`);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1348,8 +1391,16 @@ function paintRequestTime(node, req) {
 }
 
 function jumpToItem(tab, key) {
-  const node = tab.nodes.get(key);
-  if (!node) return;
+  let node = tab.nodes.get(key);
+  if (!node) {
+    // the transcript is windowed (B2): the message we are jumping to may be above the rendered
+    // page, so pull in exactly the page that contains it instead of building the whole session
+    const index = tab.items.findIndex((item) => item.key === key);
+    if (index < 0) return;
+    renderAll(tab, { from: Math.max(0, index - 20) });
+    node = tab.nodes.get(key);
+    if (!node) return;
+  }
   node.scrollIntoView({ block: 'center', behavior: 'smooth' });
   node.classList.add('flash');
   setTimeout(() => node.classList.remove('flash'), 1400);
@@ -4441,8 +4492,15 @@ async function init() {
       const actions = els.transcript.querySelectorAll('[data-msg-action]');
       const copies = els.transcript.querySelectorAll('[data-msg-action="copy"]').length;
       const resends = els.transcript.querySelectorAll('[data-msg-action="resend"]:not([disabled])').length;
+      const moreBtn = els.transcript.querySelector('.transcript-more button');
+      const windowed = tab ? tab.nodes.size : 0;
+      if (moreBtn) moreBtn.click();
+      const afterMore = tab ? tab.nodes.size : 0;
       console.log(
         `[smoke] switched session; rendered items=${tab ? tab.items.length : 0} msg_actions=${actions.length} copy=${copies} resend=${resends}`,
+      );
+      console.log(
+        `[smoke-window] nodes=${windowed} of ${tab ? tab.items.length : 0} renderFrom=${tab ? tab.renderFrom : 0} more_button=${!!moreBtn} after_click=${afterMore} scrolled=${els.transcript.scrollTop > 0}`,
       );
     }
   }

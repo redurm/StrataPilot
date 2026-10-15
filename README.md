@@ -639,9 +639,13 @@ Collapsing is still cheaper for the renderer, and the optimization is now really
 - The Monitor's `Show all` renders at most the most recent **150** rows (previously 500 rows rebuilt
   every second)
 
-> One big item still untouched: opening a huge session (e.g. 86 MB / 600+ messages) makes `renderAll()`
-> build the whole transcript into the DOM at once. If needed, lazy rendering (build the last N first,
-> fill in on scroll up) is the next step.
+**The transcript is windowed.** Opening a huge session (600+ messages) used to build every message
+node at once, which is what felt like a freeze. `renderAll()` now renders only the **last 120**
+items; a `show 150 earlier` control at the top pulls in one page at a time, and the scroll position
+stays where you were looking. `tab.items` still holds the whole conversation, so search, the pinned
+bars and `↓ jump` keep working over everything - jumping to a message that is above the window
+simply renders the page that contains it. Measured on a 319-message session: 61 nodes instead of 319
+(`[transcript] rendered 61 of 319 items (window from 199)` in the renderer console).
 
 ## Keyboard shortcuts
 
