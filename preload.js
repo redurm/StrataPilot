@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-const EVENT_CHANNELS = new Set(['pi:record', 'pi:stderr', 'pi:log', 'pi:exit', 'menu', 'diagnostics', 'recovery', 'cron:fire', 'cron:notice']);
+const EVENT_CHANNELS = new Set(['pi:record', 'pi:stderr', 'pi:log', 'pi:exit', 'menu', 'diagnostics', 'recovery', 'cron:fire', 'cron:notice', 'first-run']);
 
 const api = {
   /* environment ------------------------------------------------------- */

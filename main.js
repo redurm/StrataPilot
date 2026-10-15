@@ -250,6 +250,10 @@ function buildMenu() {
           },
         },
         {
+          label: 'First-run check',
+          click: () => send('first-run', {}),
+        },
+        {
           label: 'Copy Diagnostics',
           click: async () => {
             // same report the composer button produces; the menu path also puts it on the
@@ -625,6 +629,7 @@ function registerIpc() {
       smokePath: !!process.env.PI_ON_STRATA_SMOKE_PATH,
       smokeTree: !!process.env.PI_ON_STRATA_SMOKE_TREE,
       smokeFork: !!process.env.PI_ON_STRATA_SMOKE_FORK,
+      smokeSetup: !!process.env.PI_ON_STRATA_SMOKE_SETUP,
     };
   });
 

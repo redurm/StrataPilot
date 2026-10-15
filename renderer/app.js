@@ -2599,6 +2599,197 @@ function openModal(options) {
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* first-run check (C5)                                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A fresh machine used to open a window with `pi ?` in the corner and nothing else: the two things
+ * that can actually be wrong on a first run (pi not installed / not on the managed path, Strata not
+ * reachable) were only visible if you knew to look. The wizard checks both, shows what it found, and
+ * fixes the two settings that matter (the Strata address and the working folder). It never installs
+ * anything itself - it prints the command instead, because installing a tool from a GUI without being
+ * asked is not this app's job.
+ */
+
+const PI_INSTALL_COMMAND = 'curl -fsSL https://pi.dev/install.sh | sh';
+
+function firstRunNeeded() {
+  return !state.settings || state.settings.firstRunSeen !== true;
+}
+
+async function openFirstRunWizard() {
+  const info = state.info || (await api.info());
+  let strataUrl = state.settings && state.settings.strataUrl ? state.settings.strataUrl : strataBaseUrl();
+  let cwd = (state.settings && state.settings.cwd) || info.defaultCwd || state.cwd;
+  let piState = { version: info.piVersion, level: info.piVersionLevel, cli: info.cliPath, node: info.nodePath };
+  let strataState = { checked: false };
+
+  return new Promise((resolve) => {
+    const backdrop = el('div', 'modal-backdrop setup-backdrop');
+    const modal = el('div', 'modal setup-modal');
+    modal.appendChild(el('h3', '', 'First-run check'));
+    modal.appendChild(
+      el('div', 'set-hint', 'Two things have to be true before this GUI can talk to a model: the pi CLI has to be installed, and a Strata server has to be reachable. This checks both without sending a prompt.'),
+    );
+
+    const step = (title) => {
+      const box = el('div', 'setup-step');
+      box.appendChild(el('div', 'setup-title', title));
+      const status = el('div', 'setup-status', 'checking\u2026');
+      box.appendChild(status);
+      modal.appendChild(box);
+      return { box, status };
+    };
+
+    /* 1. pi */
+    const piStep = step('1. pi CLI');
+    const piActions = el('div', 'field-row');
+    const recheck = el('button', 'ghost', 're-check pi');
+    recheck.title = 'ask the background process again (the managed installer writes a version file, no restart needed)';
+    piActions.appendChild(recheck);
+    if (info.cliPath) {
+      const reveal = el('button', 'ghost', 'show in folder');
+      reveal.addEventListener('click', () => api.openPath(info.cliPath, true));
+      piActions.appendChild(reveal);
+    }
+    piStep.box.appendChild(piActions);
+    const copyInstall = el('button', 'ghost', 'copy the install command');
+    const installLine = el('div', 'setup-code', PI_INSTALL_COMMAND);
+    const paintPi = () => {
+      if (!piState.version) {
+        piStep.status.className = 'setup-status bad';
+        piStep.status.textContent = `pi was not found (looked in ~/.pi/agent/install/current-version and PI_ON_STRATA_PI_CLI). Node used: ${piState.node || 'none'}.`;
+        if (!piActions.contains(copyInstall)) {
+          piStep.box.appendChild(installLine);
+          piActions.appendChild(copyInstall);
+        }
+        return;
+      }
+      installLine.remove();
+      copyInstall.remove();
+      if (piState.level === 'ok') {
+        piStep.status.className = 'setup-status good';
+        piStep.status.textContent = `pi ${piState.version} - the version this GUI was tested against. CLI: ${piState.cli}`;
+      } else if (piState.level === 'warn') {
+        piStep.status.className = 'setup-status warn';
+        piStep.status.textContent = `pi ${piState.version} is a different minor version than the tested ${info.testedPiVersion}: new RPC commands may exist, usually harmless.`;
+      } else {
+        piStep.status.className = 'setup-status bad';
+        piStep.status.textContent = `pi ${piState.version} differs in major version from the tested ${info.testedPiVersion}: the RPC framing may have changed.`;
+      }
+    };
+    paintPi();
+    recheck.addEventListener('click', async () => {
+      piStep.status.textContent = 'checking\u2026';
+      const fresh = await api.info();
+      state.info = fresh;
+      piState = { version: fresh.piVersion, level: fresh.piVersionLevel, cli: fresh.cliPath, node: fresh.nodePath };
+      paintPi();
+      renderEnvBar();
+    });
+    copyInstall.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(PI_INSTALL_COMMAND);
+      toast('install command copied - run it in a terminal, then re-check', 'info', 6000);
+    });
+
+    /* 2. Strata */
+    const strataStep = step('2. Strata server');
+    const urlRow = el('div', 'field-row');
+    const urlBox = el('input');
+    urlBox.type = 'text';
+    urlBox.value = strataUrl;
+    urlBox.setAttribute('aria-label', 'Strata base address');
+    const check = el('button', '', 'check');
+    const use = el('button', 'ghost', 'use this address');
+    urlRow.appendChild(urlBox);
+    urlRow.appendChild(check);
+    urlRow.appendChild(use);
+    strataStep.box.appendChild(urlRow);
+    const paintStrata = () => {
+      if (!strataState.checked) {
+        strataStep.status.className = 'setup-status';
+        strataStep.status.textContent = 'not checked yet.';
+        return;
+      }
+      if (strataState.ok) {
+        strataStep.status.className = 'setup-status good';
+        strataStep.status.textContent = `${strataState.url} answered /health with HTTP ${strataState.status} in ${strataState.ms}ms${strataState.body ? ` - ${strataState.body.slice(0, 80)}` : ''}`;
+      } else {
+        strataStep.status.className = 'setup-status bad';
+        strataStep.status.textContent = `${strataState.url}: ${strataState.error}. Start the engine, or change the address above. If the server needs a key, set PI_ON_STRATA_KEY (or STRATA_API_KEY) in the environment this app was started from.`;
+      }
+    };
+    paintStrata();
+    check.addEventListener('click', async () => {
+      strataStep.status.textContent = 'checking\u2026';
+      const res = await api.strataHealth({ baseUrl: urlBox.value.trim() });
+      strataState = { checked: true, ok: res.ok, url: res.url || urlBox.value.trim(), status: res.status, ms: res.ms, body: res.body, error: res.error };
+      paintStrata();
+    });
+    use.addEventListener('click', async () => {
+      const merged = await api.settingsSet({ strataUrl: urlBox.value.trim() });
+      state.settings = merged || { ...state.settings, strataUrl: urlBox.value.trim() };
+      applySettings(state.settings);
+      toast(`Monitor and diagnostics will use ${urlBox.value.trim()}`, 'info', 4000);
+    });
+    setTimeout(() => check.click(), 250);
+
+    /* 3. working folder */
+    const folderStep = step('3. working folder');
+    const folderRow = el('div', 'field-row');
+    const folderBox = el('input');
+    folderBox.type = 'text';
+    folderBox.value = cwd;
+    folderBox.setAttribute('aria-label', 'Working folder for new sessions');
+    const browse = el('button', '', 'browse\u2026');
+    browse.addEventListener('click', async () => {
+      const picked = await api.chooseFolder();
+      if (picked.ok) folderBox.value = picked.path;
+    });
+    const saveFolder = el('button', 'ghost', 'use this folder');
+    folderRow.appendChild(folderBox);
+    folderRow.appendChild(browse);
+    folderRow.appendChild(saveFolder);
+    folderStep.box.appendChild(folderRow);
+    folderStep.status.className = 'setup-status';
+    folderStep.status.textContent = 'every new tab starts here, and a session file that records a missing folder falls back to it.';
+    saveFolder.addEventListener('click', async () => {
+      const merged = await api.settingsSet({ cwd: folderBox.value.trim() });
+      state.settings = merged || { ...state.settings, cwd: folderBox.value.trim() };
+      applySettings(state.settings);
+      state.cwd = folderBox.value.trim();
+      toast(`new tabs will start in ${state.cwd}`, 'info', 4000);
+    });
+
+    const actions = el('div', 'modal-actions');
+    const diagnostics = el('button', 'ghost', 'copy diagnostics');
+    diagnostics.addEventListener('click', () => copyDiagnostics());
+    const done = el('button', 'primary', 'Start using it');
+    actions.appendChild(diagnostics);
+    actions.appendChild(done);
+    modal.appendChild(actions);
+    backdrop.appendChild(modal);
+    els.modalRoot.appendChild(backdrop);
+
+    let finished = false;
+    const finish = async () => {
+      if (finished) return;
+      finished = true;
+      const merged = await api.settingsSet({ firstRunSeen: true });
+      state.settings = merged || { ...state.settings, firstRunSeen: true };
+      backdrop.remove();
+      modalOpen = null;
+      resolve();
+    };
+    modalOpen = { finish, backdrop };
+    done.addEventListener('click', finish);
+    backdrop.addEventListener('mousedown', (event) => {
+      if (event.target === backdrop) finish();
+    });
+  });
+}
+
 /* session tree / branching (B1)                                       */
 /* ------------------------------------------------------------------ */
 
@@ -4037,6 +4228,7 @@ const GUI_COMMANDS = [
   { name: 'monitor', args: '', desc: 'toggle the Strata monitor' },
   { name: 'stats', args: '', desc: 'print tokens, cost and context usage' },
   { name: 'retry', args: '[on|off|stop]', desc: 'retry transient model errors: on/off for this session, stop cancels a retry that is waiting' },
+  { name: 'setup', args: '', desc: 'first-run check: is pi installed, is Strata reachable, which folder do new tabs start in' },
   { name: 'tree', args: '', desc: 'show the session tree: branches, abandoned branches, fork from an earlier prompt, clone the branch' },
   { name: 'jobs', args: '', desc: 'scheduled prompts: list, add, edit, run now (cron in the main process, prompts through the serial queue)' },
   { name: 'settings', args: '', desc: 'open the settings dialog (working folder, serial queue, Strata address, Monitor, paths)' },
@@ -4212,6 +4404,10 @@ async function runSlashCommand(tab, text) {
       clearComposer();
       return true;
     }
+    case 'setup':
+      clearComposer();
+      await openFirstRunWizard();
+      return true;
     case 'tree':
       clearComposer();
       await openSessionTree(activeTab());
@@ -5808,6 +6004,9 @@ function wireUi() {
   });
 
   // C9: the main process noticed the renderer died / hung / came back
+  api.on('first-run', () => {
+    openFirstRunWizard().catch((err) => console.error('[setup] wizard failed', err));
+  });
   api.on('recovery', (event) => {
     const info = event && typeof event === 'object' ? event : {};
     if (info.kind === 'recovered') toast(info.cause || 'The interface answered again', 'info', 8000);
@@ -5918,6 +6117,8 @@ async function init() {
   wireUi();
   observeDialogs(); // D3: every dialog becomes a real dialog without touching its creator
   refreshStorage().catch(() => {}); // D7: the footer shows the folder size once this lands
+  // the wizard is for a human first run; smoke scenarios open it explicitly when they want it
+  if (firstRunNeeded() && !(state.info && state.info.smoke)) openFirstRunWizard().catch((err) => console.error('[setup] first-run wizard failed', err));
   observeControlNames();
   wireDragAndDrop();
   wirePaste();
@@ -6032,6 +6233,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeExport) {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokeSetup) {
+    setTimeout(() => smokeSetupScenario().catch((err) => console.error('[smoke] setup scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeFork) {
@@ -6767,6 +6972,27 @@ async function smokeForkScenario() {
   await reopened;
   console.log(
     `[smoke-fork] rows_before=${rows.length} off_before=${offBefore} branch_heads=${heads} fork_button=${!!forkButton} confirm=${!!confirmButton} rows_after=${rows2.length} off_after=${offAfter} items_before=${itemsBefore} items_after=${tab.items.length} chip=${JSON.stringify(els.stats.querySelector('.stat-tree') ? els.stats.querySelector('.stat-tree').textContent : 'none')}`,
+  );
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_SETUP=1: C5. Opens the first-run wizard, reads what the two checks reported, and
+ * closes it through the primary button (which is what records firstRunSeen).
+ */
+async function smokeSetupScenario() {
+  await api.settingsSet({ firstRunSeen: false });
+  applySettings({ ...state.settings, firstRunSeen: false });
+  const opened = openFirstRunWizard();
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  const modal = els.modalRoot.querySelector('.setup-modal');
+  const statuses = modal ? [...modal.querySelectorAll('.setup-status')].map((node) => node.textContent.trim()) : [];
+  const classes = modal ? [...modal.querySelectorAll('.setup-status')].map((node) => node.className) : [];
+  const done = modal ? [...modal.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Start using it') : null;
+  if (done) done.click();
+  await opened;
+  const merged = await api.settingsGet();
+  console.log(
+    `[smoke-setup] modal=${!!modal} steps=${statuses.length} pi=${JSON.stringify((statuses[0] || '').slice(0, 60))} strata=${JSON.stringify((statuses[1] || '').slice(0, 70))} classes=${JSON.stringify(classes)} closed=${!els.modalRoot.querySelector('.setup-modal')} first_run_seen=${merged && merged.firstRunSeen}`,
   );
 }
 

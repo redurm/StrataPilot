@@ -92,6 +92,8 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   context fill and recent requests, without leaving the app
 - **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
   output, result, duration)
+- **First-run check** (`/setup`, Help ▸ First-run check): is pi installed, is Strata answering `/health`, and
+  which folder new tabs start in - with the install command to copy when pi is missing, and a re-check button
 - **Session tree and branching** (`/tree`): the whole entry tree, jump to any message, fork from an
   earlier prompt, or clone the branch into a new session - all through pi's own RPC
 - **`@` path completion** in the composer: type `@` and the session folder's contents appear; Enter inserts
@@ -299,6 +301,7 @@ passed to pi, which expands extension commands, prompt templates and `/skill:nam
 | `/settings` | open the Settings dialog (the topbar button or `Ctrl+,`) |
 | `/retry [on\|off\|stop]` | pi's retry of transient model errors: on/off for this session, `stop` cancels a retry sitting in its delay - see [Retry of transient model errors](#retry-of-transient-model-errors) |
 | `/jobs` | open the scheduled-prompts dialog - cron jobs, see [Scheduled prompts (cron)](#scheduled-prompts-cron) |
+| `/setup` | open the first-run check: is pi installed, is Strata reachable, which folder do new tabs start in |
 | `/tree` | show the session tree: the branch you are on, abandoned entries, fork from an earlier prompt, clone the branch |
 | `/stats` | print tokens / cost / context usage into the transcript |
 | `/monitor` | toggle the Strata monitor |
@@ -323,6 +326,21 @@ session's working folder**:
 | Not an attachment | the path is inserted as **text**; the model reads the file with its own tools. Drag & drop or **Attach files** is still what actually uploads content |
 
 ## Installation, configuration and first run
+
+### First-run check (the `/setup` command)
+
+On the first run - and any time you ask for it (**Help ▸ First-run check**, or `/setup`) - the app opens
+a check instead of making you guess:
+
+| Step | What it does |
+|---|---|
+| 1. pi CLI | reports the pi it resolved (`~/.pi/agent/install/current-version`, overridable with `PI_ON_STRATA_PI_CLI`), colour-coded against the version this GUI was tested with. If nothing was found it prints the install command with a copy button and a **re-check pi** button - no restart needed, and the app never installs anything for you |
+| 2. Strata server | an address field with a **check** button that calls `/health` and reports the HTTP status and the latency (it checks by itself when the dialog opens). **use this address** saves it as `strataUrl`, which is what the Monitor and the diagnostics report use. A failing check says to start the engine, change the address, or set `PI_ON_STRATA_KEY` if the server needs a key |
+| 3. working folder | the folder new tabs start in, with a folder picker; saving it writes the `cwd` setting |
+
+Closing the dialog (or pressing **Start using it**) records `firstRunSeen: true`, so it does not come
+back. Remove that key - or run `/setup` - to see it again.
+
 
 ### 1. Prerequisites
 
@@ -502,6 +520,7 @@ Open it with **`/tree`** or the **tree** chip in the stats row (it counts branch
 | **refresh** | re-reads the tree, useful right after a fork |
 
 Verified end to end with `PI_ON_STRATA_SMOKE_FORK=1` against a throwaway session: forking from the first
+| `PI_ON_STRATA_SMOKE_SETUP=1` | C5 first run: expect `modal=true steps=3 pi="pi 1.2.0 - the version this GUI was tested against…" strata="http://127.0.0.1:8081/health answered /health with HTTP 200 in 30ms" classes=["setup-status good","setup-status good","setup-status"] closed=true first_run_seen=true` |
 prompt leaves the transcript with that one message (`items_before=5 items_after=1`).
 
 > Forking is a pi operation, not a GUI edit: an extension can cancel it (`session_before_fork`) and the

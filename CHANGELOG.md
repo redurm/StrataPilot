@@ -7,6 +7,10 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **First-run check** - the first run opens a wizard (`/setup`, Help, First-run check): it reports the pi it
+  resolved (with the install command to copy and a re-check button when pi is missing), checks the Strata
+  address against `/health` with the latency, and lets you pick the folder new tabs start in. It records
+  `firstRunSeen` so it stays out of the way afterwards, and never installs anything by itself.
 - **Cross-platform CI (C7)** - a new `electron smoke` job installs the Electron binary and pi and starts a
   real window on Linux (under `xvfb-run`, must pass) and macOS (`continue-on-error`), asserting the window
   opened, the env bar reported, and no renderer error was logged. The `pi install smoke` job now runs on
