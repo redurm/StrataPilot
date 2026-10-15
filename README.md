@@ -536,7 +536,7 @@ Click **Storage** for the dialog.
 | Totals | per working-folder group: bytes, file count, newest and oldest session, biggest group first. Only `stat()` is called, so an 86 MB session costs the same as a 1 KB one |
 | Two rules | **age** (older than 30 / 90 / 180 / 365 days) and **a per-folder cap** (keep the 5 / 10 / 20 / 50 newest). Leave one empty and the other does all the work |
 | Always previewed | `Preview` lists how many files and how many bytes would go, with the reason per file; `Delete` then asks again before touching anything |
-| Safe by construction | the main process filters out every session a live pi process owns, so a session open in a tab can never be in the list; paths outside the sessions folder are refused by `assertInsideRoot`; deleting is permanent (no recycle bin) |
+| Safe by construction | the main process filters out every session a live pi process owns - including tabs that switched sessions with `switch_session`, which the background process is told about - so a session open in a tab can never be in the list; paths outside the sessions folder are refused by `assertInsideRoot`; deleting is permanent (no recycle bin) |
 | Cache | a bulk delete drops the session-metadata cache in one go, so the sidebar re-reads instead of showing ghosts |
 
 Code: `storageStats()`, `cleanupPlan()`, `deleteSessions()` in `lib/sessions.js` (unit-tested against a

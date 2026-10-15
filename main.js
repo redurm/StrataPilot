@@ -782,6 +782,16 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
     }
   });
 
+  // D7: the renderer switches sessions with the switch_session RPC, which the main process does not
+  // see - without this a tab that switched would keep the path it was spawned with, and a cleanup
+  // could delete the file its own process is writing to
+  ipcMain.handle('pi:session-path', (_event, { tabId, sessionPath } = {}) => {
+    const proc = processes.get(tabId);
+    if (!proc) return { ok: false, error: 'no process for that tab' };
+    proc.sessionPath = sessionPath || null;
+    return { ok: true };
+  });
+
   /* D7: session storage usage and bulk cleanup */
   ipcMain.handle('sessions:stats', () => {
     try {

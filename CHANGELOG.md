@@ -7,6 +7,7 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+
 - **Packaging** - `electron-builder` configuration (`npm run dist`, `dist:win`, `dist:mac`, `dist:linux`), an
   app icon (a π over three Strata layers, used by the window and the taskbar), and a `Release build`
   workflow that packages on all three platforms and then starts the packaged Windows build in smoke mode
@@ -114,6 +115,13 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   stored in the settings file and come back as a **pending** badge (plus a transcript note). They are
   never sent on their own: the modal offers `queue it` / `queue all` / `drop`. Images are only stored
   while the whole outbox stays under ~400 KB, otherwise they are dropped and the note says so.
+
+### Fixed
+
+- **A tab that switched sessions is protected from the storage cleanup** - `switch_session` is an RPC the
+  background process never sees, so the tab now reports its new session file (`pi:session-path`) and a
+  cleanup can no longer delete the file a live process is writing to. The same reporting happens after
+  a fork or clone, which may hand the process a different file.
 
 ### Changed
 

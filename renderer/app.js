@@ -2434,6 +2434,7 @@ async function switchCurrentTabTo(meta) {
   tab.currentRequest = null;
   tab.pendingQueued = [];
   tab.sessionPath = meta.path;
+  api.setSessionPath({ tabId: tab.id, sessionPath: meta.path }); // D7: the cleanup must know what this tab is writing to
   tab.ephemeral = false; // the tab now points at a real session file (queue badge)
   tab.name = meta.name || '';
   await bootstrap(tab);
@@ -2946,6 +2947,7 @@ async function openSessionTree(tab) {
           const state = await api.cmd(tab.id, 'get_state');
           if (state.success && state.data && state.data.sessionFile) {
             tab.sessionPath = state.data.sessionFile;
+            api.setSessionPath({ tabId: tab.id, sessionPath: state.data.sessionFile });
             scheduleSave();
           }
           finish();
@@ -2982,6 +2984,7 @@ async function openSessionTree(tab) {
       const state = await api.cmd(tab.id, 'get_state');
       if (state.success && state.data && state.data.sessionFile) {
         tab.sessionPath = state.data.sessionFile;
+            api.setSessionPath({ tabId: tab.id, sessionPath: state.data.sessionFile });
         scheduleSave();
       }
       await refreshSessions();
@@ -6839,7 +6842,8 @@ async function smokeStorageScenario() {
   const everything = await api.sessionsCleanupPlan({ olderThanDays: 0 });
   const tab = activeTab();
   const openPath = tab && tab.sessionPath ? tab.sessionPath : null;
-  const openListed = openPath ? everything.candidates.some((entry) => entry.path === openPath) : false;
+  const normalised = (value) => String(value || '').replace(/[\/]+/g, '\\').toLowerCase();
+  const openListed = openPath ? everything.candidates.some((entry) => normalised(entry.path) === normalised(openPath)) : false;
   const footer = els.sideFoot.textContent;
   const opened = openStorageModal();
   await new Promise((resolve) => setTimeout(resolve, 700));
