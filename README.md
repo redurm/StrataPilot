@@ -824,6 +824,44 @@ The app was built without any, so D3 added it centrally instead of touching ever
 in, `Tab` wrapping, `Esc` closing and focus coming back, then counts the buttons a screen reader would
 not name (`nameless_buttons=0`).
 
+## Linux and macOS
+
+The app is developed and hand-tested on Windows, so this is what is actually known, and how it is
+checked automatically (docs/TODO.md C7):
+
+| Platform | How it is verified | What that proves |
+|---|---|---|
+| Windows | hand-run smoke scenarios (`PI_ON_STRATA_SMOKE_*`) | everything below, plus the Strata Monitor, drag & drop and the tray-less menu |
+| Linux (`ubuntu-latest` in CI) | `unit tests` job, `pi install smoke` job, and an **`electron smoke`** job that installs the Electron binary, installs pi, and starts a real window under `xvfb-run` with no Strata server | the launcher resolves the managed pi install the same way, the main process spawns, the renderer boots without a single `renderer error`, and the env bar reports the pi it found |
+| macOS (`macos-latest` in CI) | same jobs; the `electron smoke` leg is `continue-on-error` because a GUI on a CI runner is flaky there | the launcher and the unit tests; the window start is best-effort - read the job log when someone says "it does not start on macOS" |
+
+What is portable by construction:
+
+- **Settings**: `app.getPath('userData')`, so `%APPDATA%\Pi on Strata\pi_on_strata_settings.json` on
+  Windows, `~/.config/Pi on Strata/pi_on_strata_settings.json` on Linux,
+  `~/Library/Application Support/Pi on Strata/pi_on_strata_settings.json` on macOS. The log files live
+  in `logs/` next to it, the diagnostics dumps in `diagnostics/`.
+- **Sessions**: `~/.pi/agent/sessions` on all three (`PI_CODING_AGENT_SESSION_DIR` overrides).
+- **pi resolution**: `~/.pi/agent/install/current-version` and the package's `bin` entry, then run that
+  JS file with `node` (or Electron as node when there is no node on PATH). No `.cmd`/`.exe` assumption
+  anywhere; `PI_ON_STRATA_PI_CLI` / `PI_ON_STRATA_NODE` override it on any platform.
+- **Menu**: the template has a `darwin` branch (app menu, `CmdOrCtrl` accelerators work on both).
+
+What is Windows-only:
+
+- `scripts/screenshot.ps1` and `scripts/crop.ps1` (dev helpers for these README screenshots) - the app
+  does not need them.
+- The `%APPDATA%` paths in the docs above: substitute the equivalent for your platform.
+
+Running it on Linux or macOS is the same two commands:
+
+```bash
+npm ci
+npm start          # or: PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=6000 npx electron .
+```
+
+On Linux, if Electron refuses to start in a container, add `--no-sandbox` (CI does exactly that).
+
 ## Architecture
 
 ```

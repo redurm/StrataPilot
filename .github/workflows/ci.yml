@@ -6,9 +6,12 @@ name: CI
 #     so they run on all three platforms, which is also the only cross-platform signal this repo
 #     has today (see docs/TODO.md C7: the app itself is developed and smoke-tested on Windows).
 #   * the smoke scenarios (PI_ON_STRATA_SMOKE_*) need a real pi install and a running Strata
-#     server, so they stay manual. `smoke-rpc.js` at least checks the pi install without a model.
-#   * the Electron binary is never downloaded: nothing in CI launches a window, and skipping it
-#     cuts minutes off every job.
+#     server, so the ones that talk to a model stay manual. `smoke-rpc.js` checks the pi install
+#     without a model, and the `electron smoke` job below starts a real window with no Strata
+#     server on Linux and macOS - that is this repo's only proof that the app itself runs
+#     outside Windows (docs/TODO.md C7).
+#   * the Electron binary is downloaded only by the `electron smoke` job; the other jobs skip it
+#     with ELECTRON_SKIP_BINARY_DOWNLOAD, which cuts minutes off every job.
 
 on:
   push:
@@ -57,8 +60,12 @@ jobs:
           done
 
   pi-install:
-    name: pi install smoke (no model needed)
-    runs-on: ubuntu-latest
+    name: pi install smoke (${{ matrix.os }}, no model needed)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -70,3 +77,51 @@ jobs:
           curl -fsSL https://pi.dev/install.sh | sh || echo "pi install failed: the job below reports what it found"
       - name: report what the launcher resolves
         run: node test/smoke-rpc.js "$GITHUB_WORKSPACE" || true
+
+  # C7: the app is developed on Windows, so the window itself is only ever seen on Windows. This
+  # job starts it for real on Linux and macOS with no Strata server: the point is not the features,
+  # it is that Electron opens, the main process spawns, the renderer boots without an error and the
+  # env bar reports the pi it found. The macOS leg is allowed to fail (headless GUI on a CI runner
+  # is flaky) but its log is the thing to read when someone reports "it does not start on macOS".
+  electron-smoke:
+    name: electron smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19'
+          cache: npm
+      - name: install the libraries Electron needs (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64 libxss1 libgbm1
+      - name: install pi
+        run: |
+          curl -fsSL https://pi.dev/install.sh | sh || echo "pi install failed on purpose: the app must still start and say pi ? in the env bar"
+      - name: npm ci (with the Electron binary)
+        run: npm ci
+      - name: start the app with no Strata server and no model
+        shell: bash
+        env:
+          PI_ON_STRATA_SMOKE: '1'
+          PI_ON_STRATA_SMOKE_MS: '6000'
+        run: |
+          set -e
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            xvfb-run -a npx electron . --no-sandbox > smoke.log 2>&1 || true
+          else
+            npx electron . > smoke.log 2>&1 || true
+          fi
+          cat smoke.log
+          grep -q "\[smoke\] window" smoke.log && echo "WINDOW_OK"
+          grep -q "\[smoke-env\]" smoke.log && echo "ENVBAR_OK"
+          grep -q "renderer error" smoke.log && { echo "RENDERER_ERROR"; exit 1; }
+          grep -q "WINDOW_OK" smoke.log && grep -q "ENVBAR_OK" smoke.log

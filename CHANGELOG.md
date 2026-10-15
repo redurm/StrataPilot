@@ -7,6 +7,11 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **Cross-platform CI (C7)** - a new `electron smoke` job installs the Electron binary and pi and starts a
+  real window on Linux (under `xvfb-run`, must pass) and macOS (`continue-on-error`), asserting the window
+  opened, the env bar reported, and no renderer error was logged. The `pi install smoke` job now runs on
+  both POSIX runners, and the README has a **Linux and macOS** section stating what is proven and what is
+  not.
 - **Session tree and branching** - the stats row gets a **tree** chip (and `/tree` works) opening the entry
   tree from pi's `get_tree`: the branch you are on highlighted, entries pi stopped following dimmed, branch
   and leaf markers. **jump** scrolls the transcript to an entry, **fork here** moves the session back to an
