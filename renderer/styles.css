@@ -14,6 +14,68 @@
   --amber: #e0b352;
   --mono: "Cascadia Code", "Consolas", "Menlo", monospace;
   --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  /* shades that used to be hardcoded in individual rules; a theme only has to redefine these */
+  --bg-deep: #11141b;
+  --bg-sunken: #141821;
+  --bg-raised: #232836;
+  --line-soft: #272d3b;
+  --line-faint: #202531;
+  --line-strong: #2c3342;
+  --accent-border: #2c5686;
+  --accent-deep: #24466f;
+  --accent-ink: #06121f;
+  --warn-border: #4a3c22;
+  --warn-border-2: #4a3d22;
+  --link: #7db8ff;
+  --link-2: #58a6ff;
+  --text-bright: #eaf3ff;
+  --grad-top: #1b2735;
+  --scrim: rgba(0, 0, 0, 0.55);
+  --shadow-strong: 0 18px 50px rgba(0, 0, 0, 0.5);
+  --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-soft: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --accent-wash: rgba(79, 156, 249, 0.12);
+}
+
+/*
+ * Light theme (D2). Everything above is expressed through the variables, so a theme is only a
+ * redefinition of them - no second stylesheet, no duplicated rules. Chosen with the Settings dialog
+ * (theme: dark | light | system) and applied as <html data-theme="..."> before the first paint.
+ */
+[data-theme="light"] {
+  --bg: #f4f6f9;
+  --bg-soft: #e9edf3;
+  --bg-panel: #ffffff;
+  --bg-hover: #e2e8f1;
+  --border: #c9d2df;
+  --text: #1b2330;
+  --text-dim: #4c5a6d;
+  --text-faint: #78849a;
+  --accent: #1f6feb;
+  --accent-soft: #d6e7fb;
+  --green: #14795a;
+  --red: #b02e2b;
+  --amber: #8f6410;
+  --bg-deep: #ffffff;
+  --bg-sunken: #eef1f6;
+  --bg-raised: #e5eaf2;
+  --line-soft: #dce2ec;
+  --line-faint: #e7ebf2;
+  --line-strong: #c3ccda;
+  --accent-border: #9dc4f2;
+  --accent-deep: #cfe3fb;
+  --accent-ink: #ffffff;
+  --warn-border: #e0c48c;
+  --warn-border-2: #e5d0a1;
+  --link: #1461c9;
+  --link-2: #0b5cad;
+  --text-bright: #0b1220;
+  --grad-top: #e7f0fb;
+  --scrim: rgba(24, 32, 44, 0.42);
+  --shadow-strong: 0 18px 50px rgba(31, 41, 55, 0.22);
+  --shadow-mid: 0 8px 24px rgba(31, 41, 55, 0.16);
+  --shadow-soft: 0 6px 18px rgba(31, 41, 55, 0.14);
+  --accent-wash: rgba(31, 111, 235, 0.1);
 }
 
 * {
@@ -374,7 +436,7 @@ textarea {
 }
 .qbadge.unsaved {
   color: var(--amber);
-  border-color: #4a3c22;
+  border-color: var(--warn-border);
   border-style: dashed;
 }
 .qbadge.ephemeral {
@@ -596,8 +658,8 @@ textarea {
   min-width: 0;
 }
 .now-bar.busy {
-  background: linear-gradient(180deg, #1b2735, var(--bg-panel));
-  border-bottom-color: #2c5686;
+  background: linear-gradient(180deg, var(--grad-top), var(--bg-panel));
+  border-bottom-color: var(--accent-border);
 }
 .now-bar .nb-state {
   flex: none;
@@ -613,7 +675,7 @@ textarea {
 }
 .now-bar .nb-state.busy {
   color: var(--accent);
-  border-color: #2c5686;
+  border-color: var(--accent-border);
   background: var(--accent-soft);
 }
 .now-bar .nb-src {
@@ -627,7 +689,7 @@ textarea {
 .now-bar .nb-src.steer,
 .now-bar .nb-src.follow_up {
   color: var(--amber);
-  border-color: #4a3d22;
+  border-color: var(--warn-border-2);
 }
 .now-bar .nb-text {
   flex: 1 1 auto;
@@ -703,7 +765,7 @@ textarea {
 }
 .msg-user .msg-body {
   background: var(--accent-soft);
-  border: 1px solid #2c5686;
+  border: 1px solid var(--accent-border);
   border-radius: 8px;
   padding: 8px 10px;
   white-space: pre-wrap;
@@ -749,7 +811,7 @@ table.md-table {
 table.md-table th,
 table.md-table td {
   border-bottom: 1px solid var(--border);
-  border-right: 1px solid #272d3b;
+  border-right: 1px solid var(--line-soft);
   padding: 5px 9px;
   text-align: left;
   vertical-align: top;
@@ -768,7 +830,7 @@ table.md-table tbody tr:last-child td {
   border-bottom: none;
 }
 table.md-table tbody tr:nth-child(even) {
-  background: #141821;
+  background: var(--bg-sunken);
 }
 table.md-table th.al-left,
 table.md-table td.al-left {
@@ -783,14 +845,14 @@ table.md-table td.al-right {
   text-align: right;
 }
 .msg-body code.inline {
-  background: #232836;
+  background: var(--bg-raised);
   padding: 1px 4px;
   border-radius: 3px;
   font-family: var(--mono);
   font-size: 12.5px;
 }
 .msg-body pre.code {
-  background: #11141b;
+  background: var(--bg-deep);
   border: 1px solid var(--border);
   border-radius: 6px;
   margin: 0 0 10px;
@@ -809,7 +871,7 @@ table.md-table td.al-right {
   justify-content: space-between;
   align-items: center;
   padding: 3px 8px;
-  background: #1a1e27;
+  background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   font-size: 11px;
   color: var(--text-faint);
@@ -1050,7 +1112,7 @@ details.thinking pre {
   gap: 7px;
   align-items: baseline;
   padding: 2px 6px;
-  border-left: 2px solid #4a3d22;
+  border-left: 2px solid var(--warn-border-2);
   background: var(--bg-panel);
   border-radius: 0 5px 5px 0;
   min-width: 0;
@@ -1254,7 +1316,7 @@ details.thinking pre {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-soft);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-soft);
   max-height: 264px;
   overflow-y: auto;
   margin-bottom: 6px;
@@ -1318,7 +1380,7 @@ a:hover {
 details.thinking pre a,
 .note a,
 .msg-user .msg-body a {
-  color: #7db8ff;
+  color: var(--link);
   text-decoration: underline;
   word-break: break-all;
 }
@@ -1328,7 +1390,7 @@ button:hover {
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #06121f;
+  color: var(--accent-ink);
   font-weight: 600;
 }
 button.primary:hover {
@@ -1346,11 +1408,11 @@ button.ghost {
 button.monitor-on {
   background: var(--accent-soft);
   border-color: var(--accent);
-  color: #eaf3ff;
+  color: var(--text-bright);
   font-weight: 600;
 }
 button.monitor-on:hover {
-  background: #24466f;
+  background: var(--accent-deep);
 }
 button:disabled {
   opacity: 0.45;
@@ -1361,7 +1423,7 @@ button:disabled {
 .drop-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(79, 156, 249, 0.12);
+  background: var(--accent-wash);
   border: 3px dashed var(--accent);
   color: var(--accent);
   display: flex;
@@ -1377,7 +1439,7 @@ button:disabled {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1391,7 +1453,7 @@ button:disabled {
   width: min(560px, 92vw);
   display: grid;
   gap: 10px;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-strong);
 }
 .modal h3 {
   margin: 0;
@@ -1563,7 +1625,7 @@ button:disabled {
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 12.5px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-mid);
 }
 .toast.warning {
   border-left-color: var(--amber);
@@ -1709,7 +1771,7 @@ button:disabled {
 .mon-progress {
   height: 5px;
   border-radius: 3px;
-  background: #232836;
+  background: var(--bg-raised);
   margin-top: 8px;
   overflow: hidden;
 }
@@ -1783,13 +1845,13 @@ button:disabled {
   display: block;
 }
 .spark[data-tone="blue"] {
-  color: #58a6ff;
+  color: var(--link-2);
 }
 .spark[data-tone="amber"] {
   color: var(--amber);
 }
 .spark .pair2 {
-  color: #58a6ff;
+  color: var(--link-2);
 }
 .mon-lower {
   display: grid;
@@ -1814,7 +1876,7 @@ button:disabled {
 }
 .ring-bg {
   fill: none;
-  stroke: #232836;
+  stroke: var(--bg-raised);
   stroke-width: 9;
 }
 .ring-fill {
@@ -1871,7 +1933,7 @@ button:disabled {
 .bar {
   height: 5px;
   border-radius: 3px;
-  background: #232836;
+  background: var(--bg-raised);
   overflow: hidden;
 }
 .bar-fill {
@@ -1912,7 +1974,7 @@ button:disabled {
 }
 .req-table td {
   padding: 4px 6px;
-  border-bottom: 1px solid #202531;
+  border-bottom: 1px solid var(--line-faint);
   color: var(--text-dim);
   white-space: nowrap;
 }
@@ -2008,7 +2070,7 @@ button:disabled {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2c3342;
+  background: var(--line-strong);
   border-radius: 6px;
 }
 ::-webkit-scrollbar-track {

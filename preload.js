@@ -26,6 +26,7 @@ const api = {
   /* filesystem -------------------------------------------------------- */
   chooseFolder: () => ipcRenderer.invoke('fs:choose-folder'),
   chooseFile: (payload = {}) => ipcRenderer.invoke('fs:choose-file', payload),
+  smokeShot: (name) => ipcRenderer.invoke('app:smoke-shot', { name }),
   saveFile: (payload = {}) => ipcRenderer.invoke('fs:save-file', payload),
   statPaths: (paths) => ipcRenderer.invoke('fs:stat-paths', { paths }),
   readText: (filePath, maxBytes) => ipcRenderer.invoke('fs:read-text', { filePath, maxBytes }),

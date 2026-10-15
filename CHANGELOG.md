@@ -7,6 +7,13 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 ## [Unreleased]
 
 ### Added
+- **Light theme** - Settings, Theme: `Dark` (default), `Light`, or follow the system theme. Every
+  colour in `styles.css` now goes through a variable, so the light theme is one variable block
+  (`[data-theme="light"]`) rather than a second stylesheet, and `renderer/theme-boot.js` mirrors the
+  last theme in `localStorage` so a light start does not flash dark. `PI_ON_STRATA_SMOKE_THEME=1`
+  checks the computed colours and writes a screenshot of each theme.
+- **Smoke-only screenshot hook** (`app:smoke-shot`, registered only when `PI_ON_STRATA_SMOKE` is set)
+  so a scenario can prove what the interface actually looks like.
 - **Tab strip shows the model** each tab is on (plus the thinking level when it is not the default),
   next to the queue position and outbox count.
 - **Restart button** for a tab whose pi process died - the draft in the editor survives, instead of

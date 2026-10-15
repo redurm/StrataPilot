@@ -187,6 +187,8 @@ const state = {
   info: null,
   settings: {},
   tabs: new Map(),
+  theme: 'dark',
+  themeMode: 'dark',
   order: [],
   activeId: null,
   cwd: '',
@@ -2578,6 +2580,24 @@ function openModal(options) {
 /* ------------------------------------------------------------------ */
 
 /**
+ * D2: dark is the default (the app grew that way); light is a redefinition of the CSS variables, so
+ * no rule is duplicated. "system" follows prefers-color-scheme and keeps following it while running.
+ */
+function applyTheme(theme) {
+  const wanted = theme === 'light' || theme === 'dark' ? theme : 'system';
+  const media = window.matchMedia('(prefers-color-scheme: light)');
+  const resolved = wanted === 'system' ? (media.matches ? 'light' : 'dark') : wanted;
+  document.documentElement.dataset.theme = resolved;
+  state.theme = resolved;
+  state.themeMode = wanted;
+  try {
+    localStorage.setItem('pi_on_strata_theme', resolved); // read by theme-boot.js on the next start
+  } catch {
+    // the mirror is a nicety: without it the app simply starts dark and corrects itself
+  }
+}
+
+/**
  * Everything that used to need a hand edit of
  * `%APPDATA%\Pi on Strata\pi_on_strata_settings.json`. The keys are the same ones the app
  * already reads (cwd / serialQueue / strataUrl / monitorOpen / monitorWidth / sidebarHidden),
@@ -2697,6 +2717,11 @@ function openSettingsModal() {
     checkRow('monitorOpen', 'Open the Strata Monitor at startup', '', { defaultTrue: true });
     textRow('monitorWidth', 'Monitor panel width (px)', '340 \u2013 900; you can also drag the divider in the Monitor', { number: true, min: 340, max: 900 });
     checkRow('sidebarHidden', 'Start with the sidebar hidden', '');
+    selectRow('theme', 'Theme', [
+      { value: 'dark', label: 'Dark (default)' },
+      { value: 'light', label: 'Light' },
+      { value: 'system', label: 'Follow the system theme' },
+    ], 'applies as soon as you save; only the colours change, nothing is written anywhere else', { theme: 'dark' });
 
     group('Files')
     ;
@@ -2802,6 +2827,7 @@ function openSettingsModal() {
 function applySettings(settings) {
   state.settings = settings || state.settings || {};
   const s = state.settings;
+  applyTheme(s.theme);
   if (s.cwd && s.cwd !== state.cwd) state.cwd = s.cwd;
   scheduler.enabled = s.serialQueue !== false;
   els.serialToggle.checked = scheduler.enabled;
@@ -5024,6 +5050,14 @@ async function init() {
   state.info = await api.info();
   state.settings = (await api.settingsGet()) || {};
   state.cwd = state.settings.cwd && state.settings.cwd !== '' ? state.settings.cwd : state.info.defaultCwd;
+  applyTheme(state.settings.theme);
+  try {
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+      if (state.themeMode === 'system') applyTheme('system');
+    });
+  } catch {
+    // older Electron builds without addEventListener on MediaQueryList: the theme simply stays put
+  }
   scheduler.enabled = state.settings.serialQueue !== false;
   els.serialToggle.checked = scheduler.enabled;
   if (state.settings.sidebarHidden) els.body.classList.add('sidebar-hidden');
@@ -5148,6 +5182,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeExport) {
     setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
+  }
+
+  if (state.info.smoke && state.info.smokeTheme) {
+    setTimeout(() => smokeThemeScenario().catch((err) => console.error('[smoke] theme scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeTabTag) {
@@ -5639,6 +5677,36 @@ async function smokeTabTagScenario() {
   console.log(
     `[smoke-tabtag] model_tag=${tag ? tag.textContent : 'none'} tag_title=${tag ? JSON.stringify(String(tag.title).split('\n')[0]) : 'none'} shown_when_alive=${before} shown_when_dead=${shown} hidden_when_alive_again=${hidden}`,
   );
+}
+
+/**
+ * PI_ON_STRATA_SMOKE_THEME=1: D2. Switches to the light theme, prints the computed colours (a theme
+ * that only changed a class would leave the body background dark), screenshots both themes, and
+ * switches back.
+ */
+async function smokeThemeScenario() {
+  const read = () => {
+    const body = getComputedStyle(document.body);
+    const panel = getComputedStyle(document.querySelector('.transcript'));
+    const btn = getComputedStyle(els.btnSend);
+    return `html=${document.documentElement.dataset.theme} body=${body.backgroundColor}/${body.color} panel=${panel.backgroundColor} send=${btn.backgroundColor}/${btn.color}`;
+  };
+  const dark = read();
+  applyTheme('light');
+  renderTabs();
+  renderOpenSessions();
+  renderAll(activeTab());
+  const light = read();
+  console.log(`[smoke-theme] dark: ${dark}`);
+  console.log(`[smoke-theme] light: ${light}`);
+  console.log(`[smoke-theme] changed=${dark !== light} mode=${state.themeMode}`);
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))); // capturePage() paints the previous frame
+  const lightShot = await api.smokeShot('light-theme');
+  applyTheme('dark');
+  renderAll(activeTab());
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))); // capturePage() paints the previous frame
+  const darkShot = await api.smokeShot('dark-theme');
+  console.log(`[smoke-theme] shots light=${lightShot.ok ? lightShot.file : lightShot.error} dark=${darkShot.ok ? darkShot.file : darkShot.error}`);
 }
 
 // PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.

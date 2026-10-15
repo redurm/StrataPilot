@@ -92,6 +92,9 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   context fill and recent requests, without leaving the app
 - **Streaming output**: assistant text / thinking (collapsible) / tool call cards (args, live partial
   output, result, duration)
+- **Dark and light theme**: pick it in Settings (or let it follow the system); colours are CSS
+  variables, so a theme is one variable block, and the last theme is mirrored in `localStorage` so a
+  light-theme start does not flash dark first
 - **Tab strip carries more**: each tab shows which **model** it is on (plus the thinking level when it
   is not the default), its queue position and its outbox count; hovering the model tag shows the full
   `provider/id` and the server address
@@ -450,9 +453,22 @@ the file still works — press `Ctrl+R` to reload, or reopen the Settings dialog
 | `sidebarHidden` / `monitorOpen` / `monitorWidth` | Sidebar, Monitor panel state and width |
 | `strataUrl` | Fixed Strata address for the Monitor (e.g. `http://127.0.0.1:8081/v1`); if absent it is derived from the current tab's `model.baseUrl` |
 | `jobs[]` | Scheduled prompts (B5): `{ id, name, schedule, prompt, target, cwd, ephemeral, enabled, lastRun, nextRun }` - edited in the Jobs dialog rather than by hand |
+| `theme` | `dark` (default), `light` or `system` - see [Theme (dark / light)](#theme-dark--light) |
 | `strataConfigPath` | Optional path of the Strata engine config (`C:\Strata\strata-src\strata-<model>.json`): only used to include that file, keys redacted, in the diagnostics report |
 
 The old `pi-gui` settings file is migrated automatically on first launch (see the note at the top).
+
+## Theme (dark / light)
+
+Pick it in **Settings ▸ Interface ▸ Theme**: `Dark` (the default), `Light`, or `Follow the system
+theme` (keeps following `prefers-color-scheme` while the app runs).
+
+| Thing | How |
+|---|---|
+| Storage | the `theme` key in the settings file - nothing else is touched |
+| Implementation | every colour in `styles.css` goes through a CSS variable, so a theme is only a redefinition of those variables (`[data-theme="light"]`); there is no second stylesheet and no duplicated rule |
+| No flash on start | the last applied theme is mirrored in `localStorage` and read by `renderer/theme-boot.js` before the first paint; the real setting (including `system`) is applied a moment later from the settings file |
+| Screenshots | `PI_ON_STRATA_SMOKE_THEME=1` switches theme, prints the computed colours and writes both screenshots to the temp folder (see the smoke table) |
 
 ## Scheduled prompts (cron)
 
@@ -772,6 +788,7 @@ Other smoke switches:
 | `PI_ON_STRATA_SMOKE_OUTBOX=1` | B4: packs an outbox entry (an oversized image is dropped instead of bloating the settings file), restores it and checks nothing was sent: expect `packed=2 images_dropped=1 restored=2 pending=2 badge=pending 2 outbox=0 auto_sent=false` |
 | `PI_ON_STRATA_SMOKE_CRON=1` | B5: saves a job through the main process, reads it back with a computed `nextRun`, previews `30 9 * * 1-5`, rejects `nope`, then run-now: expect `saved=true jobs=1 nextRun=set preview="every weekday, at 09:30" has_next=true invalid_rejected=true new_tab=true queued=true outbox_badges=1`. The serial queue is off inside the scenario, so the prompt never reaches the model |
 | `PI_ON_STRATA_SMOKE_TABTAG=1` | D5/D8: expect `model_tag=qwen3.8-flash-n… tag_title="strata/qwen3.8-flash-next-iq3_s" shown_when_alive=false shown_when_dead=true hidden_when_alive_again=true` |
+| `PI_ON_STRATA_SMOKE_THEME=1` | D2: expect `changed=true` plus the computed colours of both themes (`dark: body=rgb(15, 17, 21)/rgb(223, 227, 234)`, `light: body=rgb(244, 246, 249)/rgb(27, 35, 48)`) and two screenshots in the temp folder: `pi-on-strata-smoke-light-theme.png`, `pi-on-strata-smoke-dark-theme.png` |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII

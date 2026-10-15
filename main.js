@@ -612,6 +612,7 @@ function registerIpc() {
       smokeOutbox: !!process.env.PI_ON_STRATA_SMOKE_OUTBOX,
       smokeCron: !!process.env.PI_ON_STRATA_SMOKE_CRON,
       smokeTabTag: !!process.env.PI_ON_STRATA_SMOKE_TABTAG,
+      smokeTheme: !!process.env.PI_ON_STRATA_SMOKE_THEME,
     };
   });
 
@@ -648,7 +649,26 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(payload && typeof payload === 'object' ? payload : {}));
+  // Smoke-only: lets a scenario take a screenshot (theme checks, layout checks). Never registered
+// outside smoke mode.
+if (process.env.PI_ON_STRATA_SMOKE) {
+  ipcMain.handle('app:smoke-shot', async (event, payload) => {
+    const win = BrowserWindow.fromWebContents(event.sender) || win();
+    const name = String((payload && payload.name) || 'shot').replace(/[^a-z0-9_-]/gi, '');
+    try {
+      const image = await win.webContents.capturePage();
+      const file = path.join(os.tmpdir(), `pi-on-strata-smoke-${name}.png`);
+      fs.writeFileSync(file, image.toPNG());
+      console.log(`[smoke-shot] wrote ${file} bounds=${JSON.stringify(win.getContentBounds())}`);
+      return { ok: true, file };
+    } catch (err) {
+      console.error(`[smoke-shot] failed: ${err.stack || err}`);
+      return { ok: false, error: err.message };
+    }
+  });
+}
+
+ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(payload && typeof payload === 'object' ? payload : {}));
 
   ipcMain.handle('app:settings-get', () => loadSettings());
   ipcMain.handle('app:settings-set', (_event, patch) => {
