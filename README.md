@@ -61,12 +61,17 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
 
 - **New session**: `Ctrl+T` opens a new tab (choose working folder, session name, and whether it is
   ephemeral / not saved); `Ctrl+Shift+N` resets the current tab in place via RPC `new_session`.
-- **Session switcher**: the sidebar lists the sessions under `~/.pi/agent/sessions/` (searchable,
-  scoped to "this folder" or "all projects").
+- **Session switcher**: the sidebar lists every saved session under `~/.pi/agent/sessions/` at once
+  (all projects, no scope to switch). Each row shows the **working folder** it was started in — the
+  folder name is highlighted when it matches the active tab, and clicking the path opens that folder in
+  the OS file manager. `Search…` matches titles, message text and folder paths.
   - Click a row → open it in a new tab (`pi --session <path>`)
   - `this tab` → load it into the current tab via RPC `switch_session`
   - `name` / `del` → rename (appends a `session_info` entry) / delete the file
   - Tab strip: double-click a tab or press `F2` to name the session
+- **Working folder always visible**: the composer carries a `folder` chip with the active session's
+  working folder (click to open it in the OS file manager); queue rows show each open tab's folder name,
+  and Session files rows show the folder every saved session was started in
 - **Drag & drop files**: drop a file or folder anywhere on the window → it becomes an attachment chip
   - Images (png/jpg/gif/webp, ≤8 MB) → sent as RPC `images` (base64)
   - Anything else → a list of **absolute paths** is inserted, and pi reads them with the `read` tool
@@ -123,8 +128,8 @@ Display rules:
   file only after the first message) or **`ephemeral`** (chosen when opening the tab; it will never
   appear in Session files)
 - **Only in the bottom list**: past sessions not open in any tab
-- **There but hidden**: Session files is filtered by `Search…` and by `this folder` / `all projects`
-  (this only affects that list, never the queue), and shows only the 400 most recent entries
+- **There but hidden**: `Search…` filters Session files (this only affects that list, never the queue),
+  and shows only the 400 most recent entries
 - Also: `this tab` (`switch_session`) or `Ctrl+Shift+N` repoints the tab at **another** session file,
   while the old file stays in Session files — hence the "it was there a second ago, now it's not in
   the queue" case
@@ -357,7 +362,7 @@ edit it — `strataUrl` is the one worth adding by hand):
 | Key | Meaning |
 |---|---|
 | `windowBounds` | Window size / position |
-| `cwd` / `scope` | Default working folder for new tabs, and session search scope (`project` / `all`) |
+| `cwd` | Default working folder for new tabs |
 | `openTabs` | Tabs to restore (session paths), up to 4 |
 | `serialQueue` | Serial queue on/off |
 | `sidebarHidden` / `monitorOpen` / `monitorWidth` | Sidebar, Monitor panel state and width |

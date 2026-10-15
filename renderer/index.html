@@ -37,14 +37,10 @@
           </div>
 
           <div class="list-head">
-            <span>Session files</span>
+            <span>Session files <span class="scope-tag" title="No folder filter: sessions of every project are listed, each row showing its working folder">all</span></span>
             <input id="search" placeholder="Search&hellip;" />
           </div>
-          <div class="side-row scope-row">
-            <label><input type="radio" name="scope" value="project" checked /> this folder</label>
-            <label><input type="radio" name="scope" value="all" /> all projects</label>
-          </div>
-          <div class="list-hint" id="listHint">Saved sessions on disk. Ones already open above show <b>open #n</b>; a tab with no file yet shows <b>unsaved</b>. Search and the scope radios filter this list only.</div>
+          <div class="list-hint" id="listHint">Saved sessions on disk, from every working folder &mdash; each row shows the folder it was started in. Ones already open above show <b>open #n</b>; a tab with no file yet shows <b>unsaved</b>. Search (titles, messages, folder paths) filters this list only.</div>
           <div class="session-list" id="sessionList"></div>
           <div class="side-foot" id="sideFoot"></div>
         </aside>
@@ -62,6 +58,7 @@
                 <option value="steer">when busy: steer</option>
                 <option value="followUp">when busy: follow-up</option>
               </select>
+              <div class="cwd-chip hidden" id="cwdChip"></div>
               <div class="stats" id="stats"></div>
             </div>
             <div class="attachments" id="attachments"></div>

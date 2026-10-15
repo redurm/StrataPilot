@@ -19,6 +19,7 @@ const els = {
   thinkingSel: $('thinkingSel'),
   busySel: $('busySel'),
   stats: $('stats'),
+  cwdChip: $('cwdChip'),
   queueBar: $('queueBar'),
   nowBar: $('nowBar'),
   btnSend: $('btnSend'),
@@ -99,6 +100,37 @@ function samePath(a, b) {
   return norm(a) === norm(b);
 }
 
+/**
+ * Split a path so the folder name (the tail) survives truncation: the head shrinks
+ * with an ellipsis, the leaf never does. Long Windows paths otherwise all look alike.
+ */
+function pathParts(value) {
+  const text = String(value || '').replace(/\\/g, '/');
+  const trimmed = text.replace(/\/+$/, '');
+  const cut = trimmed.lastIndexOf('/');
+  if (cut <= 0) return { head: trimmed, leaf: '' };
+  return { head: trimmed.slice(0, cut + 1), leaf: trimmed.slice(cut + 1) };
+}
+
+function appendPath(node, value) {
+  const { head, leaf } = pathParts(value);
+  const wrap = el('span', 'path-parts');
+  if (head) wrap.appendChild(el('span', 'path-head', head));
+  wrap.appendChild(el('span', 'path-leaf', leaf || head || '/'));
+  node.appendChild(wrap);
+}
+
+/** Open a session's working folder in the OS file manager (session files may record a path
+ *  that no longer exists, so report failures instead of failing silently). */
+async function openFolder(folder) {
+  if (!folder) {
+    toast('no working folder recorded', 'warning');
+    return;
+  }
+  const res = await api.openPath(folder, false);
+  if (res && !res.ok) toast(`${folder}: ${res.error || 'could not open folder'}`, 'error');
+}
+
 function truncate(text, limit = 8000) {
   if (!text) return '';
   return text.length > limit ? `${text.slice(0, limit)}\n… (${text.length - limit} more chars)` : text;
@@ -141,7 +173,6 @@ const state = {
   order: [],
   activeId: null,
   cwd: '',
-  scope: 'project',
   query: '',
   sessions: [],
   dragDepth: 0,
@@ -1375,6 +1406,23 @@ function renderComposerState() {
   } else {
     els.input.placeholder = 'Enter = send · Shift+Enter = newline · !cmd = run bash · / = commands · drop files to attach';
   }
+  renderCwdChip(tab);
+}
+
+/** Working folder of the visible session. The sidebar now lists every project, so the chat
+ *  pane has to say which folder this conversation runs in; clicking the chip opens it. */
+function renderCwdChip(tab) {
+  const chip = els.cwdChip;
+  if (!chip) return;
+  chip.textContent = '';
+  if (!tab || !tab.cwd) {
+    chip.classList.add('hidden');
+    return;
+  }
+  chip.classList.remove('hidden');
+  chip.appendChild(el('span', 'cwd-label', 'folder'));
+  appendPath(chip, tab.cwd);
+  chip.title = `${tab.cwd}\n${tab.sessionPath || 'unsaved session'}\nclick to open this folder`;
 }
 
 function renderAttachments() {
@@ -1565,6 +1613,12 @@ function queueRow(tab, position) {
   row.title = `${tab.cwd}\n${tab.sessionPath || 'unsaved session'}`;
   row.appendChild(el('span', 'qdot'));
   row.appendChild(el('span', 'qtitle', tabLabel(tab)));
+  const leaf = pathParts(tab.cwd).leaf;
+  if (leaf) {
+    const qcwd = el('span', 'qcwd', leaf);
+    qcwd.title = tab.cwd;
+    row.appendChild(qcwd);
+  }
   if (position) row.appendChild(el('span', 'qpos', `#${position}`));
   if (!tab.sessionPath) {
     const badge = el('span', `qbadge ${tab.ephemeral ? 'ephemeral' : 'unsaved'}`, tab.ephemeral ? 'ephemeral' : 'unsaved');
@@ -1872,6 +1926,14 @@ function markCurrentSession() {
       if (tab && tab.sessionPath && samePath(tab.sessionPath, node.dataset.path)) matches.push(index + 1);
     });
     node.classList.toggle('current', !!(active && active.sessionPath && samePath(active.sessionPath, node.dataset.path)));
+    const here = !!(active && active.cwd && samePath(active.cwd, node.dataset.cwd));
+    node.classList.toggle('here', here);
+    const cwdNode = node.querySelector('.session-cwd');
+    if (cwdNode && node.dataset.cwd) {
+      cwdNode.title = here
+        ? `${node.dataset.cwd}\nthe active tab runs in this folder \u00b7 click to open`
+        : `${node.dataset.cwd}\nclick to open this folder`;
+    }
     node.classList.toggle('is-open', matches.length > 0);
     let badge = node.querySelector('.open-badge');
     if (matches.length) {
@@ -1894,7 +1956,7 @@ function refreshSessionsSoon(delay = 1200) {
 }
 
 async function refreshSessions() {
-  const res = await api.sessionsList({ cwd: state.cwd, scope: state.scope, query: state.query, limit: 400 });
+  const res = await api.sessionsList({ query: state.query, limit: 400 });
   if (!res.ok) {
     els.sessionList.textContent = '';
     els.sessionList.appendChild(el('div', 'note error', res.error || 'failed to list sessions'));
@@ -1912,7 +1974,16 @@ async function refreshSessions() {
   for (const meta of res.sessions) {
     const item = el('div', 'session-item');
     item.dataset.path = meta.path;
+    item.dataset.cwd = meta.cwd || '';
     item.appendChild(el('div', 'session-title', meta.title || meta.fileName));
+    const cwdRow = el('div', 'session-cwd');
+    appendPath(cwdRow, meta.cwd);
+    cwdRow.title = meta.cwd ? `${meta.cwd}\nClick to open this folder` : 'no working folder recorded in this session file';
+    cwdRow.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      await openFolder(meta.cwd);
+    });
+    item.appendChild(cwdRow);
     const snippet = el('div', 'session-snippet', meta.lastAssistantText || meta.lastUserText || '');
     item.appendChild(snippet);
     const metaRow = el('div', 'session-meta');
@@ -3295,7 +3366,7 @@ function scheduleSave() {
     const openTabs = [...state.tabs.values()]
       .filter((tab) => tab.sessionPath && !tab.ephemeral)
       .map((tab) => ({ cwd: tab.cwd, sessionPath: tab.sessionPath, name: tab.name }));
-    api.settingsSet({ cwd: state.cwd, openTabs, scope: state.scope, serialQueue: scheduler.enabled });
+    api.settingsSet({ cwd: state.cwd, openTabs, serialQueue: scheduler.enabled });
   }, 800);
 }
 
@@ -3389,11 +3460,10 @@ function wireUi() {
     state.query = els.search.value;
     refreshSessions();
   });
-  for (const radio of document.querySelectorAll('input[name=scope]')) {
-    radio.addEventListener('change', () => {
-      state.scope = radio.value;
-      refreshSessions();
-      scheduleSave();
+  if (els.cwdChip) {
+    els.cwdChip.addEventListener('click', () => {
+      const tab = activeTab();
+      openFolder(tab && tab.cwd);
     });
   }
 
@@ -3577,10 +3647,8 @@ async function init() {
   state.info = await api.info();
   state.settings = (await api.settingsGet()) || {};
   state.cwd = state.settings.cwd && state.settings.cwd !== '' ? state.settings.cwd : state.info.defaultCwd;
-  state.scope = state.settings.scope || 'project';
   scheduler.enabled = state.settings.serialQueue !== false;
   els.serialToggle.checked = scheduler.enabled;
-  document.querySelectorAll('input[name=scope]').forEach((radio) => (radio.checked = radio.value === state.scope));
   if (state.settings.sidebarHidden) els.body.classList.add('sidebar-hidden');
 
   els.envInfo.textContent = `pi ${state.info.piVersion || '?'} · electron ${state.info.electronVersion} · ${state.info.sessionsRoot}`;

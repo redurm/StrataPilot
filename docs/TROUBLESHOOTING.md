@@ -32,10 +32,10 @@ parent [`README.md`](../README.md).
 |---|---|
 | The session you just opened is not in `SESSION FILES` | pi creates the file only after the **first message** (the queue row shows `unsaved`); if you chose not to save when opening the tab it never appears (`ephemeral`) |
 | "It was there a moment ago, now it is not in the queue" | You used `this tab` (`switch_session`) or `Ctrl+Shift+N`, so the tab now points at a different session file; the old file is still in `SESSION FILES` |
-| Many rows missing from the list | `Search…` and `this folder` / `all projects` filter it, and only the 400 most recent entries are listed |
+| Many rows missing from the list | `Search…` filters it, and only the 400 most recent entries are listed |
 | Tabs were not restored after a restart | `openTabs` keeps at most 4 entries and only ones with a `sessionPath` (unsaved / ephemeral tabs are not restored) |
-| Sessions of another folder are not visible | The tab's `cwd` defines the "this folder" scope; pick the right working folder in `Ctrl+T`, or switch to `all projects` |
-| Session file came from another machine / path | Session JSONL records the `cwd` it was created with, so a different path will not match "this folder"; search under `all projects`, or rewrite the cwd in the file |
+| Sessions of another folder are not visible | They are listed — Session files always shows **all projects**; each row prints its working folder (the folder name is highlighted when it matches the active tab), and `Search…` matches folder paths |
+| Session file came from another machine / path | The JSONL records the `cwd` it was created with, so the row may print a path that does not exist here; opening such a session falls back to the default working folder and says so in the chat (`cwd` note) |
 
 ## Serial queue
 
