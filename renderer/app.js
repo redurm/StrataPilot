@@ -1781,7 +1781,7 @@ function isWorking(tab) {
   return !!tab.isStreaming || !!tab.compacting || tab.outbox.length > 0 || scheduler.runningTabId === tab.id;
 }
 
-function queueRow(tab, position) {
+function queueRow(tab, position, workingCount) {
   const running = !!tab.isStreaming || scheduler.runningTabId === tab.id;
   const queued = !running && tab.outbox.length > 0;
   const classes = ['qrow', running ? 'running' : queued ? 'queued' : 'idle'];
@@ -1791,7 +1791,7 @@ function queueRow(tab, position) {
   // D4: the queue is keyboard-reachable and reorderable, not mouse-drag only
   row.tabIndex = 0;
   row.setAttribute('role', 'button');
-  row.setAttribute('aria-label', describeQueueRow(tab, position));
+  row.setAttribute('aria-label', describeQueueRow(tab, position, workingCount));
   row.setAttribute('aria-describedby', 'queueHelp');
   row.addEventListener('keydown', (event) => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
@@ -1882,11 +1882,12 @@ function renderOpenSessions() {
   const idle = tabs.filter((tab) => !isWorking(tab));
   if (working.length) {
     els.queueList.appendChild(el('div', 'qgroup', `Working (${working.length})${scheduler.runningTabId ? ' - running: 1' : ''}`));
-    working.forEach((tab, index) => els.queueList.appendChild(queueRow(tab, index + 1)));
+    // the position is inside the working group, so the total has to be the working count too
+    working.forEach((tab, index) => els.queueList.appendChild(queueRow(tab, index + 1, working.length)));
   }
   if (idle.length) {
     els.queueList.appendChild(el('div', 'qgroup idle', `Idle (${idle.length})`));
-    idle.forEach((tab) => els.queueList.appendChild(queueRow(tab, 0)));
+    idle.forEach((tab) => els.queueList.appendChild(queueRow(tab, 0, working.length)));
   }
   renderPinnedBars(); // the bottom bar mirrors the outbox, so it refreshes with the queue
   markCurrentSession();
@@ -2944,10 +2945,11 @@ async function openSessionTree(tab) {
             return;
           }
           // pi may keep the same file or move to a forked one - ask it instead of guessing
-          const state = await api.cmd(tab.id, 'get_state');
-          if (state.success && state.data && state.data.sessionFile) {
-            tab.sessionPath = state.data.sessionFile;
-            api.setSessionPath({ tabId: tab.id, sessionPath: state.data.sessionFile });
+          // (never call this `state`: that name belongs to the app state object)
+          const afterFork = await api.cmd(tab.id, 'get_state');
+          if (afterFork.success && afterFork.data && afterFork.data.sessionFile) {
+            tab.sessionPath = afterFork.data.sessionFile;
+            api.setSessionPath({ tabId: tab.id, sessionPath: afterFork.data.sessionFile });
             scheduleSave();
           }
           finish();
@@ -2981,10 +2983,10 @@ async function openSessionTree(tab) {
         toast('clone cancelled by an extension', 'warning', 6000);
         return;
       }
-      const state = await api.cmd(tab.id, 'get_state');
-      if (state.success && state.data && state.data.sessionFile) {
-        tab.sessionPath = state.data.sessionFile;
-            api.setSessionPath({ tabId: tab.id, sessionPath: state.data.sessionFile });
+      const afterClone = await api.cmd(tab.id, 'get_state');
+      if (afterClone.success && afterClone.data && afterClone.data.sessionFile) {
+        tab.sessionPath = afterClone.data.sessionFile;
+        api.setSessionPath({ tabId: tab.id, sessionPath: afterClone.data.sessionFile });
         scheduleSave();
       }
       await refreshSessions();
@@ -3327,12 +3329,17 @@ function observeControlNames() {
   }).observe(document.body, { childList: true, subtree: true });
 }
 
-/** A short description a screen reader can read for a queue row (the visual state is colour only). */
-function describeQueueRow(tab, position) {
+/**
+ * A short description a screen reader can read for a queue row (the visual state is colour only).
+ * `position` is 0 for an idle row; `workingCount` is how many rows are in the working group, i.e.
+ * what a position counts out of. The local is called `status`, never `state`: a local named `state`
+ * hides the module-level `state` (the one holding `order`), and that typo took the whole queue out.
+ */
+function describeQueueRow(tab, position, workingCount) {
   const running = !!tab.isStreaming || scheduler.runningTabId === tab.id;
-  const state = running ? 'running' : tab.outbox.length ? `queued, ${tab.outbox.length} pending` : 'idle';
-  const order = position ? `queue position ${position} of ${state.order.length}` : 'not in the queue';
-  return `${tabLabel(tab)}, ${state}, ${order}. Alt+Up or Alt+Down reorders it.`;
+  const status = running ? 'running' : tab.outbox.length ? `queued, ${tab.outbox.length} pending` : 'idle';
+  const order = position ? `queue position ${position} of ${workingCount}` : 'not in the queue';
+  return `${tabLabel(tab)}, ${status}, ${order}. Alt+Up or Alt+Down reorders it.`;
 }
 
 
@@ -6818,13 +6825,30 @@ async function smokeA11yScenario() {
     const row = els.queueList.querySelector('.qrow');
     return row ? row.getAttribute('aria-label') : null;
   })();
+  // The row that carries a queue position only exists while a tab is working, and that is the branch
+  // that used to throw (a local named `state` hid the global one, taking the queue and the send with
+  // it). Borrow the running flag for one render so the scenario covers it without a model.
+  const probe = activeTab();
+  let workingLabel = null;
+  if (probe) {
+    const wasRunning = scheduler.runningTabId;
+    scheduler.runningTabId = probe.id;
+    try {
+      renderOpenSessions();
+      const workingRow = els.queueList.querySelector('.qrow.running');
+      workingLabel = workingRow ? workingRow.getAttribute('aria-label') : null;
+    } finally {
+      scheduler.runningTabId = wasRunning;
+      renderOpenSessions();
+    }
+  }
   document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   await new Promise((resolve) => setTimeout(resolve, 400));
   const closed = !els.modalRoot.querySelector('.modal');
   const restored = document.activeElement === opener;
   const nameless = [...document.querySelectorAll('button')].filter((button) => !button.getAttribute('aria-label') && !button.textContent.trim()).length;
   console.log(
-    `[smoke-a11y] dialog=${!!modal} role=${modal ? modal.getAttribute('role') : 'none'} aria_modal=${modal ? modal.getAttribute('aria-modal') : 'none'} labelled_by_heading=${labelOk} focus_inside=${focusInside} tab_wraps=${wrapped} esc_closes=${closed} focus_restored=${restored} nameless_buttons=${nameless} queue_row_label=${JSON.stringify(rowLabel)} toasts_live=${document.getElementById('toasts').getAttribute('aria-live')} tabs_role=${document.getElementById('tabs').getAttribute('role')}`,
+    `[smoke-a11y] dialog=${!!modal} role=${modal ? modal.getAttribute('role') : 'none'} aria_modal=${modal ? modal.getAttribute('aria-modal') : 'none'} labelled_by_heading=${labelOk} focus_inside=${focusInside} tab_wraps=${wrapped} esc_closes=${closed} focus_restored=${restored} nameless_buttons=${nameless} queue_row_label=${JSON.stringify(rowLabel)} working_row_label=${JSON.stringify(workingLabel)} toasts_live=${document.getElementById('toasts').getAttribute('aria-live')} tabs_role=${document.getElementById('tabs').getAttribute('role')}`,
   );
   await done;
 }
