@@ -112,6 +112,23 @@ function fmtTokens(n) {
   return `${(n / 1000000).toFixed(2)}M`;
 }
 
+/**
+ * Hover text for a token chip: exact numbers, and the cache split that the compact
+ * `in / out` label leaves out. `input` is the uncached read; `cacheRead` is the part of
+ * the prompt that came back from cache and was not re-billed at full price.
+ */
+function usageTooltip(u) {
+  if (!u) return '';
+  const lines = [
+    `prompt read (uncached): ${nfmt(u.input || 0)}`,
+    `generated: ${nfmt(u.output || 0)}`,
+    `cache read: ${nfmt(u.cacheRead || 0)} · cache write: ${nfmt(u.cacheWrite || 0)}`,
+    `total: ${nfmt(u.totalTokens != null ? u.totalTokens : u.total || 0)}`,
+  ];
+  if (u.reasoning != null) lines.push(`thinking: ${nfmt(u.reasoning)} (included in generated)`);
+  return lines.join('\n');
+}
+
 function samePath(a, b) {
   if (!a || !b) return false;
   const norm = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -533,7 +550,10 @@ function buildMessageNode(tab, item) {
     head.appendChild(el('span', '', message.model || 'assistant'));
     if (message.thinkingLevel && message.thinkingLevel !== 'off') head.appendChild(el('span', '', `thinking: ${message.thinkingLevel}`));
     if (message.usage && message.usage.totalTokens) {
-      head.appendChild(el('span', '', `${fmtTokens(message.usage.totalTokens)} tok`));
+      const u = message.usage;
+      const tokChip = el('span', '', `in ${fmtTokens(u.input || 0)} / out ${fmtTokens(u.output || 0)}`);
+      tokChip.title = usageTooltip(u);
+      head.appendChild(tokChip);
       const cost = message.usage.cost && message.usage.cost.total;
       if (cost) head.appendChild(el('span', '', `$${cost.toFixed(4)}`));
     }
@@ -1327,9 +1347,10 @@ function renderSelectors(tab) {
 function renderStats(tab) {
   els.stats.textContent = '';
   if (!tab) return;
-  const add = (label, value, cls = '') => {
+  const add = (label, value, cls = '', title = '') => {
     if (!value) return;
     const span = el('span', cls);
+    if (title) span.title = title;
     span.appendChild(el('b', '', `${label} `));
     span.appendChild(document.createTextNode(String(value)));
     els.stats.appendChild(span);
@@ -1344,7 +1365,12 @@ function renderStats(tab) {
     }
   }
   if (tab.stats) {
-    add('tok', fmtTokens(tab.stats.tokens && tab.stats.tokens.total));
+    const t = tab.stats.tokens || {};
+    // in / out separately: a single total cannot tell you whether the session is paying
+    // for a long prompt read or for a long answer, and those need different fixes.
+    add('tok', `in ${fmtTokens(t.input || 0)} / out ${fmtTokens(t.output || 0)}`, '', usageTooltip({
+      input: t.input, output: t.output, cacheRead: t.cacheRead, cacheWrite: t.cacheWrite, total: t.total,
+    }));
     if (tab.stats.cost) add('cost', `$${tab.stats.cost.toFixed(3)}`);
   }
   for (const [key, text] of tab.statuses) add(key, text);
@@ -2315,7 +2341,16 @@ async function refreshSessions() {
     metaRow.appendChild(el('span', '', timeAgo(meta.updatedAt)));
     metaRow.appendChild(el('span', '', `${meta.messageCount} msg`));
     if (meta.model) metaRow.appendChild(el('span', '', meta.model));
-    if (meta.totalTokens) metaRow.appendChild(el('span', '', fmtTokens(meta.totalTokens)));
+    if (meta.inputTokens || meta.outputTokens) {
+      const chip = el('span', '', `in ${fmtTokens(meta.inputTokens)} / out ${fmtTokens(meta.outputTokens)}`);
+      chip.title = usageTooltip({
+        input: meta.inputTokens, output: meta.outputTokens, cacheRead: meta.cacheReadTokens,
+        cacheWrite: meta.cacheWriteTokens, total: meta.totalTokens,
+      });
+      metaRow.appendChild(chip);
+    } else if (meta.totalTokens) {
+      metaRow.appendChild(el('span', '', fmtTokens(meta.totalTokens)));
+    }
     if (meta.parentSession) metaRow.appendChild(el('span', '', 'fork'));
     item.appendChild(metaRow);
 
@@ -6395,6 +6430,16 @@ async function init() {
       );
       console.log(
         `[smoke-window] nodes=${windowed} of ${tab ? tab.items.length : 0} renderFrom=${tab ? tab.renderFrom : 0} more_button=${!!moreBtn} after_click=${afterMore} scrolled=${els.transcript.scrollTop > 0}`,
+      );
+      // token chips must read "in N / out M", never a single blended total
+      const tokChips = [...els.transcript.querySelectorAll('.msg-head span[title]')]
+        .map((n) => n.textContent)
+        .filter((t) => t.startsWith('in '));
+      const barChip = [...els.stats.querySelectorAll('span[title]')]
+        .map((n) => n.textContent)
+        .find((t) => t.startsWith('tok '));
+      console.log(
+        `[smoke-tokens] bar=${JSON.stringify(barChip || '')} message_chips=${tokChips.length} first=${JSON.stringify(tokChips[0] || '')} tooltip=${JSON.stringify((tokChips[0] ? els.transcript.querySelector('.msg-head span[title]').title : '').replace(/\n/g, '|'))}`,
       );
     }
   }

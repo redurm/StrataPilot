@@ -66,6 +66,11 @@ test('readSessionMeta parses session / session_info / model_change / usage / mes
   assert.equal(meta.assistantCount, 1);
   assert.equal(meta.toolCallCount, 1);
   assert.equal(meta.totalTokens, 420); // 120 from the assistant message + 300 from the usage entry
+  // in/out are tracked apart from the total: the chip in the session list shows them separately
+  assert.equal(meta.inputTokens, 350);
+  assert.equal(meta.outputTokens, 70);
+  assert.equal(meta.cacheReadTokens, 1500);
+  assert.equal(meta.cacheWriteTokens, 0);
   assert.ok(Math.abs(meta.cost - 0.17) < 1e-9, `cost: ${meta.cost}`);
   assert.equal(meta.firstUserText, 'first user question [image]');
   assert.equal(meta.lastAssistantText, 'assistant answer');

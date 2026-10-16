@@ -169,6 +169,17 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   instead of showing only `30 9 * * 1-5`. `describeCron` says "every 15 minutes" rather than listing
   the 60 minutes a step expands to.
 
+- **Token counts are shown as *in* and *out*, never as one blended total.** The stats row chip is now
+  `tok in 36.5k / out 26.4k` instead of `tok 105k`, each assistant message header shows
+  `in 2.2k / out 99` instead of `2.3k tok`, and the session list spells the same pair out. A single
+  total could not tell you *where* a session was spending - a huge prompt read and a huge answer need
+  different fixes - so the split is now the headline number and the exact figures (uncached prompt read,
+  generated, cache read/write, total, and thinking tokens when the provider reports them) sit in the
+  chip's tooltip. `lib/sessions.js` accumulates `inputTokens` / `outputTokens` / `cacheReadTokens` /
+  `cacheWriteTokens` alongside the existing `totalTokens`, so old session files (which only carry a
+  total) still render. `STRATAPILOT_SMOKE_SESSION` now also prints
+  `[smoke-tokens] bar="tok in … / out …" message_chips=N first="in … / out …" tooltip="…"`.
+
 ## [0.1.0] - 2026-10-15
 
 First version of the app, replacing the `pi_gui` prototype (the app name, the settings file
