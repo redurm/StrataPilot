@@ -135,6 +135,24 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 
 ### Changed
 
+- **The project is renamed `Pi on Strata` -> `StrataPilot`.** Everything that carried the old name
+  moved with it: `package.json` `name` (`stratapilot`) / `productName` (`StrataPilot`), the
+  `appId` (`com.pionstrata.app` -> `com.stratapilot.app`), the artifact names
+  (`stratapilot-<version>-<os>-<arch>…`), the window title, the diagnostics header, the log file
+  (`logs/stratapilot.log`), the settings file (`stratapilot_settings.json`), the diagnostics file
+  (`stratapilot_diagnostics_<timestamp>.txt`), the smoke profile (`%TEMP%/stratapilot_smoke_profile`)
+  and the environment prefix (`PI_ON_STRATA_*` -> `STRATAPILOT_*`).
+  Nothing is left behind on an existing install: `migrateSettings()` in `main.js` also looks for
+  `%APPDATA%\Pi on Strata\pi_on_strata_settings.json` (and the older `pi-gui` file) and copies it to
+  the new folder, and `migrateEnv()` mirrors any `PI_ON_STRATA_*` variable onto its `STRATAPILOT_*`
+  name, so old shells, CI run blocks and IDE launch configs keep working - the new name always wins.
+  The **project folder** rename is a separate, manual step (`..\rename_to_stratapilot.ps1`) because
+  Windows refuses it while a live process holds the folder; that script also fixes the pi sessions
+  folder name, the `cwd` recorded in session headers and the paths stored in the app settings.
+  Renderer-only state (the `localStorage` theme mirror) does not survive the userData move - the
+  theme itself does, it lives in the settings file.
+  Entries below keep the name they shipped under, so older rows still say `Pi on Strata` and
+  `PI_ON_STRATA_*`.
 - `package.json` gained a `test` script and `engines: { "node": ">=22.19" }`, the version the README
   already called a hard requirement.
 - Smoke mode grew scenarios for each of the above (`PI_ON_STRATA_SMOKE_PASTE / _COPY / _EXPORT /

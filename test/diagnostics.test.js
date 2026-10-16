@@ -16,7 +16,7 @@ const path = require('node:path');
 
 const { redact, redactText, scrubInline, readConfig, tail, format, REDACTED } = require('../lib/diagnostics');
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-diag-'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-diag-'));
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 function write(name, content) {
@@ -85,7 +85,7 @@ test('readConfig(): missing, empty and directory targets report an error instead
 /* -- log tail --------------------------------------------------------- */
 
 test('tail(): keeps the last N lines and drops the partial line the read window starts in', () => {
-  const file = write('pi_on_strata.log', Array.from({ length: 400 }, (_, i) => `[2026-01-01T00:00:00.000Z] [INFO] line-${i}`).join('\n') + '\n');
+  const file = write('stratapilot.log', Array.from({ length: 400 }, (_, i) => `[2026-01-01T00:00:00.000Z] [INFO] line-${i}`).join('\n') + '\n');
   const res = tail(file, { maxBytes: 500, maxLines: 5 });
   assert.equal(res.lines.length, 5);
   assert.equal(res.lines[4], '[2026-01-01T00:00:00.000Z] [INFO] line-399');
@@ -163,7 +163,7 @@ test('scrubInline(): bearer headers, JSON keys and key: value pairs are all mask
 
 test('format(): empty data still produces a usable report', () => {
   const text = format({});
-  assert.ok(text.includes('Pi on Strata — diagnostics'));
+  assert.ok(text.includes('StrataPilot — diagnostics'));
   assert.ok(text.includes('(not reported)'));
   assert.ok(text.includes('(no open tabs reported)'));
   assert.ok(text.includes('log file not initialised') || text.includes('[7] log tail'));

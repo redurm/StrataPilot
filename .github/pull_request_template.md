@@ -12,7 +12,7 @@
 <!-- what you actually ran; delete the lines that do not apply -->
 
 - `npm test` (unit tests, no pi or Strata needed)
-- `PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=… PI_ON_STRATA_SMOKE_<SWITCH>=1 npm start` and the
+- `STRATAPILOT_SMOKE=1 STRATAPILOT_SMOKE_MS=… STRATAPILOT_SMOKE_<SWITCH>=1 npm start` and the
   printed `[smoke-…]` line
 - manual: which session, which Strata model, what you sent
 

@@ -15,7 +15,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 // point the sessions root at a temp dir BEFORE requiring the module under test
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-sessions-'));
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-sessions-'));
 process.env.PI_CODING_AGENT_SESSION_DIR = tmpRoot;
 
 const { sessionsRoot, listSessions, readSessionMeta, deleteSession, renameSession, clearSessionCache, cacheSize } = require('../lib/sessions');
@@ -179,7 +179,7 @@ test('guard: rejects non-.jsonl files inside the root', () => {
 });
 
 test('guard: rejects absolute paths outside the root (even if they exist)', () => {
-  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-outside-'));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-outside-'));
   try {
     const victim = path.join(elsewhere, 'full.jsonl');
     fs.copyFileSync(fixture(path.join('g1', 'full.jsonl')), victim);
@@ -357,7 +357,7 @@ function makeSession(dir, name, bytes, mtimeMs) {
 const DAY = 86400000;
 
 test('storageStats: one group per folder-group directory, sized from stat without parsing', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-d7-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-d7-'));
   try {
     const g1 = path.join(root, 'g1');
     const g2 = path.join(root, 'g2');
@@ -387,7 +387,7 @@ test('storageStats: one group per folder-group directory, sized from stat withou
 });
 
 test('cleanupPlan: age rule and per-folder cap, and neither rule deletes anything by itself', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-d7-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-d7-'));
   try {
     const g1 = path.join(root, 'g1');
     const now = Date.now();
@@ -420,7 +420,7 @@ test('cleanupPlan: age rule and per-folder cap, and neither rule deletes anythin
 });
 
 test('deleteSessions: bulk delete, skips files an open tab is using, reports paths outside the root', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-d7-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-d7-'));
   try {
     const g1 = path.join(root, 'g1');
     const doomed = makeSession(g1, 'doomed.jsonl', 300);
@@ -444,7 +444,7 @@ test('deleteSessions: bulk delete, skips files an open tab is using, reports pat
 });
 
 test('deleteSessions: the sidebar stops listing deleted sessions (cache dropped once, not per file)', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-d7-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-d7-'));
   try {
     const g1 = path.join(root, 'g1');
     fs.mkdirSync(g1, { recursive: true });

@@ -1125,7 +1125,7 @@ function handleExtensionUi(tab, req) {
       renderWidgets(tab);
       break;
     case 'setTitle':
-      document.title = req.title || 'Pi on Strata';
+      document.title = req.title || 'StrataPilot';
       break;
     case 'set_editor_text':
       els.input.value = req.text || '';
@@ -2078,7 +2078,7 @@ function wireRowDrag(row, tabId) {
     dragTabId = tabId;
     row.classList.add('dragging');
     event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/x-pi-on-strata-tab', tabId);
+    event.dataTransfer.setData('text/x-stratapilot-tab', tabId);
     event.dataTransfer.setData('text/plain', tabLabel(state.tabs.get(tabId)));
   });
   row.addEventListener('dragend', () => {
@@ -2102,7 +2102,7 @@ function wireRowDrag(row, tabId) {
     event.preventDefault();
     event.stopPropagation();
     const after = row.classList.contains('drop-after');
-    const sourceId = dragTabId || event.dataTransfer.getData('text/x-pi-on-strata-tab');
+    const sourceId = dragTabId || event.dataTransfer.getData('text/x-stratapilot-tab');
     clearDropMarkers();
     moveTabBefore(sourceId, tabId, after);
   });
@@ -2661,7 +2661,7 @@ async function openFirstRunWizard() {
     const paintPi = () => {
       if (!piState.version) {
         piStep.status.className = 'setup-status bad';
-        piStep.status.textContent = `pi was not found (looked in ~/.pi/agent/install/current-version and PI_ON_STRATA_PI_CLI). Node used: ${piState.node || 'none'}.`;
+        piStep.status.textContent = `pi was not found (looked in ~/.pi/agent/install/current-version and STRATAPILOT_PI_CLI). Node used: ${piState.node || 'none'}.`;
         if (!piActions.contains(copyInstall)) {
           piStep.box.appendChild(installLine);
           piActions.appendChild(copyInstall);
@@ -2719,7 +2719,7 @@ async function openFirstRunWizard() {
         strataStep.status.textContent = `${strataState.url} answered /health with HTTP ${strataState.status} in ${strataState.ms}ms${strataState.body ? ` - ${strataState.body.slice(0, 80)}` : ''}`;
       } else {
         strataStep.status.className = 'setup-status bad';
-        strataStep.status.textContent = `${strataState.url}: ${strataState.error}. Start the engine, or change the address above. If the server needs a key, set PI_ON_STRATA_KEY (or STRATA_API_KEY) in the environment this app was started from.`;
+        strataStep.status.textContent = `${strataState.url}: ${strataState.error}. Start the engine, or change the address above. If the server needs a key, set STRATAPILOT_KEY (or STRATA_API_KEY) in the environment this app was started from.`;
       }
     };
     paintStrata();
@@ -3359,7 +3359,7 @@ function applyTheme(theme) {
   state.theme = resolved;
   state.themeMode = wanted;
   try {
-    localStorage.setItem('pi_on_strata_theme', resolved); // read by theme-boot.js on the next start
+    localStorage.setItem('stratapilot_theme', resolved); // read by theme-boot.js on the next start
   } catch {
     // the mirror is a nicety: without it the app simply starts dark and corrects itself
   }
@@ -3367,7 +3367,7 @@ function applyTheme(theme) {
 
 /**
  * Everything that used to need a hand edit of
- * `%APPDATA%\Pi on Strata\pi_on_strata_settings.json`. The keys are the same ones the app
+ * `%APPDATA%\StrataPilot\stratapilot_settings.json`. The keys are the same ones the app
  * already reads (cwd / serialQueue / strataUrl / monitorOpen / monitorWidth / sidebarHidden),
  * plus `restoreTabs`, which the app now honours as well.
  *
@@ -6701,7 +6701,7 @@ async function smokeBarsScenario() {
   }, 3000);
 }
 
-// PI_ON_STRATA_SMOKE_COPY=1 — the per-message hover actions. `copy` must hand over the raw markdown
+// STRATAPILOT_SMOKE_COPY=1 — the per-message hover actions. `copy` must hand over the raw markdown
 // source (never innerHTML), and `resend` must go through send(): while another tab owns the
 // single-flight provider the resent text has to land in this tab's outbox, not reach the model.
 async function smokeCopyScenario() {
@@ -6792,7 +6792,7 @@ async function smokeCopyScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_EXPORT=1 (with PI_ON_STRATA_SMOKE_SESSION=<path>): `/export <abs>.html`
+ * STRATAPILOT_SMOKE_EXPORT=1 (with STRATAPILOT_SMOKE_SESSION=<path>): `/export <abs>.html`
  * must skip the dialog, let pi write the file (export_html) and print the returned path;
  * the file is then stat'd from the renderer through the read-only fs:stat-paths.
  */
@@ -6823,7 +6823,7 @@ async function smokeExportScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_DIAG=1: the "Diagnostics" button must build the report, hand it to the
+ * STRATAPILOT_SMOKE_DIAG=1: the "Diagnostics" button must build the report, hand it to the
  * clipboard and save a copy. Asserts the five TROUBLESHOOTING items are present and that no
  * key from ~/.pi/agent/models.json leaks into the text.
  */
@@ -6855,7 +6855,7 @@ function lastToastText() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_SETTINGS=1: the Settings dialog must expose every key that used to need a
+ * STRATAPILOT_SMOKE_SETTINGS=1: the Settings dialog must expose every key that used to need a
  * hand edit of the JSON file, save it through app:settings-set and apply it live.
  */
 async function smokeSettingsScenario() {
@@ -6881,7 +6881,7 @@ async function smokeSettingsScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_RETRY=1: the two retry RPCs must answer, and the two events pi already
+ * STRATAPILOT_SMOKE_RETRY=1: the two retry RPCs must answer, and the two events pi already
  * renders as notes must also drive the composer ("stop retry" only appears while a retry is
  * waiting; auto_retry_end takes it away again).
  */
@@ -6906,7 +6906,7 @@ async function smokeRetryScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_OUTBOX=1: B4 - a queued message must survive the restart as "pending" and
+ * STRATAPILOT_SMOKE_OUTBOX=1: B4 - a queued message must survive the restart as "pending" and
  * must never be sent by itself. Nothing is pushed into tab.outbox here, so no prompt reaches the
  * model during this scenario.
  */
@@ -6931,7 +6931,7 @@ async function smokeOutboxScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_CRON=1: the job round trip - save through the main process, read it back with
+ * STRATAPILOT_SMOKE_CRON=1: the job round trip - save through the main process, read it back with
  * a computed nextRun, preview a schedule, reject a bad one, and fire one "run now" so the prompt
  * lands in a tab's outbox. The serial queue is switched off for the scenario so nothing is actually
  * sent to the model.
@@ -6997,7 +6997,7 @@ async function smokeCronScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_TABTAG=1: D5 (which model a tab is on, in the tab strip) and D8 (an explicit
+ * STRATAPILOT_SMOKE_TABTAG=1: D5 (which model a tab is on, in the tab strip) and D8 (an explicit
  * Restart button that only appears while that tab's pi process is dead).
  */
 async function smokeTabTagScenario() {
@@ -7019,7 +7019,7 @@ async function smokeTabTagScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_THEME=1: D2. Switches to the light theme, prints the computed colours (a theme
+ * STRATAPILOT_SMOKE_THEME=1: D2. Switches to the light theme, prints the computed colours (a theme
  * that only changed a class would leave the body background dark), screenshots both themes, and
  * switches back.
  */
@@ -7049,7 +7049,7 @@ async function smokeThemeScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_A11Y=1: D3. Opens the settings dialog and checks what the accessibility layer
+ * STRATAPILOT_SMOKE_A11Y=1: D3. Opens the settings dialog and checks what the accessibility layer
  * adds by itself (role, label from the heading, focus moved in, Tab wrapped, Esc closing through the
  * Cancel button, focus handed back), then counts buttons that a screen reader would not name.
  */
@@ -7105,7 +7105,7 @@ async function smokeA11yScenario() {
 
 
 /**
- * PI_ON_STRATA_SMOKE_STORAGE=1: D7. Reads the totals, asks for two plans that must match nothing
+ * STRATAPILOT_SMOKE_STORAGE=1: D7. Reads the totals, asks for two plans that must match nothing
  * (an absurd age, an absurd cap) and one that matches everything, and checks the session open in this
  * tab is filtered out by the main process. Nothing is ever deleted by this scenario.
  */
@@ -7132,7 +7132,7 @@ async function smokeStorageScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_SERVERS=1: D6. Adds a second (unreachable) Strata address through Settings,
+ * STRATAPILOT_SMOKE_SERVERS=1: D6. Adds a second (unreachable) Strata address through Settings,
  * checks the Monitor gives it a pill with a health dot that turns red, points the cards at it, then
  * removes it again through the pill's x - so the settings round trip is proven both ways.
  */
@@ -7163,7 +7163,7 @@ async function smokeServersScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_PATH=1: D1. Types `@lib/d` in the composer, waits for the completion list, presses
+ * STRATAPILOT_SMOKE_PATH=1: D1. Types `@lib/d` in the composer, waits for the completion list, presses
  * Enter and checks the path was inserted instead of the prompt being sent.
  */
 async function smokePathScenario() {
@@ -7190,7 +7190,7 @@ async function smokePathScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_TREE=1: B1. Opens the session tree of a loaded session and counts what it found:
+ * STRATAPILOT_SMOKE_TREE=1: B1. Opens the session tree of a loaded session and counts what it found:
  * entries, the active path, branch points and the fork buttons offered. Nothing is forked.
  */
 async function smokeTreeScenario() {
@@ -7212,7 +7212,7 @@ async function smokeTreeScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_FORK=1: B1 for real. The fixture session has one branch point (two answers to the
+ * STRATAPILOT_SMOKE_FORK=1: B1 for real. The fixture session has one branch point (two answers to the
  * same prompt). This forks from the FIRST user message, which must abandon everything after it, then
  * re-reads the tree and counts what moved off the active path. Run it against the fixture only.
  */
@@ -7254,7 +7254,7 @@ async function smokeForkScenario() {
 }
 
 /**
- * PI_ON_STRATA_SMOKE_SETUP=1: C5. Opens the first-run wizard, reads what the two checks reported, and
+ * STRATAPILOT_SMOKE_SETUP=1: C5. Opens the first-run wizard, reads what the two checks reported, and
  * closes it through the primary button (which is what records firstRunSeen).
  */
 async function smokeSetupScenario() {
@@ -7274,7 +7274,7 @@ async function smokeSetupScenario() {
   );
 }
 
-// PI_ON_STRATA_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.
+// STRATAPILOT_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.
 // A 1x1 PNG is built in JS (clipboard images have no filesystem path, so pathForFile() -> '').
 const PNG_1X1_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
 

@@ -3,7 +3,7 @@
 // paint is already correct instead of flashing dark for a light-theme user. app.js re-applies the
 // real setting (including "system") as soon as app:settings arrives.
 try {
-  if (localStorage.getItem('pi_on_strata_theme') === 'light') {
+  if (localStorage.getItem('stratapilot_theme') === 'light') {
     document.documentElement.dataset.theme = 'light';
   }
 } catch {

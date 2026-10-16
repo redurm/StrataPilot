@@ -2,9 +2,9 @@ name: Release build
 
 # C5: packaging. `npm run dist` (electron-builder) produces
 #
-#   Windows : pi-on-strata-<version>-win-x64-setup.exe (NSIS, per-user, install folder choosable)
-#             pi-on-strata-<version>-win-x64.zip       (the unpacked folder - a portable install:
-#                                                        unzip it anywhere and run "Pi on Strata.exe")
+#   Windows : stratapilot-<version>-win-x64-setup.exe (NSIS, per-user, install folder choosable)
+#             stratapilot-<version>-win-x64.zip       (the unpacked folder - a portable install:
+#                                                        unzip it anywhere and run "StrataPilot.exe")
 #   macOS   : .dmg and .zip
 #   Linux   : .AppImage and .deb
 #
@@ -57,7 +57,7 @@ jobs:
       - name: upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pi-on-strata-${{ matrix.os }}
+          name: stratapilot-${{ matrix.os }}
           path: |
             dist/*.exe
             dist/*.zip
@@ -78,17 +78,17 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: pi-on-strata-windows-latest
+          name: stratapilot-windows-latest
           path: artifact
       - name: unzip the portable build and start it
         shell: bash
         env:
-          PI_ON_STRATA_SMOKE: '1'
-          PI_ON_STRATA_SMOKE_MS: '7000'
+          STRATAPILOT_SMOKE: '1'
+          STRATAPILOT_SMOKE_MS: '7000'
         run: |
           set -e
-          7z x -y -odist artifact/pi-on-strata-*-win-x64.zip > /dev/null
-          "./dist/Pi on Strata.exe" > smoke.log 2>&1 || true
+          7z x -y -odist artifact/stratapilot-*-win-x64.zip > /dev/null
+          "./dist/StrataPilot.exe" > smoke.log 2>&1 || true
           cat smoke.log
           grep -q "\[smoke\] window" smoke.log
           grep -q "renderer error" smoke.log && { echo "RENDERER_ERROR"; exit 1; }

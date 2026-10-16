@@ -1,6 +1,6 @@
 {
-  "name": "pi-on-strata",
-  "productName": "Pi on Strata",
+  "name": "stratapilot",
+  "productName": "StrataPilot",
   "version": "0.1.0",
   "private": true,
   "description": "Desktop GUI for the pi coding agent on a local Strata server (RPC mode): multi-session tabs with a serial queue, session switcher, file drag & drop, and a built-in Strata monitor.",
@@ -22,11 +22,11 @@
     "electron-builder": "^26.15.3"
   },
   "author": "Chris Chou",
-  "homepage": "https://github.com/hpi-main/pi-on-strata",
+  "homepage": "https://github.com/hpi-main/StrataPilot",
   "build": {
-    "appId": "com.pionstrata.app",
-    "productName": "Pi on Strata",
-    "artifactName": "pi-on-strata-${version}-${os}-${arch}.${ext}",
+    "appId": "com.stratapilot.app",
+    "productName": "StrataPilot",
+    "artifactName": "stratapilot-${version}-${os}-${arch}.${ext}",
     "directories": {
       "buildResources": "build",
       "output": "dist"
@@ -52,7 +52,7 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": false,
-      "artifactName": "pi-on-strata-${version}-${os}-${arch}-setup.${ext}"
+      "artifactName": "stratapilot-${version}-${os}-${arch}-setup.${ext}"
     },
     "mac": {
       "target": [
@@ -61,7 +61,7 @@
       ],
       "icon": "build/icon.png",
       "category": "public.app-category.developer-tools",
-      "artifactName": "pi-on-strata-${version}-${os}-${arch}.${ext}"
+      "artifactName": "stratapilot-${version}-${os}-${arch}.${ext}"
     },
     "linux": {
       "target": [
@@ -71,7 +71,7 @@
       "icon": "build/icon.png",
       "category": "Development",
       "synopsis": "Desktop GUI for the pi coding agent on a local Strata server",
-      "artifactName": "pi-on-strata-${version}-${os}-${arch}.${ext}"
+      "artifactName": "stratapilot-${version}-${os}-${arch}.${ext}"
     }
   }
 }

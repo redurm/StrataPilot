@@ -14,7 +14,7 @@ const path = require('node:path');
 const appLog = require('../lib/log');
 
 function tempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-on-strata-log-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-log-'));
 }
 
 function readLog(file) {
@@ -29,7 +29,7 @@ test('write() before init() is a silent no-op (logging must never crash the app)
 
 test('init() creates the parent folders and reports the paths', () => {
   const dir = tempDir();
-  const file = path.join(dir, 'logs', 'pi_on_strata.log');
+  const file = path.join(dir, 'logs', 'stratapilot.log');
   appLog.init(file);
   assert.equal(appLog.logPath(), file);
   assert.equal(appLog.logDir(), path.join(dir, 'logs'));
@@ -38,7 +38,7 @@ test('init() creates the parent folders and reports the paths', () => {
 
 test('write() emits one `[ISO] [LEVEL] text` record per call', () => {
   const dir = tempDir();
-  const file = path.join(dir, 'logs', 'pi_on_strata.log');
+  const file = path.join(dir, 'logs', 'stratapilot.log');
   appLog.init(file);
   appLog.write('info', 'hello');
   appLog.write('error', 'boom');
@@ -50,7 +50,7 @@ test('write() emits one `[ISO] [LEVEL] text` record per call', () => {
 
 test('a single record is capped, so one huge blob cannot bloat the file', () => {
   const dir = tempDir();
-  const file = path.join(dir, 'logs', 'pi_on_strata.log');
+  const file = path.join(dir, 'logs', 'stratapilot.log');
   appLog.init(file);
   appLog.write('error', 'x'.repeat(appLog.MAX_LINE + 5000));
   const line = readLog(file).split('\n')[0];
@@ -60,7 +60,7 @@ test('a single record is capped, so one huge blob cannot bloat the file', () => 
 
 test('banner() records the versions/paths a bug report needs', () => {
   const dir = tempDir();
-  const file = path.join(dir, 'logs', 'pi_on_strata.log');
+  const file = path.join(dir, 'logs', 'stratapilot.log');
   appLog.init(file);
   appLog.banner({ appVersion: '0.1.0', electronVersion: '40.10.2', logFile: file });
   const text = readLog(file);
@@ -71,7 +71,7 @@ test('banner() records the versions/paths a bug report needs', () => {
 
 test('teeConsole() mirrors console.* to the file and restore() puts console back', () => {
   const dir = tempDir();
-  const file = path.join(dir, 'logs', 'pi_on_strata.log');
+  const file = path.join(dir, 'logs', 'stratapilot.log');
   appLog.init(file);
   const original = console.log;
   const restore = appLog.teeConsole();
@@ -87,7 +87,7 @@ test('teeConsole() mirrors console.* to the file and restore() puts console back
 
 test('teeConsole() keeps util.format semantics (%s / objects)', () => {
   const dir = tempDir();
-  const file = path.join(dir, 'logs', 'pi_on_strata.log');
+  const file = path.join(dir, 'logs', 'stratapilot.log');
   appLog.init(file);
   const restore = appLog.teeConsole();
   console.log('tab=%s meta=%j', 't1', { a: 1 });
@@ -97,7 +97,7 @@ test('teeConsole() keeps util.format semantics (%s / objects)', () => {
 
 test('rotation keeps the active file bounded and honours keep', () => {
   const dir = tempDir();
-  const file = path.join(dir, 'logs', 'pi_on_strata.log');
+  const file = path.join(dir, 'logs', 'stratapilot.log');
   const maxBytes = 2000;
   appLog.init(file, { maxBytes, keep: 2 });
   for (let i = 0; i < 200; i++) appLog.write('info', `line ${i} ${'y'.repeat(40)}`);
@@ -127,6 +127,6 @@ test('init() on an unwritable path disables logging instead of throwing', () => 
   const dir = tempDir();
   const blocker = path.join(dir, 'blocker');
   fs.writeFileSync(blocker, 'not a folder');
-  assert.doesNotThrow(() => appLog.init(path.join(blocker, 'logs', 'pi_on_strata.log')));
+  assert.doesNotThrow(() => appLog.init(path.join(blocker, 'logs', 'stratapilot.log')));
   assert.doesNotThrow(() => appLog.write('error', 'still running'));
 });

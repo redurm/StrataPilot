@@ -36,7 +36,7 @@ body:
         Diagnostics) and paste what it copied. It already contains the log tail, versions, paths,
         Strata `/health`, both model configs (keys redacted) and the queue state, so it replaces
         everything else below. If the app will not start at all, paste the last lines of
-        `%APPDATA%\Pi on Strata\logs\pi_on_strata.log` instead.
+        `%APPDATA%\StrataPilot\logs\stratapilot.log` instead.
       render: text
     validations:
       required: true

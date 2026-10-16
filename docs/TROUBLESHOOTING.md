@@ -1,18 +1,18 @@
 # Troubleshooting
 
-Common problems with Pi on Strata and how to fix them. Feature and design documentation is in the
+Common problems with StrataPilot and how to fix them. Feature and design documentation is in the
 parent [`README.md`](../README.md).
 
 ## Startup / environment
 
 | Symptom | Cause / fix |
 |---|---|
-| `pi CLI not found; set PI_ON_STRATA_PI_CLI` | pi is not installed, or not a managed install (`~/.pi/agent/install/current-version` unreadable) → set `PI_ON_STRATA_PI_CLI` (pointing at `.../pi-coding-agent/dist/bundle/cli.js`) or `PI_MANAGED_INSTALL_ROOT` |
-| `node runtime not found; set PI_ON_STRATA_NODE` | No `node` on PATH and the `electron.exe` + `ELECTRON_RUN_AS_NODE=1` fallback also failed → set `PI_ON_STRATA_NODE` to a node executable |
+| `pi CLI not found; set STRATAPILOT_PI_CLI` | pi is not installed, or not a managed install (`~/.pi/agent/install/current-version` unreadable) → set `STRATAPILOT_PI_CLI` (pointing at `.../pi-coding-agent/dist/bundle/cli.js`) or `PI_MANAGED_INSTALL_ROOT` |
+| `node runtime not found; set STRATAPILOT_NODE` | No `node` on PATH and the `electron.exe` + `ELECTRON_RUN_AS_NODE=1` fallback also failed → set `STRATAPILOT_NODE` to a node executable |
 | `npm install` hangs / cannot fetch Electron | Corporate proxy / TLS interception: set `npm config set proxy/https-proxy`, or point `ELECTRON_MIRROR` at a mirror |
 | Nothing happens on the second `npm start` | Expected: the window has a single-instance lock (`requestSingleInstanceLock`), so re-running only focuses the window that is already open. Close it first if you really want a fresh start |
 | Want to verify the environment without the UI | `node test/smoke-rpc.js C:/some/project` → check the `cli:` / `node:` / `pi version:` / `sessions root:` lines; `cli: null` means pi was not found |
-| No error output visible at all | Everything is mirrored to `%APPDATA%\Pi on Strata\logs\pi_on_strata.log` (menu **Help ▸ Open Log Folder**); for live output also start it from a terminal with `npm start` — stderr prints `[renderer …]` plus pi's spawn output (`[stderr]` / `[log]`) |
+| No error output visible at all | Everything is mirrored to `%APPDATA%\StrataPilot\logs\stratapilot.log` (menu **Help ▸ Open Log Folder**); for live output also start it from a terminal with `npm start` — stderr prints `[renderer …]` plus pi's spawn output (`[stderr]` / `[log]`) |
 
 ## Crash / white window / the app disappears
 
@@ -21,7 +21,7 @@ parent [`README.md`](../README.md).
 | The window goes white or the app disappears | Open the log file (**Help ▸ Open Log Folder**) and read the **last** lines. `[renderer error] …` + stack = a renderer exception; `[crash] renderer gone reason=crashed exitCode=…` = the renderer process died; `[fatal] uncaughtException` = the main process crashed and quit; `[pi exit tab=…] code=…` = only that tab's pi process died (the window survives, the tab goes dead) |
 | The log file is empty / missing | It is created on startup: an empty file means the app never got as far as opening a window — start it from a terminal with `npm start` and read stderr |
 | Need the renderer stack with line numbers | DevTools (Ctrl+Shift+I) shows it live; the log also records `file:line:col` for uncaught errors. For scripted reproduction, launch with `--remote-debugging-port=9223` and drive it over CDP |
-| Reproduce without touching your real profile | Smoke mode uses a separate profile and skips the single-instance lock: `PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=30000 PI_ON_STRATA_SMOKE_PROMPT="Reply OK" npm start`, then read `%TEMP%\pi_on_strata_smoke_profile\logs\pi_on_strata.log` |
+| Reproduce without touching your real profile | Smoke mode uses a separate profile and skips the single-instance lock: `STRATAPILOT_SMOKE=1 STRATAPILOT_SMOKE_MS=30000 STRATAPILOT_SMOKE_PROMPT="Reply OK" npm start`, then read `%TEMP%\stratapilot_smoke_profile\logs\stratapilot.log` |
 | The app feels frozen but is still there | Look for `[crash] renderer unresponsive` (no reply for >30 s). Ctrl+Shift+R reloads the renderer; open tabs live in pi processes, so a reload does not kill a running request |
 | A white window says nothing at all | It now asks: after a renderer crash, hang or a failed load the app shows a dialog offering **Reload interface** (the window used to just stay blank). Reload re-attaches to the pi processes that are still running - tab ids are saved in the settings file, so the sessions, their context and a running generation survive; only the interface is rebuilt. If a generation really was interrupted, resend the last message (`resend` on the pinned bar or the message action) |
 | The window came back by itself after hanging | The log shows `[crash] renderer unresponsive` then `responsive again`, and a toast says nothing was reloaded. If it happens repeatedly, look for a `[renderer error]` line in between - usually one huge transcript or one huge tool output |
@@ -34,7 +34,7 @@ parent [`README.md`](../README.md).
 | The model dropdown is empty | No provider in `~/.pi/agent/models.json`, or `defaultProvider` in `settings.json` is wrong |
 | Sending spins forever / `connection error` | Strata is not running: open `http://127.0.0.1:8081/metrics` in a browser first. Check that the port in the model's `baseUrl` matches the port Strata actually listens on (`--port` in the launcher `.bat`, `"port"` in the Strata config) |
 | `model not found` / the request names another model | `models[].id` in `models.json` is not what the server serves: it must equal `"model_name"` in the Strata config, i.e. the `id` in `curl http://127.0.0.1:<port>/v1/models` |
-| 401 / `invalid api key` | The `apiKey` in `models.json` does not match Strata's key (`"api_key"` in the config, `--api-key` or `$STRATA_API_KEY`; `curl http://127.0.0.1:<port>/health` says `"api_key": false` when the server has none — then any non-empty placeholder works). That key is what pi uses for requests; it is not the Monitor's `PI_ON_STRATA_KEY` |
+| 401 / `invalid api key` | The `apiKey` in `models.json` does not match Strata's key (`"api_key"` in the config, `--api-key` or `$STRATA_API_KEY`; `curl http://127.0.0.1:<port>/health` says `"api_key": false` when the server has none — then any non-empty placeholder works). That key is what pi uses for requests; it is not the Monitor's `STRATAPILOT_KEY` |
 | `request exceeds the context window` | `contextWindow` / `maxTokens` in `models.json` are bigger than the server's (`--max-context` in the Strata config, `max_context` in `/health`), and the config has no `"fit_max_tokens": true` to shorten the request instead |
 | Context usage looks wrong, or is high while nothing runs | `contextWindow` in `models.json` is wrong: both the status bar and the Monitor's context-fill donut use that value. It must equal `/health`'s `max_context` — re-check it after `START-HERE.bat --calibrate` rewrites the Strata config |
 | Fewer thinking options after switching model | Expected: models without reasoning support expose a shorter thinking list (whatever `get_available_thinking_levels` returns) |
@@ -83,8 +83,8 @@ parent [`README.md`](../README.md).
 
 | Symptom | Cause / fix |
 |---|---|
-| Header turns red, `server not reachable` | Wrong address (add `strataUrl` to the settings file) or a key is required (set `PI_ON_STRATA_KEY` / `STRATA_API_KEY`). The header shows the HTTP status directly (401 is almost always the key); the `server not reachable` label only appears after 3 consecutive failures |
-| The Monitor shows an address I did not expect | By default it is derived from the **current tab's** `model.baseUrl` (`/v1` → `/metrics`). To pin it, add `"strataUrl": "http://127.0.0.1:8081/v1"` to `%APPDATA%\Pi on Strata\pi_on_strata_settings.json` |
+| Header turns red, `server not reachable` | Wrong address (add `strataUrl` to the settings file) or a key is required (set `STRATAPILOT_KEY` / `STRATA_API_KEY`). The header shows the HTTP status directly (401 is almost always the key); the `server not reachable` label only appears after 3 consecutive failures |
+| The Monitor shows an address I did not expect | By default it is derived from the **current tab's** `model.baseUrl` (`/v1` → `/metrics`). To pin it, add `"strataUrl": "http://127.0.0.1:8081/v1"` to `%APPDATA%\StrataPilot\stratapilot_settings.json` |
 | `Recent requests` has no prompt / answer text | By design: verbatim text is only retained by Strata's separate `/api-monitor` page, which needs Strata started with `--api-monitor` (or config `"api_monitor": true`). This Monitor reads `/metrics`, which only carries statistics |
 | Cards have no history curve / values are 0 | Just started up, or the panel is collapsed (polling at 1 Hz only runs while the panel is open) |
 | `Show all` lists only part of the requests | At most the most recent 150 rows are rendered (performance trade-off) |
@@ -122,7 +122,7 @@ parent [`README.md`](../README.md).
 | An extension's `custom()` component does nothing | RPC mode does not support pi TUI `custom()` components or theme switching (the degradations described in the pi docs) |
 | The `/tree` branches are not visible | `get_messages` returns only the current active branch; branch switching has no UI yet |
 | Many open tabs feel slow | Each tab is a `pi --mode rpc` process, so memory grows linearly with the tab count |
-| Settings lost / want a reset | `%APPDATA%\Pi on Strata\pi_on_strata_settings.json` (delete it to reset; the old `pi-gui` file is migrated on first launch) |
+| Settings lost / want a reset | `%APPDATA%\StrataPilot\stratapilot_settings.json` (delete it to reset; the older `pi-gui` and `Pi on Strata` files are migrated on first launch) |
 
 ## What to include when reporting an issue
 
@@ -130,11 +130,11 @@ parent [`README.md`](../README.md).
 Diagnostics).** It copies a report holding items 2–5 below — versions and paths, the pi install,
 Strata `/health` and `/v1/models`, both model configs with keys redacted, every open tab's queue
 state and the log tail — and saves the same text to
-`%APPDATA%\Pi on Strata\diagnostics\pi_on_strata_diagnostics_<timestamp>.txt`. Paste it in and add
+`%APPDATA%\StrataPilot\diagnostics\stratapilot_diagnostics_<timestamp>.txt`. Paste it in and add
 item 1; only collect the pieces by hand if the app will not start at all.
 
 1. The symptom plus reproduction steps (which tab, what you pressed)
-2. The tail of `%APPDATA%\Pi on Strata\logs\pi_on_strata.log` (menu **Help ▸ Open Log Folder**) —
+2. The tail of `%APPDATA%\StrataPilot\logs\stratapilot.log` (menu **Help ▸ Open Log Folder**) —
    the startup banner plus the last `[renderer error]` / `[crash]` / `[fatal]` / `[pi exit]` lines;
    stderr from `npm start` if you can start it from a terminal
 3. The first four lines of `node test/smoke-rpc.js <cwd>` (cli / node / pi version / sessions root)

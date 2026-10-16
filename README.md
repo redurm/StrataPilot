@@ -1,16 +1,18 @@
-# Pi on Strata
+# StrataPilot
 
 A desktop GUI for the pi coding agent running against a local Strata server (Electron + pi RPC mode).
 Each tab is its own `pi --mode rpc` process, so you can have **several sessions open at the same
 time**; because Strata handles only one request at a time, sends across sessions are ordered by the
 built-in **serial queue**.
 
-> Renamed from `pi_gui`: the app name, the settings file
-> (`%APPDATA%\Pi on Strata\pi_on_strata_settings.json`, the old file is carried over automatically on
-> first launch) and the environment variable prefix (`PI_GUI_*` → `PI_ON_STRATA_*`) are all updated.
-> The **project folder** itself has to be renamed with `..\rename_pi_gui.ps1` (you must leave the pi
-> conversation first, otherwise Windows blocks it). That script also fixes the pi sessions folder
-> name, the `cwd` recorded inside session files, and the paths stored in the app settings.
+> Renamed twice — `pi_gui` → **Pi on Strata** → **StrataPilot**. The app name, the settings file
+> (`%APPDATA%\StrataPilot\stratapilot_settings.json`; the `pi-gui` and `Pi on Strata` files are carried
+> over automatically on first launch) and the environment variable prefix
+> (`PI_GUI_*` → `PI_ON_STRATA_*` → `STRATAPILOT_*`; the old names still work, the new one wins) are all
+> updated. The **project folder** itself has to be renamed with `..\rename_to_stratapilot.ps1` (you must
+> leave the pi conversation and close the app first, otherwise Windows blocks it). That script also fixes
+> the pi sessions folder name, the `cwd` recorded inside session files, and the paths stored in the app
+> settings.
 
 ## Quick start (TL;DR)
 
@@ -48,7 +50,7 @@ anything in it.
 **4) Install this repo and start it**
 
 ```bash
-git clone <this repo> && cd pi-on-strata
+git clone <this repo> && cd StrataPilot
 npm install     # single devDependency: Electron (~100 MB)
 npm start
 ```
@@ -156,7 +158,7 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
 - **Diagnostics report**: the topbar **Diagnostics** button (`/diagnostics`, menu **Help ▸ Copy
   Diagnostics**) copies one pasteable block for a bug report — versions and paths, the pi install,
   Strata `/health` + `/v1/models`, both model configs, every open tab's queue state and the log tail —
-  with keys redacted, and saves the same text under `%APPDATA%\Pi on Strata\diagnostics\`
+  with keys redacted, and saves the same text under `%APPDATA%\StrataPilot\diagnostics\`
 - Tabs that were open on exit are restored on next launch (up to 4)
 
 ## The two sidebar lists (why some rows overlap and others don't)
@@ -334,8 +336,8 @@ a check instead of making you guess:
 
 | Step | What it does |
 |---|---|
-| 1. pi CLI | reports the pi it resolved (`~/.pi/agent/install/current-version`, overridable with `PI_ON_STRATA_PI_CLI`), colour-coded against the version this GUI was tested with. If nothing was found it prints the install command with a copy button and a **re-check pi** button - no restart needed, and the app never installs anything for you |
-| 2. Strata server | an address field with a **check** button that calls `/health` and reports the HTTP status and the latency (it checks by itself when the dialog opens). **use this address** saves it as `strataUrl`, which is what the Monitor and the diagnostics report use. A failing check says to start the engine, change the address, or set `PI_ON_STRATA_KEY` if the server needs a key |
+| 1. pi CLI | reports the pi it resolved (`~/.pi/agent/install/current-version`, overridable with `STRATAPILOT_PI_CLI`), colour-coded against the version this GUI was tested with. If nothing was found it prints the install command with a copy button and a **re-check pi** button - no restart needed, and the app never installs anything for you |
+| 2. Strata server | an address field with a **check** button that calls `/health` and reports the HTTP status and the latency (it checks by itself when the dialog opens). **use this address** saves it as `strataUrl`, which is what the Monitor and the diagnostics report use. A failing check says to start the engine, change the address, or set `STRATAPILOT_KEY` if the server needs a key |
 | 3. working folder | the folder new tabs start in, with a folder picker; saving it writes the `cwd` setting |
 
 Closing the dialog (or pressing **Start using it**) records `firstRunSeen: true`, so it does not come
@@ -420,7 +422,7 @@ switch in the top bar after launch):
 ```
 
 > Two keys, don't mix them up: the `apiKey` in `models.json` is what pi sends to `/v1/*`,
-> `PI_ON_STRATA_KEY` below is what the Monitor sends to `/metrics`.
+> `STRATAPILOT_KEY` below is what the Monitor sends to `/metrics`.
 >
 > Re-running `START-HERE.bat --calibrate`, or editing the Strata config, can change `--max-context`
 > and the port. Re-read the two endpoints above afterwards and update `contextWindow` / `baseUrl` —
@@ -429,7 +431,7 @@ switch in the top bar after launch):
 ### 3. Installing and starting this repo
 
 ```bash
-cd pi-on-strata
+cd StrataPilot
 npm install          # installs Electron (fast if cached)
 npm start            # electron .
 ```
@@ -443,7 +445,7 @@ npm start            # electron .
   GUI: same major.minor is treated as safe, a different minor warns (pi adds RPC commands in minor
   releases), a different major turns red (the framing may have changed). Hover the version for what
   to do; the same comparison is printed in the diagnostics report. Set
-  `PI_ON_STRATA_SMOKE_PI_VERSION=1.4.2` to see the warning without installing another pi.
+  `STRATAPILOT_SMOKE_PI_VERSION=1.4.2` to see the warning without installing another pi.
 - Restoring the previous tabs can be switched off in the Settings dialog (`restoreTabs: false`).
 - To start without a terminal: `start "" /b npm start`, or make a shortcut pointing at `electron .`.
 - Packaging exists (see [Packaging](#packaging-installers-and-a-portable-build)): `npm run dist:win` builds an NSIS
@@ -458,30 +460,34 @@ npm start            # electron .
   The first four lines are exactly what `lib/pi-launch.js` resolved; `cli: null` means pi was not
   found and you need the environment variables from the next section.
 
-### 4. Environment variables (all prefixed `PI_ON_STRATA_*`)
+### 4. Environment variables (all prefixed `STRATAPILOT_*`)
 
 Normally you set **nothing**; only override when auto-detection fails.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `PI_ON_STRATA_PI_CLI` | Path to pi's `cli.js` | Resolved from `~/.pi/agent/install/current-version` → `releases/<ver>/node_modules/@earendil-works/pi-coding-agent` |
-| `PI_ON_STRATA_NODE` | Node executable used to run pi | `node` on PATH; otherwise `electron.exe` + `ELECTRON_RUN_AS_NODE=1` |
+| `STRATAPILOT_PI_CLI` | Path to pi's `cli.js` | Resolved from `~/.pi/agent/install/current-version` → `releases/<ver>/node_modules/@earendil-works/pi-coding-agent` |
+| `STRATAPILOT_NODE` | Node executable used to run pi | `node` on PATH; otherwise `electron.exe` + `ELECTRON_RUN_AS_NODE=1` |
 | `PI_MANAGED_INSTALL_ROOT` | pi installation root | `~/.pi/agent/install` |
-| `PI_ON_STRATA_KEY` / `STRATA_API_KEY` | API key the Monitor uses for `/metrics` | Empty (no key); can also come from the tab model's `apiKey` |
+| `STRATAPILOT_KEY` / `STRATA_API_KEY` | API key the Monitor uses for `/metrics` | Empty (no key); can also come from the tab model's `apiKey` |
 | `PI_CODING_AGENT_SESSION_DIR` | Session JSONL root folder | `~/.pi/agent/sessions` |
-| `PI_ON_STRATA_SMOKE*` | Developer smoke mode | See [Smoke mode](#smoke-mode-for-development) |
+| `STRATAPILOT_SMOKE*` | Developer smoke mode | See [Smoke mode](#smoke-mode-for-development) |
+
+> The old `PI_ON_STRATA_*` names still work: `migrateEnv()` in `main.js` copies any `PI_ON_STRATA_X`
+> onto `STRATAPILOT_X` at startup (only when the new one is not already set), so an old terminal,
+> scheduled task or IDE run configuration does not break. New setups should use `STRATAPILOT_*`.
 
 Example:
 
 ```bash
-PI_ON_STRATA_PI_CLI="C:/Users/you/.pi/agent/install/releases/1.2.0/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" \
-PI_ON_STRATA_NODE="C:/Program Files/nodejs/node.exe" \
-PI_ON_STRATA_KEY=llama npm start
+STRATAPILOT_PI_CLI="C:/Users/you/.pi/agent/install/releases/1.2.0/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" \
+STRATAPILOT_NODE="C:/Program Files/nodejs/node.exe" \
+STRATAPILOT_KEY=llama npm start
 ```
 
 ### 5. Application settings file
 
-`%APPDATA%\Pi on Strata\pi_on_strata_settings.json` — written and **edited by the GUI itself**: the
+`%APPDATA%\StrataPilot\stratapilot_settings.json` — written and **edited by the GUI itself**: the
 topbar **Settings** button (`Ctrl+,`, also `/settings`) is a form over every key below, it saves and
 applies the change straight away (queue switch, Monitor width, sidebar, working folder). Hand-editing
 the file still works — press `Ctrl+R` to reload, or reopen the Settings dialog to see the values.
@@ -500,7 +506,8 @@ the file still works — press `Ctrl+R` to reload, or reopen the Settings dialog
 | `theme` | `dark` (default), `light` or `system` - see [Theme (dark / light)](#theme-dark--light) |
 | `strataConfigPath` | Optional path of the Strata engine config (`C:\Strata\strata-src\strata-<model>.json`): only used to include that file, keys redacted, in the diagnostics report |
 
-The old `pi-gui` settings file is migrated automatically on first launch (see the note at the top).
+The old `pi-gui` / `Pi on Strata` settings files are migrated automatically on first launch (see the
+note at the top).
 
 ## Session tree and branching
 
@@ -519,8 +526,8 @@ Open it with **`/tree`** or the **tree** chip in the stats row (it counts branch
 | **clone branch** | pi duplicates the branch you are on into a **new session file**; the sidebar refreshes and the tab adopts the path pi reports |
 | **refresh** | re-reads the tree, useful right after a fork |
 
-Verified end to end with `PI_ON_STRATA_SMOKE_FORK=1` against a throwaway session: forking from the first
-| `PI_ON_STRATA_SMOKE_SETUP=1` | C5 first run: expect `modal=true steps=3 pi="pi 1.2.0 - the version this GUI was tested against…" strata="http://127.0.0.1:8081/health answered /health with HTTP 200 in 30ms" classes=["setup-status good","setup-status good","setup-status"] closed=true first_run_seen=true` |
+Verified end to end with `STRATAPILOT_SMOKE_FORK=1` against a throwaway session: forking from the first
+| `STRATAPILOT_SMOKE_SETUP=1` | C5 first run: expect `modal=true steps=3 pi="pi 1.2.0 - the version this GUI was tested against…" strata="http://127.0.0.1:8081/health answered /health with HTTP 200 in 30ms" classes=["setup-status good","setup-status good","setup-status"] closed=true first_run_seen=true` |
 prompt leaves the transcript with that one message (`items_before=5 items_after=1`).
 
 > Forking is a pi operation, not a GUI edit: an extension can cancel it (`session_before_fork`) and the
@@ -553,13 +560,13 @@ theme` (keeps following `prefers-color-scheme` while the app runs).
 | Storage | the `theme` key in the settings file - nothing else is touched |
 | Implementation | every colour in `styles.css` goes through a CSS variable, so a theme is only a redefinition of those variables (`[data-theme="light"]`); there is no second stylesheet and no duplicated rule |
 | No flash on start | the last applied theme is mirrored in `localStorage` and read by `renderer/theme-boot.js` before the first paint; the real setting (including `system`) is applied a moment later from the settings file |
-| Screenshots | `PI_ON_STRATA_SMOKE_THEME=1` switches theme, prints the computed colours and writes both screenshots to the temp folder (see the smoke table) |
-| `PI_ON_STRATA_SMOKE_A11Y=1` | D3: expect `dialog=true role=dialog aria_modal=true labelled_by_heading=true focus_inside=true tab_wraps=true esc_closes=true focus_restored=true nameless_buttons=0 toasts_live=polite tabs_role=tablist` plus the `aria-label` of an idle queue row and of a working one (`working_row_label="..., running, queue position 1 of 1. ..."` - the working row is the one that carries a position, and it is the row that once threw) |
-| `PI_ON_STRATA_SMOKE_STORAGE=1` | D7: reads the totals and three plans (absurd age, absurd cap, everything), checks the open session is filtered out and that the dialog opens and closes: expect `ok=true files=15 bytes=8562058 groups=2 none=0 also_none=0 everything=15 scanned=15 open_in_list=false footer="15 / 15 sessionsStorage: 8.2 MB in 15 files" dialog=true dialog_closed=true`. **Nothing is deleted by the scenario** |
-| `PI_ON_STRATA_SMOKE_SERVERS=1` | D6: adds an unreachable address (`http://127.0.0.1:9/v1`) through Settings, checks the pill and its red health dot, points the cards at it, then removes it through the pill's `x`: expect `pills=4 bogus_pill=true dot_before="mon-dot bad" dot_after="mon-dot bad" active=127.0.0.1:9× removed=true pills_after=3` |
-| `PI_ON_STRATA_SMOKE_PATH=1` | D1: types `@lib/d` in the composer, waits for the palette, presses Enter: expect `rows=1 first="@lib/diagnostics.js…" inserted="read @lib/diagnostics.js" menu_open_after=false sent_instead=false` (the path is inserted, the prompt is **not** sent) |
-| `PI_ON_STRATA_SMOKE_TREE=1` | B1 read-only: opens the tree of a loaded session: expect `modal=true rows=278 on_path=278 off_path=0 branch_heads=0 fork_buttons=12 chip="tree"` |
-| `PI_ON_STRATA_SMOKE_FORK=1` | B1, **writes**: run it against a throwaway session only. Opens the tree, clicks **fork here** on the first user message, confirms, re-reads: expect `fork_button=true confirm=true rows_after=2 items_before=5 items_after=1` |
+| Screenshots | `STRATAPILOT_SMOKE_THEME=1` switches theme, prints the computed colours and writes both screenshots to the temp folder (see the smoke table) |
+| `STRATAPILOT_SMOKE_A11Y=1` | D3: expect `dialog=true role=dialog aria_modal=true labelled_by_heading=true focus_inside=true tab_wraps=true esc_closes=true focus_restored=true nameless_buttons=0 toasts_live=polite tabs_role=tablist` plus the `aria-label` of an idle queue row and of a working one (`working_row_label="..., running, queue position 1 of 1. ..."` - the working row is the one that carries a position, and it is the row that once threw) |
+| `STRATAPILOT_SMOKE_STORAGE=1` | D7: reads the totals and three plans (absurd age, absurd cap, everything), checks the open session is filtered out and that the dialog opens and closes: expect `ok=true files=15 bytes=8562058 groups=2 none=0 also_none=0 everything=15 scanned=15 open_in_list=false footer="15 / 15 sessionsStorage: 8.2 MB in 15 files" dialog=true dialog_closed=true`. **Nothing is deleted by the scenario** |
+| `STRATAPILOT_SMOKE_SERVERS=1` | D6: adds an unreachable address (`http://127.0.0.1:9/v1`) through Settings, checks the pill and its red health dot, points the cards at it, then removes it through the pill's `x`: expect `pills=4 bogus_pill=true dot_before="mon-dot bad" dot_after="mon-dot bad" active=127.0.0.1:9× removed=true pills_after=3` |
+| `STRATAPILOT_SMOKE_PATH=1` | D1: types `@lib/d` in the composer, waits for the palette, presses Enter: expect `rows=1 first="@lib/diagnostics.js…" inserted="read @lib/diagnostics.js" menu_open_after=false sent_instead=false` (the path is inserted, the prompt is **not** sent) |
+| `STRATAPILOT_SMOKE_TREE=1` | B1 read-only: opens the tree of a loaded session: expect `modal=true rows=278 on_path=278 off_path=0 branch_heads=0 fork_buttons=12 chip="tree"` |
+| `STRATAPILOT_SMOKE_FORK=1` | B1, **writes**: run it against a throwaway session only. Opens the tree, clicks **fork here** on the first user message, confirms, re-reads: expect `fork_button=true confirm=true rows_after=2 items_before=5 items_after=1` |
 
 ## Scheduled prompts (cron)
 
@@ -633,9 +640,9 @@ comment is explicit:
 So **pressing Compact while a session is running** aborts the in-flight request, and Strata's
 `Recent requests` gets a `Closed` row (client disconnect). Worse: if the session is too small
 (`Nothing to compact (session too small)`), the reply is still killed and nothing was compacted.
-That is pi's designed behaviour, not a Strata or Pi on Strata bug.
+That is pi's designed behaviour, not a Strata or StrataPilot bug.
 
-Pi on Strata's guard: pressing Compact while a session is running (streaming / outbox / running in the
+StrataPilot's guard: pressing Compact while a session is running (streaming / outbox / running in the
 serial queue) asks first:
 
 1. **Wait for it to finish, then compact (recommended, default)** — queued as `pendingCompact`,
@@ -725,8 +732,8 @@ in the header opens Strata's web page in a browser):
 - By default derived from the current tab's `model.baseUrl` (e.g. `http://127.0.0.1:8081/v1` →
   `http://127.0.0.1:8081/metrics`)
 - To pin an address: set `strataUrl` (e.g. `{"strataUrl": "http://127.0.0.1:8081/v1"}` in
-  `%APPDATA%\Pi on Strata\pi_on_strata_settings.json`)
-- If the server requires an API key: set `PI_ON_STRATA_KEY` or `STRATA_API_KEY`
+  `%APPDATA%\StrataPilot\stratapilot_settings.json`)
+- If the server requires an API key: set `STRATAPILOT_KEY` or `STRATA_API_KEY`
 - Clicking the URL in the header opens Strata's web page in the default browser
 - When unreachable the header turns red and shows the error (after 3 consecutive failures it marks
 
@@ -839,7 +846,7 @@ The app was built without any, so D3 added it centrally instead of touching ever
 | Regions | `role="tablist"` on the tab strip (`aria-selected` per tab), `role="list"` on both sidebar lists, `role="log"` on the transcript, `role="status"` + `aria-live="polite"` on the toast area, labels on the search box, the model / thinking selects and the composer |
 | Focus and motion | `:focus-visible` outlines (visible for keyboard, not for mouse clicks) and a `prefers-reduced-motion` block that stops the streaming animations |
 
-`PI_ON_STRATA_SMOKE_A11Y=1` proves it: it opens Settings and checks the role, the label, focus moving
+`STRATAPILOT_SMOKE_A11Y=1` proves it: it opens Settings and checks the role, the label, focus moving
 in, `Tab` wrapping, `Esc` closing and focus coming back, then counts the buttons a screen reader would
 not name (`nameless_buttons=0`). It also borrows the `running` flag for one render so the queue shows a
 working row - the row that carries a queue position, and the one a plain idle queue never renders.
@@ -860,19 +867,19 @@ in `build/icon.png` / `build/icon.ico` (a `π` over three Strata layers), and th
 
 | Artifact | What it is |
 |---|---|
-| `pi-on-strata-<version>-win-x64-setup.exe` | NSIS installer: per-user, no admin rights needed, you choose the folder, uninstalling keeps your settings |
-| `pi-on-strata-<version>-win-x64.zip` | the unpacked folder - a **portable** install: unzip anywhere and run `Pi on Strata.exe`. This is what CI launches in smoke mode before publishing the artifact |
+| `stratapilot-<version>-win-x64-setup.exe` | NSIS installer: per-user, no admin rights needed, you choose the folder, uninstalling keeps your settings |
+| `stratapilot-<version>-win-x64.zip` | the unpacked folder - a **portable** install: unzip anywhere and run `StrataPilot.exe`. This is what CI launches in smoke mode before publishing the artifact |
 | `.dmg` / `.zip`, `.AppImage` / `.deb` | built by the same config on the other two platforms |
 
 Verified here: `npx electron-builder --win` produced both Windows artifacts, and the unpacked
-`Pi on Strata.exe` was started in smoke mode - it opened a window and resolved pi 1.2.0 exactly like
+`StrataPilot.exe` was started in smoke mode - it opened a window and resolved pi 1.2.0 exactly like
 `npm start` does.
 
 Two things to know:
 
 - **Nothing is code-signed.** There is no certificate in this repo, so SmartScreen ("Windows protected
   your PC") and Gatekeeper will complain the first time. That is expected, not a broken build.
-- The packaged app uses the same settings file as `npm start` (`%APPDATA%\Pi on Strata`), so installing
+- The packaged app uses the same settings file as `npm start` (`%APPDATA%\StrataPilot`), so installing
   over a development run keeps your tabs, queue and jobs.
 
 CI: the `Release build` workflow runs on a `v*` tag or manually (Actions ▸ Run workflow), builds on all
@@ -886,20 +893,20 @@ checked automatically (docs/TODO.md C7):
 
 | Platform | How it is verified | What that proves |
 |---|---|---|
-| Windows | hand-run smoke scenarios (`PI_ON_STRATA_SMOKE_*`) | everything below, plus the Strata Monitor, drag & drop and the tray-less menu |
+| Windows | hand-run smoke scenarios (`STRATAPILOT_SMOKE_*`) | everything below, plus the Strata Monitor, drag & drop and the tray-less menu |
 | Linux (`ubuntu-latest` in CI) | `unit tests` job, `pi install smoke` job, and an **`electron smoke`** job that installs the Electron binary, installs pi, and starts a real window under `xvfb-run` with no Strata server | the launcher resolves the managed pi install the same way, the main process spawns, the renderer boots without a single `renderer error`, and the env bar reports the pi it found |
 | macOS (`macos-latest` in CI) | same jobs; the `electron smoke` leg is `continue-on-error` because a GUI on a CI runner is flaky there | the launcher and the unit tests; the window start is best-effort - read the job log when someone says "it does not start on macOS" |
 
 What is portable by construction:
 
-- **Settings**: `app.getPath('userData')`, so `%APPDATA%\Pi on Strata\pi_on_strata_settings.json` on
-  Windows, `~/.config/Pi on Strata/pi_on_strata_settings.json` on Linux,
-  `~/Library/Application Support/Pi on Strata/pi_on_strata_settings.json` on macOS. The log files live
+- **Settings**: `app.getPath('userData')`, so `%APPDATA%\StrataPilot\stratapilot_settings.json` on
+  Windows, `~/.config/StrataPilot/stratapilot_settings.json` on Linux,
+  `~/Library/Application Support/StrataPilot/stratapilot_settings.json` on macOS. The log files live
   in `logs/` next to it, the diagnostics dumps in `diagnostics/`.
 - **Sessions**: `~/.pi/agent/sessions` on all three (`PI_CODING_AGENT_SESSION_DIR` overrides).
 - **pi resolution**: `~/.pi/agent/install/current-version` and the package's `bin` entry, then run that
   JS file with `node` (or Electron as node when there is no node on PATH). No `.cmd`/`.exe` assumption
-  anywhere; `PI_ON_STRATA_PI_CLI` / `PI_ON_STRATA_NODE` override it on any platform.
+  anywhere; `STRATAPILOT_PI_CLI` / `STRATAPILOT_NODE` override it on any platform.
 - **Menu**: the template has a `darwin` branch (app menu, `CmdOrCtrl` accelerators work on both).
 
 What is Windows-only:
@@ -912,7 +919,7 @@ Running it on Linux or macOS is the same two commands:
 
 ```bash
 npm ci
-npm start          # or: PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=6000 npx electron .
+npm start          # or: STRATAPILOT_SMOKE=1 STRATAPILOT_SMOKE_MS=6000 npx electron .
 ```
 
 On Linux, if Electron refuses to start in a container, add `--no-sandbox` (CI does exactly that).
@@ -924,7 +931,7 @@ main.js            Electron main process: window, menu, IPC, pi process manageme
 preload.js         contextBridge (window.piGui) + webUtils.getPathForFile
 lib/pi-launch.js   resolves the pi CLI and the node executable
 lib/pi-process.js  JSONL framing for pi --mode rpc (LF-only line splitting) + command/response pairing
-lib/log.js         file log (userData/logs/pi_on_strata.log) + console tee + rotation
+lib/log.js         file log (userData/logs/stratapilot.log) + console tee + rotation
 lib/sessions.js    scanning/parsing session JSONL (title, name, first message, tokens…)
 renderer/          index.html / styles.css / markdown.js / error-report.js / app.js
 test/smoke-rpc.js  headless RPC smoke test
@@ -953,42 +960,42 @@ one `[smoke-…]` line so you can tell at a glance whether it passed.
 ### Smoke mode for development
 
 ```bash
-PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=30000 PI_ON_STRATA_SMOKE_PROMPT="Reply OK" npm start
+STRATAPILOT_SMOKE=1 STRATAPILOT_SMOKE_MS=30000 STRATAPILOT_SMOKE_PROMPT="Reply OK" npm start
 ```
 
 Uses an ephemeral session (writes no file), prints the renderer console to stderr, and quits after
-`PI_ON_STRATA_SMOKE_MS`. Smoke mode uses a separate profile
-(`%TEMP%/pi_on_strata_smoke_profile`) and skips the single-instance lock, so it does not disturb the
+`STRATAPILOT_SMOKE_MS`. Smoke mode uses a separate profile
+(`%TEMP%/stratapilot_smoke_profile`) and skips the single-instance lock, so it does not disturb the
 GUI you already have open.
 
 Other smoke switches:
 
 | Variable | Effect |
 |---|---|
-| `PI_ON_STRATA_SMOKE_PROMPT="…"` | Sends one prompt after startup (tests streaming / markdown / tool cards) |
-| `PI_ON_STRATA_SMOKE_STEER=1` | Sends a second message to exercise the steer path while busy |
-| `PI_ON_STRATA_SMOKE_SESSION=<path>` | Loads a given session with `switch_session` after startup (tests session switching / history rendering); with A2 it also prints `msg_actions=… copy=… resend=…` so you can see the hover actions exist on history-rendered messages |
-| `PI_ON_STRATA_SMOKE_QUEUE=1` | Opens 4 tabs and sends 3 messages to test the serial queue (Working/Idle, outbox, order) |
-| `PI_ON_STRATA_SMOKE_MONITOR=1` | Opens the Monitor panel right after startup (with `PI_ON_STRATA_SMOKE_PROMPT` you can watch the generating state) |
-| `PI_ON_STRATA_SMOKE_COMPACT=1` | Queues a compact during a long generation: "wait for idle" must not kill the request (Strata should show `stop`, not `disconnect`) |
-| `PI_ON_STRATA_SMOKE_ORDER=1` | Opens tabs A/B/C, starts B, then sends in C and A; the order should become `B C A` (A moves from first to the back of Working), execution order B → C → A |
-| `PI_ON_STRATA_SMOKE_AUTO_COMPACT=1` | Tests `get_state.autoCompactionEnabled` → `set_auto_compaction off/on` → read back; should print `initial=true … now=false … now=true` |
-| `PI_ON_STRATA_SMOKE_BASH=1` | Runs `!echo …`, `!!echo …` and `!exit 3`, then `/commands`, and checks the slash palette (`/co` + `Tab`): expect `cards=1 class=bash-card done`, `sign=!!`, `class=bash-card error … exit 3`, and `open=true rows=5` |
-| `PI_ON_STRATA_SMOKE_BARS=1` | Sends a long prompt, queues a steer while it runs and prints both pinned bars: expect `top="working on prompt …"` with `bottom="… steering … next turn"`, then `top="last request steering …"` and `bottom="(hidden)"` after the steer is delivered; also checks `↓ jump` (`node=true flashed=true`) |
-| `PI_ON_STRATA_SMOKE_PASTE=1` | Synthesises `paste` events carrying a generated 1×1 PNG: expect `files=1 images=1 chips=1 first=pasted-1.png size=70b`, then `images=2 chips=2 first=pasted-2.png`; also checks a two-image paste, `bmp` → "unsupported image type" toast, an 8 MB+ image → "image too large" toast, plain-text paste (`prevented=false`) and the modal guard (`modalOpen=true prevented=false images` unchanged) |
-| `PI_ON_STRATA_SMOKE_COPY=1` | Sends a prompt, waits for `agent_settled`, then clicks the user message's `copy` / `resend` (clipboard write is captured in JS): expect `copy_ok=true resend_ok=true composer="" queued=1 label_copied=true assistant_copy_ok=true`. A second tab is generating, so the resent text must land in the **outbox** (queue-aware path), not reach the model; also checks the draft guard (`modal=true` and the draft survives a cancel) and that the buttons survive `renderAll()` |
-| `PI_ON_STRATA_SMOKE_EXPORT=1` | Use with `PI_ON_STRATA_SMOKE_SESSION=<path>`: runs `/export <temp>\pi_on_strata_smoke_export.html` (no dialog; override the target with `PI_ON_STRATA_SMOKE_EXPORT_OUT`), then stats pi's returned path through the read-only `fs:stat-paths`: expect `ok=true path=… exists=true bytes=N` |
-| `PI_ON_STRATA_SMOKE_DIAG=1` | Clicks **Diagnostics** (clipboard write is captured in JS) and checks the report: expect `copied=1 chars=… lines=… missing_sections=none unredacted_apikeys=0` — all seven sections present and no `apiKey` value left unredacted |
-| `PI_ON_STRATA_SMOKE_SETTINGS=1` | Opens the Settings dialog, counts its fields, clicks **Save** and re-reads the file: expect `fields=8 rendered=8 prefilled=3 missing=none saved_monitorWidth=520 css=520px serial=true restoreTabs=true` (the smoke profile keeps these writes away from your real settings) |
-| `PI_ON_STRATA_SMOKE_RETRY=1` | Exercises `set_auto_retry off/on` and `abort_retry`, then feeds the two retry events the composer reacts to: expect `setOff=true setOn=true checkbox_after_off=false stop_shown=true stop_hidden_after_end=true abort=true` |
-| `PI_ON_STRATA_SMOKE_OUTBOX=1` | B4: packs an outbox entry (an oversized image is dropped instead of bloating the settings file), restores it and checks nothing was sent: expect `packed=2 images_dropped=1 restored=2 pending=2 badge=pending 2 outbox=0 auto_sent=false` |
-| `PI_ON_STRATA_SMOKE_CRON=1` | B5: saves a job through the main process, reads it back with a computed `nextRun`, previews `30 9 * * 1-5`, rejects `nope`, then run-now, and finally opens the dialog to check the builder: expect `saved=true jobs=1 nextRun=set preview="every weekday, at 09:30" has_next=true invalid_rejected=true new_tab=true queued=true outbox_badges=1 list_words="every day, every 5 minutes · next …" builder_default="cron: 30 9 * * 1-5" builder_step="cron: */30 * * * *" weekday_chips=7 weekly_chips_shown=flex shot="…pi-on-strata-smoke-jobs-editor.png"`. The serial queue is off inside the scenario, so the prompt never reaches the model |
-| `PI_ON_STRATA_SMOKE_TABTAG=1` | D5/D8: expect `model_tag=qwen3.8-flash-n… tag_title="strata/qwen3.8-flash-next-iq3_s" shown_when_alive=false shown_when_dead=true hidden_when_alive_again=true` |
-| `PI_ON_STRATA_SMOKE_THEME=1` | D2: expect `changed=true` plus the computed colours of both themes (`dark: body=rgb(15, 17, 21)/rgb(223, 227, 234)`, `light: body=rgb(244, 246, 249)/rgb(27, 35, 48)`) and two screenshots in the temp folder: `pi-on-strata-smoke-light-theme.png`, `pi-on-strata-smoke-dark-theme.png` |
+| `STRATAPILOT_SMOKE_PROMPT="…"` | Sends one prompt after startup (tests streaming / markdown / tool cards) |
+| `STRATAPILOT_SMOKE_STEER=1` | Sends a second message to exercise the steer path while busy |
+| `STRATAPILOT_SMOKE_SESSION=<path>` | Loads a given session with `switch_session` after startup (tests session switching / history rendering); with A2 it also prints `msg_actions=… copy=… resend=…` so you can see the hover actions exist on history-rendered messages |
+| `STRATAPILOT_SMOKE_QUEUE=1` | Opens 4 tabs and sends 3 messages to test the serial queue (Working/Idle, outbox, order) |
+| `STRATAPILOT_SMOKE_MONITOR=1` | Opens the Monitor panel right after startup (with `STRATAPILOT_SMOKE_PROMPT` you can watch the generating state) |
+| `STRATAPILOT_SMOKE_COMPACT=1` | Queues a compact during a long generation: "wait for idle" must not kill the request (Strata should show `stop`, not `disconnect`) |
+| `STRATAPILOT_SMOKE_ORDER=1` | Opens tabs A/B/C, starts B, then sends in C and A; the order should become `B C A` (A moves from first to the back of Working), execution order B → C → A |
+| `STRATAPILOT_SMOKE_AUTO_COMPACT=1` | Tests `get_state.autoCompactionEnabled` → `set_auto_compaction off/on` → read back; should print `initial=true … now=false … now=true` |
+| `STRATAPILOT_SMOKE_BASH=1` | Runs `!echo …`, `!!echo …` and `!exit 3`, then `/commands`, and checks the slash palette (`/co` + `Tab`): expect `cards=1 class=bash-card done`, `sign=!!`, `class=bash-card error … exit 3`, and `open=true rows=5` |
+| `STRATAPILOT_SMOKE_BARS=1` | Sends a long prompt, queues a steer while it runs and prints both pinned bars: expect `top="working on prompt …"` with `bottom="… steering … next turn"`, then `top="last request steering …"` and `bottom="(hidden)"` after the steer is delivered; also checks `↓ jump` (`node=true flashed=true`) |
+| `STRATAPILOT_SMOKE_PASTE=1` | Synthesises `paste` events carrying a generated 1×1 PNG: expect `files=1 images=1 chips=1 first=pasted-1.png size=70b`, then `images=2 chips=2 first=pasted-2.png`; also checks a two-image paste, `bmp` → "unsupported image type" toast, an 8 MB+ image → "image too large" toast, plain-text paste (`prevented=false`) and the modal guard (`modalOpen=true prevented=false images` unchanged) |
+| `STRATAPILOT_SMOKE_COPY=1` | Sends a prompt, waits for `agent_settled`, then clicks the user message's `copy` / `resend` (clipboard write is captured in JS): expect `copy_ok=true resend_ok=true composer="" queued=1 label_copied=true assistant_copy_ok=true`. A second tab is generating, so the resent text must land in the **outbox** (queue-aware path), not reach the model; also checks the draft guard (`modal=true` and the draft survives a cancel) and that the buttons survive `renderAll()` |
+| `STRATAPILOT_SMOKE_EXPORT=1` | Use with `STRATAPILOT_SMOKE_SESSION=<path>`: runs `/export <temp>\stratapilot_smoke_export.html` (no dialog; override the target with `STRATAPILOT_SMOKE_EXPORT_OUT`), then stats pi's returned path through the read-only `fs:stat-paths`: expect `ok=true path=… exists=true bytes=N` |
+| `STRATAPILOT_SMOKE_DIAG=1` | Clicks **Diagnostics** (clipboard write is captured in JS) and checks the report: expect `copied=1 chars=… lines=… missing_sections=none unredacted_apikeys=0` — all seven sections present and no `apiKey` value left unredacted |
+| `STRATAPILOT_SMOKE_SETTINGS=1` | Opens the Settings dialog, counts its fields, clicks **Save** and re-reads the file: expect `fields=8 rendered=8 prefilled=3 missing=none saved_monitorWidth=520 css=520px serial=true restoreTabs=true` (the smoke profile keeps these writes away from your real settings) |
+| `STRATAPILOT_SMOKE_RETRY=1` | Exercises `set_auto_retry off/on` and `abort_retry`, then feeds the two retry events the composer reacts to: expect `setOff=true setOn=true checkbox_after_off=false stop_shown=true stop_hidden_after_end=true abort=true` |
+| `STRATAPILOT_SMOKE_OUTBOX=1` | B4: packs an outbox entry (an oversized image is dropped instead of bloating the settings file), restores it and checks nothing was sent: expect `packed=2 images_dropped=1 restored=2 pending=2 badge=pending 2 outbox=0 auto_sent=false` |
+| `STRATAPILOT_SMOKE_CRON=1` | B5: saves a job through the main process, reads it back with a computed `nextRun`, previews `30 9 * * 1-5`, rejects `nope`, then run-now, and finally opens the dialog to check the builder: expect `saved=true jobs=1 nextRun=set preview="every weekday, at 09:30" has_next=true invalid_rejected=true new_tab=true queued=true outbox_badges=1 list_words="every day, every 5 minutes · next …" builder_default="cron: 30 9 * * 1-5" builder_step="cron: */30 * * * *" weekday_chips=7 weekly_chips_shown=flex shot="…stratapilot-smoke-jobs-editor.png"`. The serial queue is off inside the scenario, so the prompt never reaches the model |
+| `STRATAPILOT_SMOKE_TABTAG=1` | D5/D8: expect `model_tag=qwen3.8-flash-n… tag_title="strata/qwen3.8-flash-next-iq3_s" shown_when_alive=false shown_when_dead=true hidden_when_alive_again=true` |
+| `STRATAPILOT_SMOKE_THEME=1` | D2: expect `changed=true` plus the computed colours of both themes (`dark: body=rgb(15, 17, 21)/rgb(223, 227, 234)`, `light: body=rgb(244, 246, 249)/rgb(27, 35, 48)`) and two screenshots in the temp folder: `stratapilot-smoke-light-theme.png`, `stratapilot-smoke-dark-theme.png` |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII
-PI_ON_STRATA_SMOKE=1 PI_ON_STRATA_SMOKE_MS=30000 PI_ON_STRATA_SMOKE_QUEUE=1 npm start
+STRATAPILOT_SMOKE=1 STRATAPILOT_SMOKE_MS=30000 STRATAPILOT_SMOKE_QUEUE=1 npm start
 ```
 
 ## Logs and crash diagnosis
@@ -997,13 +1004,13 @@ Everything the main process prints is mirrored to a file, so a crash can be diag
 window is gone:
 
 ```
-%APPDATA%\Pi on Strata\logs\pi_on_strata.log      (Windows)
-~/.config/Pi on Strata/logs/pi_on_strata.log      (Linux)
-~/Library/Application Support/Pi on Strata/logs/  (macOS)
+%APPDATA%\StrataPilot\logs\stratapilot.log      (Windows)
+~/.config/StrataPilot/logs/stratapilot.log      (Linux)
+~/Library/Application Support/StrataPilot/logs/  (macOS)
 ```
 
 Menu **Help ▸ Open Log Folder** opens it. The file rotates at ~2 MB and keeps two older generations
-(`pi_on_strata.log.1`, `.2`). Every record is `[ISO timestamp] [LEVEL] message`.
+(`stratapilot.log.1`, `.2`). Every record is `[ISO timestamp] [LEVEL] message`.
 
 What lands in it:
 
@@ -1026,7 +1033,7 @@ Notes:
 
 - Logging is best-effort: if the log file cannot be opened the app keeps running and says so once
   (`[log] disabled, cannot open log file: …`).
-- Smoke mode writes its own log under `%TEMP%/pi_on_strata_smoke_profile/logs/`, so automated runs
+- Smoke mode writes its own log under `%TEMP%/stratapilot_smoke_profile/logs/`, so automated runs
   never touch the real one.
 - A renderer exception used to be invisible: nothing was written to disk, no crash dump, no Windows
   error report. If the UI ever freezes or vanishes again, read the log first — the last
@@ -1053,7 +1060,7 @@ reopen), and the outbox (see the note in `docs/TODO.md` B4).
 The topbar **Diagnostics** button (also `/diagnostics`, also menu **Help ▸ Copy Diagnostics**)
 assembles everything [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) asks for when reporting an issue
 into one text block, puts it on the clipboard and saves a copy to
-`%APPDATA%\Pi on Strata\diagnostics\pi_on_strata_diagnostics_<timestamp>.txt`:
+`%APPDATA%\StrataPilot\diagnostics\stratapilot_diagnostics_<timestamp>.txt`:
 
 | Section | Contents |
 |---|---|

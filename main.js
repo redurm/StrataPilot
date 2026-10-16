@@ -12,22 +12,46 @@ const appLog = require('./lib/log');
 const diagnostics = require('./lib/diagnostics');
 const cron = require('./lib/cron');
 
-const APP_ID = 'com.pionstrata.app';
-const SETTINGS_NAME = 'pi_on_strata_settings.json';
+const APP_ID = 'com.stratapilot.app';
+const SETTINGS_NAME = 'stratapilot_settings.json';
 const SETTINGS_FILE = () => path.join(app.getPath('userData'), SETTINGS_NAME);
 
 /**
- * The app was renamed from pi-gui to "Pi on Strata". Electron derives userData from the
- * app name, so the settings folder moved from %APPDATA%\pi-gui to %APPDATA%\Pi on Strata.
- * Carry the old file over once so open tabs, window bounds and monitor preferences survive.
+ * The app was renamed "Pi on Strata" -> "StrataPilot", which moved the environment prefix
+ * (PI_ON_STRATA_* -> STRATAPILOT_*). Copy any old name onto the new one so existing shells, CI
+ * run blocks and IDE launch configs keep working; the new name always wins.
+ */
+const LEGACY_ENV_PREFIX = 'PI_ON_STRATA_';
+const NEW_ENV_PREFIX = 'STRATAPILOT_';
+function migrateEnv() {
+  try {
+    for (const [key, value] of Object.entries(process.env)) {
+      if (!key.startsWith(LEGACY_ENV_PREFIX)) continue;
+      const renamed = NEW_ENV_PREFIX + key.slice(LEGACY_ENV_PREFIX.length);
+      if (process.env[renamed] === undefined) process.env[renamed] = value;
+    }
+  } catch (err) {
+    console.error('[env] migration failed:', err.message);
+  }
+}
+migrateEnv();
+
+/**
+ * The app was renamed from pi-gui to "Pi on Strata" and then to "StrataPilot". Electron derives
+ * userData from the app name, so the settings folder moved %APPDATA%\pi-gui -> "Pi on Strata" ->
+ * StrataPilot. Carry the first file that still exists forward once (the closest rename first), so
+ * open tabs, window bounds and monitor preferences survive every hop.
  */
 function migrateSettings() {
   const target = SETTINGS_FILE();
   try {
     if (fs.existsSync(target)) return;
+    const appData = path.dirname(app.getPath('userData'));
     const candidates = [
+      path.join(app.getPath('userData'), 'pi_on_strata_settings.json'),
+      path.join(appData, 'Pi on Strata', 'pi_on_strata_settings.json'),
       path.join(app.getPath('userData'), 'pi_gui_settings.json'),
-      path.join(path.dirname(app.getPath('userData')), 'pi-gui', 'pi_gui_settings.json'),
+      path.join(appData, 'pi-gui', 'pi_gui_settings.json'),
     ];
     for (const from of candidates) {
       if (from === target || !fs.existsSync(from)) continue;
@@ -92,7 +116,7 @@ function createWindow() {
     x: bounds.x,
     y: bounds.y,
     backgroundColor: '#0f1115',
-    title: 'Pi on Strata',
+    title: 'StrataPilot',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -114,7 +138,7 @@ function createWindow() {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   });
 
-  if (process.env.PI_ON_STRATA_SMOKE) {
+  if (process.env.STRATAPILOT_SMOKE) {
     console.log(`[smoke] window ${JSON.stringify(win.getBounds())}`);
   }
 
@@ -123,7 +147,7 @@ function createWindow() {
     const message = event.message;
     const source = event.sourceId;
     const position = event.lineNumber ? `:${event.lineNumber}:${event.columnNumber}` : '';
-    if (process.env.PI_ON_STRATA_SMOKE && level < 2) {
+    if (process.env.STRATAPILOT_SMOKE && level < 2) {
       console.log(`[renderer ${level}] ${message}`);
     } else if (level >= 2) {
       console.error(`[renderer ${level}] ${message} (${source}${position})`);
@@ -145,7 +169,7 @@ function createWindow() {
     try {
       const choice = await dialog.showMessageBox(win, {
         type: 'error',
-        title: 'Pi on Strata',
+        title: 'StrataPilot',
         message: cause,
         detail:
           `${detail || ''}\n\nSessions are not closed: every pi session runs as its own process owned by the background process, `
@@ -197,12 +221,12 @@ function createWindow() {
     recoverInterface('The interface failed to load', `code=${errorCode} ${errorDescription}`);
   });
 
-  if (process.env.PI_ON_STRATA_SMOKE) {
+  if (process.env.STRATAPILOT_SMOKE) {
     win.webContents.once('did-finish-load', () => {
       setTimeout(() => {
         console.error('[smoke] quitting after startup window');
         app.quit();
-      }, Number(process.env.PI_ON_STRATA_SMOKE_MS || 8000));
+      }, Number(process.env.STRATAPILOT_SMOKE_MS || 8000));
     });
   }
   win.on('close', () => {
@@ -531,7 +555,7 @@ async function buildDiagnostics(payload = {}) {
 
   const strata = { baseUrl: baseUrl || '(none: no tab with a model, and no strataUrl setting)' };
   if (baseUrl) {
-    const key = String(payload.apiKey || process.env.PI_ON_STRATA_KEY || process.env.STRATA_API_KEY || '');
+    const key = String(payload.apiKey || process.env.STRATAPILOT_KEY || process.env.STRATA_API_KEY || '');
     const health = await fetchText(`${baseUrl}/health`, { apiKey: key });
     strata.healthText = health.ok ? oneLineJson(health.text) : health.error;
     const models = await fetchText(`${baseUrl}/v1/models`, { apiKey: key });
@@ -577,7 +601,7 @@ async function buildDiagnostics(payload = {}) {
   try {
     const dir = path.join(app.getPath('userData'), 'diagnostics');
     fs.mkdirSync(dir, { recursive: true });
-    savedTo = path.join(dir, `pi_on_strata_diagnostics_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`);
+    savedTo = path.join(dir, `stratapilot_diagnostics_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`);
     fs.writeFileSync(savedTo, text, 'utf8');
   } catch (err) {
     console.error(`[diagnostics] could not save report: ${err.message}`);
@@ -603,11 +627,11 @@ function registerIpc() {
       arch: process.arch,
       appVersion: app.getVersion(),
       electronVersion: process.versions.electron,
-      // PI_ON_STRATA_SMOKE_PI_VERSION fakes the reported pi version so the version guard (C6)
+      // STRATAPILOT_SMOKE_PI_VERSION fakes the reported pi version so the version guard (C6)
       // can be exercised without installing a different pi
-      piVersion: process.env.PI_ON_STRATA_SMOKE_PI_VERSION || inv.piVersion,
+      piVersion: process.env.STRATAPILOT_SMOKE_PI_VERSION || inv.piVersion,
       testedPiVersion: TESTED_PI_VERSION,
-      piVersionLevel: piVersionStatus(process.env.PI_ON_STRATA_SMOKE_PI_VERSION || inv.piVersion, TESTED_PI_VERSION).level,
+      piVersionLevel: piVersionStatus(process.env.STRATAPILOT_SMOKE_PI_VERSION || inv.piVersion, TESTED_PI_VERSION).level,
       cliPath: inv.cliPath,
       nodePath: inv.nodePath,
       runAsNode: inv.runAsNode,
@@ -616,35 +640,35 @@ function registerIpc() {
       settingsPath: SETTINGS_FILE(),
       defaultCwd: process.cwd(),
       home: os.homedir(),
-      smoke: !!process.env.PI_ON_STRATA_SMOKE,
-      smokePrompt: process.env.PI_ON_STRATA_SMOKE_PROMPT || '',
-      smokeSession: process.env.PI_ON_STRATA_SMOKE_SESSION || '',
-      smokeSteer: !!process.env.PI_ON_STRATA_SMOKE_STEER,
-      smokeQueue: !!process.env.PI_ON_STRATA_SMOKE_QUEUE,
-      smokeMonitor: !!process.env.PI_ON_STRATA_SMOKE_MONITOR,
-      smokeCompact: !!process.env.PI_ON_STRATA_SMOKE_COMPACT,
-      smokeOrder: !!process.env.PI_ON_STRATA_SMOKE_ORDER,
-      smokeAutoCompact: !!process.env.PI_ON_STRATA_SMOKE_AUTO_COMPACT,
-      smokeBash: !!process.env.PI_ON_STRATA_SMOKE_BASH,
-      smokeBars: !!process.env.PI_ON_STRATA_SMOKE_BARS,
-      smokePaste: !!process.env.PI_ON_STRATA_SMOKE_PASTE,
-      smokeCopy: !!process.env.PI_ON_STRATA_SMOKE_COPY,
-      smokeExport: !!process.env.PI_ON_STRATA_SMOKE_EXPORT,
-      smokeExportOut: process.env.PI_ON_STRATA_SMOKE_EXPORT_OUT || path.join(os.tmpdir(), 'pi_on_strata_smoke_export.html'),
-      smokeDiag: !!process.env.PI_ON_STRATA_SMOKE_DIAG,
-      smokeSettings: !!process.env.PI_ON_STRATA_SMOKE_SETTINGS,
-      smokeRetry: !!process.env.PI_ON_STRATA_SMOKE_RETRY,
-      smokeOutbox: !!process.env.PI_ON_STRATA_SMOKE_OUTBOX,
-      smokeCron: !!process.env.PI_ON_STRATA_SMOKE_CRON,
-      smokeTabTag: !!process.env.PI_ON_STRATA_SMOKE_TABTAG,
-      smokeTheme: !!process.env.PI_ON_STRATA_SMOKE_THEME,
-      smokeA11y: !!process.env.PI_ON_STRATA_SMOKE_A11Y,
-      smokeStorage: !!process.env.PI_ON_STRATA_SMOKE_STORAGE,
-      smokeServers: !!process.env.PI_ON_STRATA_SMOKE_SERVERS,
-      smokePath: !!process.env.PI_ON_STRATA_SMOKE_PATH,
-      smokeTree: !!process.env.PI_ON_STRATA_SMOKE_TREE,
-      smokeFork: !!process.env.PI_ON_STRATA_SMOKE_FORK,
-      smokeSetup: !!process.env.PI_ON_STRATA_SMOKE_SETUP,
+      smoke: !!process.env.STRATAPILOT_SMOKE,
+      smokePrompt: process.env.STRATAPILOT_SMOKE_PROMPT || '',
+      smokeSession: process.env.STRATAPILOT_SMOKE_SESSION || '',
+      smokeSteer: !!process.env.STRATAPILOT_SMOKE_STEER,
+      smokeQueue: !!process.env.STRATAPILOT_SMOKE_QUEUE,
+      smokeMonitor: !!process.env.STRATAPILOT_SMOKE_MONITOR,
+      smokeCompact: !!process.env.STRATAPILOT_SMOKE_COMPACT,
+      smokeOrder: !!process.env.STRATAPILOT_SMOKE_ORDER,
+      smokeAutoCompact: !!process.env.STRATAPILOT_SMOKE_AUTO_COMPACT,
+      smokeBash: !!process.env.STRATAPILOT_SMOKE_BASH,
+      smokeBars: !!process.env.STRATAPILOT_SMOKE_BARS,
+      smokePaste: !!process.env.STRATAPILOT_SMOKE_PASTE,
+      smokeCopy: !!process.env.STRATAPILOT_SMOKE_COPY,
+      smokeExport: !!process.env.STRATAPILOT_SMOKE_EXPORT,
+      smokeExportOut: process.env.STRATAPILOT_SMOKE_EXPORT_OUT || path.join(os.tmpdir(), 'stratapilot_smoke_export.html'),
+      smokeDiag: !!process.env.STRATAPILOT_SMOKE_DIAG,
+      smokeSettings: !!process.env.STRATAPILOT_SMOKE_SETTINGS,
+      smokeRetry: !!process.env.STRATAPILOT_SMOKE_RETRY,
+      smokeOutbox: !!process.env.STRATAPILOT_SMOKE_OUTBOX,
+      smokeCron: !!process.env.STRATAPILOT_SMOKE_CRON,
+      smokeTabTag: !!process.env.STRATAPILOT_SMOKE_TABTAG,
+      smokeTheme: !!process.env.STRATAPILOT_SMOKE_THEME,
+      smokeA11y: !!process.env.STRATAPILOT_SMOKE_A11Y,
+      smokeStorage: !!process.env.STRATAPILOT_SMOKE_STORAGE,
+      smokeServers: !!process.env.STRATAPILOT_SMOKE_SERVERS,
+      smokePath: !!process.env.STRATAPILOT_SMOKE_PATH,
+      smokeTree: !!process.env.STRATAPILOT_SMOKE_TREE,
+      smokeFork: !!process.env.STRATAPILOT_SMOKE_FORK,
+      smokeSetup: !!process.env.STRATAPILOT_SMOKE_SETUP,
     };
   });
 
@@ -701,13 +725,13 @@ function registerIpc() {
 
   // Smoke-only: lets a scenario take a screenshot (theme checks, layout checks). Never registered
 // outside smoke mode.
-if (process.env.PI_ON_STRATA_SMOKE) {
+if (process.env.STRATAPILOT_SMOKE) {
   ipcMain.handle('app:smoke-shot', async (event, payload) => {
     const win = BrowserWindow.fromWebContents(event.sender) || win();
     const name = String((payload && payload.name) || 'shot').replace(/[^a-z0-9_-]/gi, '');
     try {
       const image = await win.webContents.capturePage();
-      const file = path.join(os.tmpdir(), `pi-on-strata-smoke-${name}.png`);
+      const file = path.join(os.tmpdir(), `stratapilot-smoke-${name}.png`);
       fs.writeFileSync(file, image.toPNG());
       console.log(`[smoke-shot] wrote ${file} bounds=${JSON.stringify(win.getContentBounds())}`);
       return { ok: true, file };
@@ -984,7 +1008,7 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
       return { ok: false, error: `invalid base url: ${baseUrl}` };
     }
     if (target.protocol !== 'http:' && target.protocol !== 'https:') return { ok: false, error: 'unsupported protocol' };
-    const key = apiKey || process.env.PI_ON_STRATA_KEY || process.env.STRATA_API_KEY || '';
+    const key = apiKey || process.env.STRATAPILOT_KEY || process.env.STRATA_API_KEY || '';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
@@ -1018,7 +1042,7 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
       return { ok: false, error: `invalid base url: ${baseUrl}` };
     }
     if (target.protocol !== 'http:' && target.protocol !== 'https:') return { ok: false, error: 'unsupported protocol' };
-    const key = apiKey || process.env.PI_ON_STRATA_KEY || process.env.STRATA_API_KEY || '';
+    const key = apiKey || process.env.STRATAPILOT_KEY || process.env.STRATA_API_KEY || '';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
@@ -1060,14 +1084,14 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
 /* lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-const SMOKE = !!process.env.PI_ON_STRATA_SMOKE;
+const SMOKE = !!process.env.STRATAPILOT_SMOKE;
 if (SMOKE) {
   // Keep automated runs isolated: separate profile, no single-instance lock.
-  app.setPath('userData', path.join(app.getPath('temp'), 'pi_on_strata_smoke_profile'));
+  app.setPath('userData', path.join(app.getPath('temp'), 'stratapilot_smoke_profile'));
 }
 
 // Must run before anything logs, and after the userData override above.
-appLog.init(path.join(app.getPath('userData'), 'logs', 'pi_on_strata.log'));
+appLog.init(path.join(app.getPath('userData'), 'logs', 'stratapilot.log'));
 appLog.teeConsole();
 
 process.on('uncaughtException', (error, origin) => {

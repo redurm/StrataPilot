@@ -5,7 +5,7 @@ name: CI
 #   * the unit tests (`npm test`) need nothing but Node - no Electron binary, no pi, no Strata -
 #     so they run on all three platforms, which is also the only cross-platform signal this repo
 #     has today (see docs/TODO.md C7: the app itself is developed and smoke-tested on Windows).
-#   * the smoke scenarios (PI_ON_STRATA_SMOKE_*) need a real pi install and a running Strata
+#   * the smoke scenarios (STRATAPILOT_SMOKE_*) need a real pi install and a running Strata
 #     server, so the ones that talk to a model stay manual. `smoke-rpc.js` checks the pi install
 #     without a model, and the `electron smoke` job below starts a real window with no Strata
 #     server on Linux and macOS - that is this repo's only proof that the app itself runs
@@ -111,8 +111,8 @@ jobs:
       - name: start the app with no Strata server and no model
         shell: bash
         env:
-          PI_ON_STRATA_SMOKE: '1'
-          PI_ON_STRATA_SMOKE_MS: '6000'
+          STRATAPILOT_SMOKE: '1'
+          STRATAPILOT_SMOKE_MS: '6000'
         run: |
           set -e
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
