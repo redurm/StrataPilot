@@ -9,7 +9,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseCron, isValidCron, nextRun, describeCron } = require('../lib/cron');
+const { parseCron, isValidCron, nextRun, describeCron, schedulePreset } = require('../lib/cron');
 
 /** Local-time Date builder (cron is evaluated in local time, like the OS clock). */
 function at(year, month, day, hour = 0, minute = 0) {
@@ -140,7 +140,9 @@ test('nextRun: accepts an already parsed expression (the scheduler re-uses it)',
 test('describeCron: the shapes the job editor offers', () => {
   assert.equal(describeCron('30 9 * * 1-5'), 'every weekday, at 09:30');
   assert.equal(describeCron("0 * * * *"), "every day, every hour at :00");
-  assert.equal(describeCron("*/15 * * * *"), "every day, every hour, minute 00,15,30,45");
+  // a step field is described as a step, not as the list of minutes it expands to
+  assert.equal(describeCron("*/15 * * * *"), "every day, every 15 minutes");
+  assert.equal(describeCron("15 */3 * * *"), "every day, every 3 hours at :15");
   assert.equal(describeCron("0 8,12,18 * * *"), "every day, at hours 08,12,18 minute 00");
   assert.equal(describeCron('0 9 1 * *'), 'on day 1 of the month, at 09:00');
   assert.match(describeCron('* * * * *'), /every day, every minute/);
@@ -149,4 +151,39 @@ test('describeCron: the shapes the job editor offers', () => {
 
 test('describeCron: an invalid expression explains itself instead of throwing', () => {
   assert.match(describeCron('nope'), /^invalid schedule: /);
+});
+
+/* ---- schedulePreset: what the Jobs dialog prefills from a stored expression ---- */
+
+test('schedulePreset: reads back every shape the builder can write', () => {
+  assert.deepEqual(schedulePreset('30 9 * * 1-5'), { preset: 'weekdays', time: '09:30' });
+  assert.deepEqual(schedulePreset('0 9 * * *'), { preset: 'daily', time: '09:00' });
+  assert.deepEqual(schedulePreset('0 9 15 * *'), { preset: 'monthly', dayOfMonth: 15, time: '09:00' });
+  assert.deepEqual(schedulePreset('*/5 * * * *'), { preset: 'minutes', step: 5 });
+  assert.deepEqual(schedulePreset('15 */3 * * *'), { preset: 'hours', step: 3, minute: 15 });
+  assert.deepEqual(schedulePreset('30 9 * * mon,wed'), { preset: 'weekly', days: [1, 3], time: '09:30' });
+  assert.deepEqual(schedulePreset('7 8 * * 7'), { preset: 'weekly', days: [0], time: '08:07' });
+  assert.deepEqual(schedulePreset('0 0 * * 0-6'), { preset: 'daily', time: '00:00' });
+});
+
+test('schedulePreset: anything the builder cannot express falls back to custom cron', () => {
+  for (const expression of ['nope', '0 9 * jan-mar 1', '0 9,17 * * *', '0 0 30 2 *', '0 9 1 * 1', '0 9 * * */2', '']) {
+    assert.equal(schedulePreset(expression).preset, 'custom', expression);
+  }
+});
+
+test('schedulePreset: round-trips - the expression the builder builds reads back as the same preset', () => {
+  // the builder in renderer/app.js writes these shapes; keep the two in step
+  const built = {
+    weekdays: '30 9 * * 1-5',
+    daily: '30 9 * * *',
+    weekly: '30 9 * * 0,2,4',
+    monthly: '30 9 7 * *',
+    hours: '15 */4 * * *',
+    minutes: '*/20 * * * *',
+  };
+  for (const [preset, expression] of Object.entries(built)) {
+    assert.equal(schedulePreset(expression).preset, preset, expression);
+    assert.ok(isValidCron(expression), expression);
+  }
 });

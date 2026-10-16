@@ -118,6 +118,16 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 
 ### Fixed
 
+- **Sending a prompt broke the whole interface** (`TypeError: Cannot read properties of undefined
+  (reading 'length')`) - the queue row's screen-reader text declared its status word in a local named
+  `state`, which hid the module-level `state` object, so `state.order.length` read a property of a
+  string. It threw on every row in the **Working** group, i.e. on the first prompt you send: the tab
+  strip and the queue were left empty, the message was lost before it reached pi, and the stuck
+  `running` flag made every later render throw as well. The status word is now `status`, and the row is
+  told how many tabs are working so the label reads `queue position 1 of 3` (the working group, not the
+  tab list). Covered by `test/queue-label.test.js` and by a working row in
+  `PI_ON_STRATA_SMOKE_A11Y=1` (`working_row_label=...`); the two `get_state` results that were also
+  called `state` were renamed for the same reason.
 - **A tab that switched sessions is protected from the storage cleanup** - `switch_session` is an RPC the
   background process never sees, so the tab now reports its new session file (`pi:session-path`) and a
   cleanup can no longer delete the file a live process is writing to. The same reporting happens after
@@ -130,6 +140,16 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 - Smoke mode grew scenarios for each of the above (`PI_ON_STRATA_SMOKE_PASTE / _COPY / _EXPORT /
   _DIAG / _SETTINGS / _RETRY`), and `PI_ON_STRATA_SMOKE_PI_VERSION` fakes the pi version to exercise
   the guard.
+- **The Jobs dialog no longer asks for a cron expression.** The schedule field is now a builder: pick
+  *every weekday / every day / on chosen weekdays (chips) / on one day each month / every N hours /
+  every N minutes*, set a time, and the expression is written for you - the raw cron box only appears
+  under **custom cron (advanced)**, and the expression in use is always echoed above the preview line.
+  Reading an expression back into the builder lives in `lib/cron.js` (`schedulePreset`, unit-tested,
+  served by `cron:preview`) so the builder and the parser cannot disagree. The target field got pickers
+  too (**pick an open tab…** / **pick a recent session…**) instead of asking for a `tab:<id>` or a
+  session path, and the job list now spells each schedule out ("every weekday, at 09:30 · next …")
+  instead of showing only `30 9 * * 1-5`. `describeCron` says "every 15 minutes" rather than listing
+  the 60 minutes a step expands to.
 
 ## [0.1.0] - 2026-10-15
 

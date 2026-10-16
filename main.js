@@ -648,7 +648,19 @@ function registerIpc() {
     };
   });
 
-  ipcMain.handle('cron:list', () => ({ ok: true, jobs: jobList(), now: new Date().toISOString() }));
+  ipcMain.handle('cron:list', () => ({
+    ok: true,
+    // description: the same human sentence the editor previews, so the job list can say
+    // "every weekday, at 09:30" instead of making the user decode "30 9 * * 1-5"
+    jobs: jobList().map((job) => {
+      try {
+        return { ...job, description: cron.describeCron(job.schedule) };
+      } catch {
+        return { ...job, description: '' };
+      }
+    }),
+    now: new Date().toISOString(),
+  }));
 
   ipcMain.handle('cron:save', (_event, { jobs } = {}) => {
     try {
@@ -666,7 +678,13 @@ function registerIpc() {
   ipcMain.handle('cron:preview', (_event, { schedule } = {}) => {
     try {
       const next = cron.nextRun(schedule, new Date());
-      return { ok: true, valid: true, description: cron.describeCron(schedule), nextRun: next ? next.toISOString() : null };
+      return {
+        ok: true,
+        valid: true,
+        description: cron.describeCron(schedule),
+        preset: cron.schedulePreset(schedule),
+        nextRun: next ? next.toISOString() : null,
+      };
     } catch (err) {
       return { ok: true, valid: false, error: err.message };
     }

@@ -5175,7 +5175,7 @@ async function openJobsModal() {
       el(
         'div',
         'set-hint',
-        'A job sends its prompt to a session at the given time (5-field cron: minute hour day month weekday, local time). The prompt goes through the serial queue like any typed message, so it never collides with a running session - and it runs with full read/edit/bash rights in the folder it targets.',
+        'A job sends its prompt to a session at the given time. Pick "when" from the dropdown - you do not need to know cron. The prompt goes through the serial queue like any typed message, so it never collides with a running session - and it runs with full read/edit/bash rights in the folder it targets.',
       ),
     );
     const list = el('div', 'job-list');
@@ -5209,10 +5209,11 @@ async function openJobsModal() {
         head.appendChild(el('span', 'job-name', job.name));
         head.appendChild(el('span', 'job-schedule', job.schedule));
         row.appendChild(head);
+        if (job.description) row.appendChild(el('div', 'job-when', `${job.description}${job.nextRun ? ` \u00b7 next ${new Date(job.nextRun).toLocaleString()}` : ''}`));
         row.appendChild(el('div', 'job-prompt', job.prompt.length > 220 ? `${job.prompt.slice(0, 220)}\u2026` : job.prompt));
         const meta = el('div', 'job-meta');
         meta.appendChild(el('span', '', `target: ${job.target || 'new-tab'}`));
-        meta.appendChild(el('span', '', `next: ${job.nextRun ? new Date(job.nextRun).toLocaleString() : 'never'}`));
+        if (!job.description) meta.appendChild(el('span', '', `next: ${job.nextRun ? new Date(job.nextRun).toLocaleString() : 'never'}`));
         if (job.lastRun) meta.appendChild(el('span', '', `last: ${new Date(job.lastRun).toLocaleString()}`));
         if (job.cwd) meta.appendChild(el('span', '', `cwd: ${job.cwd}`));
         row.appendChild(meta);
@@ -5291,10 +5292,43 @@ async function openJobsModal() {
   });
 }
 
-/** Add / edit one job. The schedule field previews what it means and when it next fires. */
-function openJobEditor(existing) {
+/* ------------------------------------------------------------------ */
+/* schedule builder                                                    */
+/*                                                                     */
+/* Cron syntax is the part people get wrong, so the editor asks "when  */
+/* should it run?" in plain words and builds the 5-field expression    */
+/* itself. The raw expression is only editable under "custom cron",    */
+/* and is otherwise echoed read-only so the user can still learn it.   */
+/* ------------------------------------------------------------------ */
+
+const SCHEDULE_PRESETS = [
+  { value: 'weekdays', label: 'every weekday (Mon-Fri)' },
+  { value: 'daily', label: 'every day' },
+  { value: 'weekly', label: 'on chosen weekdays' },
+  { value: 'monthly', label: 'on one day each month' },
+  { value: 'hours', label: 'every N hours' },
+  { value: 'minutes', label: 'every N minutes' },
+  { value: 'custom', label: 'custom cron (advanced)' },
+];
+
+const DOW_CHOICES = [
+  { value: 0, label: 'Sun' },
+  { value: 1, label: 'Mon' },
+  { value: 2, label: 'Tue' },
+  { value: 3, label: 'Wed' },
+  { value: 4, label: 'Thu' },
+  { value: 5, label: 'Fri' },
+  { value: 6, label: 'Sat' },
+];
+
+/** Add / edit one job. The schedule is built from plain words; the preview says what it means. */
+async function openJobEditor(existing) {
+  const job = existing ? { ...existing } : { name: '', schedule: '30 9 * * 1-5', prompt: '', target: 'new-tab', cwd: state.cwd, ephemeral: true, enabled: true };
+  // ask the main process which preset this expression came from (lib/cron.js owns that reading,
+  // so the builder and the parser can never disagree about what "30 9 * * 1-5" means)
+  const probed = await api.cronPreview(job.schedule || '');
+  const initial = probed && probed.valid && probed.preset ? probed.preset : { preset: 'custom' };
   return new Promise((resolve) => {
-    const job = existing ? { ...existing } : { name: '', schedule: '30 9 * * 1-5', prompt: '', target: 'new-tab', cwd: state.cwd, ephemeral: true, enabled: true };
     const backdrop = el('div', 'modal-backdrop');
     const modal = el('div', 'modal jobs-editor');
     modal.appendChild(el('h3', '', existing ? `Edit job: ${job.name}` : 'New scheduled prompt'));
@@ -5314,37 +5348,226 @@ function openJobEditor(existing) {
       box.placeholder = placeholder || '';
       return box;
     };
+    const numberBox = (value, min, max) => {
+      const box = el('input');
+      box.type = 'number';
+      box.min = String(min);
+      box.max = String(max);
+      box.step = '1';
+      box.value = String(value);
+      box.className = 'job-num';
+      return box;
+    };
+    const clampNum = (value, min, max, fallback) => {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.min(max, Math.max(min, Math.round(n)));
+    };
 
     const nameBox = input(job.name, 'morning standup prep');
-    field('Name', nameBox);
-    const scheduleBox = input(job.schedule, '30 9 * * 1-5');
-    scheduleBox.dataset.setting = 'schedule';
+    field('Name', nameBox, 'optional - only what you see in the job list');
+
+    /* --- when should it run? ------------------------------------------------ */
+    const presetSel = document.createElement('select');
+    presetSel.className = 'job-preset';
+    presetSel.setAttribute('aria-label', 'run when');
+    for (const preset of SCHEDULE_PRESETS) presetSel.appendChild(new Option(preset.label, preset.value));
+    presetSel.value = initial.preset;
+
+    const timeBox = el('input');
+    timeBox.type = 'time';
+    timeBox.step = '60';
+    timeBox.value = initial.time || '09:30';
+    timeBox.setAttribute('aria-label', 'at what time');
+    const dayOfMonthBox = numberBox(initial.dayOfMonth || 1, 1, 31);
+    dayOfMonthBox.setAttribute('aria-label', 'day of month');
+    const stepHoursBox = numberBox(initial.preset === 'hours' ? initial.step : 3, 1, 23);
+    stepHoursBox.setAttribute('aria-label', 'every how many hours');
+    const stepMinutesBox = numberBox(initial.preset === 'minutes' ? initial.step : 30, 1, 59);
+    stepMinutesBox.setAttribute('aria-label', 'every how many minutes');
+    const minuteOfHourBox = numberBox(initial.minute != null ? initial.minute : 0, 0, 59);
+    minuteOfHourBox.setAttribute('aria-label', 'at which minute of the hour');
+    const cronBox = input(job.schedule, '30 9 * * 1-5');
+    cronBox.className = 'job-cron';
+    cronBox.dataset.setting = 'schedule';
+    cronBox.setAttribute('aria-label', 'cron expression: minute hour day-of-month month day-of-week');
+
+    const part = (text, control, unit) => {
+      const wrap = el('span', 'job-part');
+      wrap.appendChild(el('span', 'job-part-label', text));
+      wrap.appendChild(control);
+      if (unit) wrap.appendChild(el('span', 'job-part-label', unit));
+      return wrap;
+    };
+    const timeWrap = part('at', timeBox);
+    const dayWrap = part('on day', dayOfMonthBox, 'of the month');
+    const hoursWrap = part('every', stepHoursBox, 'hours');
+    hoursWrap.appendChild(el('span', 'job-part-label', 'at minute'));
+    hoursWrap.appendChild(minuteOfHourBox);
+    const minutesWrap = part('every', stepMinutesBox, 'minutes');
+
+    const builderRow = el('div', 'field-row job-builder');
+    builderRow.appendChild(presetSel);
+    builderRow.appendChild(timeWrap);
+    builderRow.appendChild(dayWrap);
+    builderRow.appendChild(hoursWrap);
+    builderRow.appendChild(minutesWrap);
+
+    const chipsWrap = el('div', 'job-day-chips');
+    const dayChecks = DOW_CHOICES.map((choice) => {
+      const box = el('input');
+      box.type = 'checkbox';
+      box.checked = initial.days ? initial.days.includes(choice.value) : choice.value >= 1 && choice.value <= 5;
+      const chip = el('label', 'job-chip');
+      chip.appendChild(box);
+      chip.appendChild(el('span', '', choice.label));
+      box.setAttribute('aria-label', `run on ${choice.label}`);
+      chipsWrap.appendChild(chip);
+      box.addEventListener('change', () => syncSchedule());
+      return { box, value: choice.value };
+    });
+
+    const cronWrap = el('div', 'field-row');
+    cronWrap.appendChild(cronBox);
+    const cronLine = el('div', 'job-cron-line', '');
     const preview = el('div', 'set-hint', '');
-    const scheduleWrap = field('Schedule (cron: minute hour day month weekday)', scheduleBox, '');
+    const scheduleWrap = field('Run', builderRow, 'pick when it should fire - the cron expression is written for you');
+    scheduleWrap.appendChild(chipsWrap);
+    scheduleWrap.appendChild(cronWrap);
+    scheduleWrap.appendChild(cronLine);
     scheduleWrap.appendChild(preview);
+    scheduleWrap.appendChild(
+      el('div', 'set-hint', 'cron fields are minute hour day-of-month month day-of-week (local time); \u00b7 30 9 * * 1-5 = weekdays 09:30, \u00b7 0 */2 * * * = every 2 hours, \u00b7 0 9 1 * * = the 1st at 09:00'),
+    );
+
     const promptBox = el('textarea');
     promptBox.value = job.prompt || '';
     promptBox.placeholder = 'the prompt to send, e.g. Summarise what changed in this folder since yesterday';
     field('Prompt', promptBox, 'runs with the same rights as a typed message: pi can read, edit and run commands in the target folder');
 
+    const currentSchedule = () => {
+      const preset = presetSel.value;
+      if (preset === 'custom') return cronBox.value.trim();
+      const clock = /^(\d{1,2}):(\d{2})$/.exec(String(timeBox.value || '').trim());
+      const hour = clampNum(clock && clock[1], 0, 23, 9);
+      const minute = clampNum(clock && clock[2], 0, 59, 30);
+      if (preset === 'minutes') return `*/${clampNum(stepMinutesBox.value, 1, 59, 30)} * * * *`;
+      if (preset === 'hours') return `${clampNum(minuteOfHourBox.value, 0, 59, 0)} */${clampNum(stepHoursBox.value, 1, 23, 3)} * * *`;
+      if (preset === 'monthly') return `${minute} ${hour} ${clampNum(dayOfMonthBox.value, 1, 31, 1)} * *`;
+      if (preset === 'weekly') {
+        const days = dayChecks.filter((entry) => entry.box.checked).map((entry) => entry.value).sort((a, b) => a - b);
+        return days.length ? `${minute} ${hour} * * ${days.join(',')}` : '';
+      }
+      if (preset === 'daily') return `${minute} ${hour} * * *`;
+      return `${minute} ${hour} * * 1-5`;
+    };
+
+    let previewToken = 0;
+    const refreshPreview = async () => {
+      const expression = currentSchedule();
+      const token = ++previewToken;
+      if (!expression) {
+        preview.className = 'set-hint bad';
+        preview.textContent = 'tick at least one weekday';
+        return;
+      }
+      preview.textContent = 'checking\u2026';
+      const res = await api.cronPreview(expression);
+      if (token !== previewToken) return; // a slower answer must not overwrite a newer one
+      if (!res.valid) {
+        preview.className = 'set-hint bad';
+        preview.textContent = `not a valid schedule: ${res.error}`;
+        return;
+      }
+      preview.className = 'set-hint good';
+      preview.textContent = `${res.description} \u00b7 next: ${res.nextRun ? new Date(res.nextRun).toLocaleString() : 'never (this expression can never fire)'}`;
+    };
+
+    const syncSchedule = () => {
+      const preset = presetSel.value;
+      const usesTime = ['weekdays', 'daily', 'weekly', 'monthly'].includes(preset);
+      timeWrap.style.display = usesTime ? '' : 'none';
+      dayWrap.style.display = preset === 'monthly' ? '' : 'none';
+      hoursWrap.style.display = preset === 'hours' ? '' : 'none';
+      minutesWrap.style.display = preset === 'minutes' ? '' : 'none';
+      chipsWrap.style.display = preset === 'weekly' ? '' : 'none';
+      cronWrap.style.display = preset === 'custom' ? '' : 'none';
+      cronLine.style.display = preset === 'custom' ? 'none' : '';
+      if (preset !== 'custom') cronBox.value = currentSchedule(); // so switching to "custom" keeps it
+      cronLine.textContent = `cron: ${cronBox.value}`;
+      refreshPreview();
+    };
+    presetSel.addEventListener('change', () => syncSchedule());
+    [timeBox, dayOfMonthBox, stepHoursBox, stepMinutesBox, minuteOfHourBox].forEach((box) => box.addEventListener('input', () => syncSchedule()));
+    cronBox.addEventListener('input', () => refreshPreview());
+
+    /* --- where does the prompt go? ------------------------------------------ */
     const targetSel = document.createElement('select');
+    targetSel.className = 'job-target-kind';
+    targetSel.setAttribute('aria-label', 'send the prompt to');
     for (const option of [
       { value: 'new-tab', label: 'a new tab (fresh session each run)' },
-      { value: 'session:', label: 'a session file (opens it if closed)' },
+      { value: 'session:', label: 'a saved session (keeps talking in it)' },
       { value: 'tab:', label: 'an open tab' },
     ]) {
-      const opt = document.createElement('option');
-      opt.value = option.value;
-      opt.textContent = option.label;
-      targetSel.appendChild(opt);
+      targetSel.appendChild(new Option(option.label, option.value));
     }
     const chosen = String(job.target || 'new-tab');
     targetSel.value = chosen === 'new-tab' ? 'new-tab' : chosen.split(':')[0] + ':';
-    const valueBox = input(chosen.startsWith('new-tab') ? '' : chosen.split(':').slice(1).join(':'), '/path/to/session.jsonl or tab id');
+    const valueBox = input(chosen.startsWith('new-tab') ? '' : chosen.split(':').slice(1).join(':'), 'filled in by the picker next to it');
+    valueBox.setAttribute('aria-label', 'session path or tab id');
+    const picker = document.createElement('select');
+    picker.className = 'job-picker';
+    picker.setAttribute('aria-label', 'pick an open tab or a recent session');
+    const folderName = (path) => String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(path || '');
+    const fillPicker = () => {
+      picker.textContent = '';
+      if (targetSel.value === 'tab:') {
+        picker.appendChild(new Option('pick an open tab\u2026', ''));
+        for (const id of state.order) {
+          const tab = state.tabs.get(id);
+          if (!tab) continue;
+          picker.appendChild(new Option(`${tabLabel(tab)}  (${folderName(tab.cwd)})`, id));
+        }
+      } else if (targetSel.value === 'session:') {
+        picker.appendChild(new Option('pick a recent session\u2026', ''));
+        for (const meta of state.sessions.slice(0, 60)) {
+          picker.appendChild(new Option(`${meta.title || meta.fileName}  (${meta.messageCount} msgs, ${folderName(meta.cwd)})`, meta.path));
+        }
+      }
+      picker.value = '';
+    };
+    picker.addEventListener('change', () => {
+      if (picker.value) valueBox.value = picker.value;
+    });
     const targetRow = el('div', 'field-row');
     targetRow.appendChild(targetSel);
-    targetRow.appendChild(valueBox);
-    field('Target', targetRow, 'new-tab creates a session every run; a session file is reused, so the conversation keeps growing');
+    targetRow.appendChild(picker);
+    const targetValueWrap = el('div', 'field');
+    targetValueWrap.appendChild(valueBox);
+    const targetWrap = field('Send the prompt to', targetRow, 'a new tab starts a fresh conversation; a session file is reused, so the conversation keeps growing');
+    targetWrap.appendChild(targetValueWrap);
+    const targetHint = el('div', 'set-hint', '');
+    targetWrap.appendChild(targetHint);
+    const paintTargetHint = () => {
+      if (targetSel.value === 'session:') {
+        targetHint.textContent = 'session path (the picker fills it in): session:<path> - the job opens the file if no tab has it';
+      } else if (targetSel.value === 'tab:') {
+        targetHint.textContent = 'tab id (the picker fills it in): tab:<id> - an open tab only exists while the app runs, so this job stops working after a restart';
+      } else {
+        targetHint.textContent = 'nothing else to fill in: each run opens a new tab in the folder picked below';
+      }
+    };
+    targetSel.addEventListener('change', () => {
+      fillPicker();
+      paintTargetHint();
+      valueBox.style.display = targetSel.value === 'new-tab' ? 'none' : '';
+      picker.style.display = targetSel.value === 'new-tab' ? 'none' : '';
+    });
+    fillPicker();
+    paintTargetHint();
+    valueBox.style.display = targetSel.value === 'new-tab' ? 'none' : '';
+    picker.style.display = targetSel.value === 'new-tab' ? 'none' : '';
 
     const cwdRow = el('div', 'field-row');
     const cwdBox = input(job.cwd || state.cwd);
@@ -5367,19 +5590,7 @@ function openJobEditor(existing) {
     ephemeralWrap.appendChild(ephemeralRow);
     modal.appendChild(ephemeralWrap);
 
-    const refreshPreview = async () => {
-      preview.textContent = 'checking\u2026';
-      const res = await api.cronPreview(scheduleBox.value);
-      if (!res.valid) {
-        preview.className = 'set-hint bad';
-        preview.textContent = `not a valid schedule: ${res.error}`;
-        return;
-      }
-      preview.className = 'set-hint good';
-      preview.textContent = `${res.description} \u00b7 next: ${res.nextRun ? new Date(res.nextRun).toLocaleString() : 'never (this expression can never fire)'}`;
-    };
-    scheduleBox.addEventListener('input', () => refreshPreview());
-    refreshPreview();
+    syncSchedule();
 
     const actions = el('div', 'modal-actions');
     const cancel = el('button', 'ghost', 'Cancel');
@@ -5400,17 +5611,22 @@ function openJobEditor(existing) {
     };
     modalOpen = { finish, backdrop };
     const submit = () => {
+      const schedule = currentSchedule();
+      if (!schedule) {
+        toast('pick at least one weekday', 'warning');
+        return;
+      }
       const target = targetSel.value === 'new-tab' ? 'new-tab' : `${targetSel.value}${valueBox.value.trim()}`;
       if (target !== 'new-tab' && !valueBox.value.trim()) {
-        toast('the target needs a session path or a tab id', 'warning');
+        toast('the target needs a session path or a tab id (use the picker)', 'warning');
         return;
       }
       finish({
         cancelled: false,
         job: {
           id: job.id || `job-${Date.now().toString(36)}`,
-          name: nameBox.value.trim() || scheduleBox.value.trim(),
-          schedule: scheduleBox.value.trim(),
+          name: nameBox.value.trim() || schedule,
+          schedule,
           prompt: promptBox.value,
           target,
           cwd: cwdBox.value.trim(),
@@ -6733,8 +6949,42 @@ async function smokeCronScenario() {
     await new Promise((resolve) => setTimeout(resolve, 1200));
     const target = [...state.tabs.values()].find((tab) => tab.outbox.some((item) => /SMOKE-CRON/.test(item.text || '')));
     const badges = els.queueList.querySelectorAll('.qbadge.outbox').length;
+
+    // the dialog itself: the list must say what the schedule means in words, and the builder must
+    // write the cron expression by itself (nobody should have to type "30 9 * * 1-5")
+    const dialog = openJobsModal();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const described = [...document.querySelectorAll('.jobs-modal .job-when')].map((node) => node.textContent.trim());
+    await api.smokeShot('jobs-list');
+    const add = [...document.querySelectorAll('.jobs-modal .modal-actions button')].find((button) => button.textContent === 'Add job');
+    if (add) add.click();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const shot = await api.smokeShot('jobs-editor'); // layout check for the schedule builder
+    const editor = document.querySelector('.jobs-editor');
+    const lineOf = () => (editor && editor.querySelector('.job-cron-line') ? editor.querySelector('.job-cron-line').textContent.trim() : '');
+    const presetSel = editor ? editor.querySelector('.job-preset') : null;
+    const defaultLine = lineOf();
+    let stepLine = '';
+    let weeklyChipsShown = 'none';
+    if (presetSel) {
+      presetSel.value = 'minutes';
+      presetSel.dispatchEvent(new Event('change'));
+      stepLine = lineOf();
+      presetSel.value = 'weekly';
+      presetSel.dispatchEvent(new Event('change'));
+      weeklyChipsShown = editor.querySelector('.job-day-chips') ? getComputedStyle(editor.querySelector('.job-day-chips')).display : 'missing';
+      await api.smokeShot('jobs-editor-weekly');
+    }
+    const chips = editor ? editor.querySelectorAll('.job-chip').length : 0;
+    const cancel = editor ? [...editor.querySelectorAll('.modal-actions button')].find((button) => button.textContent === 'Cancel') : null;
+    if (cancel) cancel.click();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const close = [...document.querySelectorAll('.jobs-modal .modal-actions button')].find((button) => button.textContent === 'Close');
+    if (close) close.click();
+    await dialog;
+
     console.log(
-      `[smoke-cron] saved=${saved.ok} jobs=${listed.jobs.length} nextRun=${listed.jobs[0] && listed.jobs[0].nextRun ? 'set' : 'none'} preview=${JSON.stringify(preview.description)} has_next=${!!preview.nextRun} invalid_rejected=${bad.ok && !bad.valid} new_tab=${state.order.length > before} queued=${!!target} outbox_badges=${badges} tabs_before=${before}`,
+      `[smoke-cron] saved=${saved.ok} jobs=${listed.jobs.length} nextRun=${listed.jobs[0] && listed.jobs[0].nextRun ? 'set' : 'none'} preview=${JSON.stringify(preview.description)} has_next=${!!preview.nextRun} invalid_rejected=${bad.ok && !bad.valid} new_tab=${state.order.length > before} queued=${!!target} outbox_badges=${badges} tabs_before=${before} list_words=${JSON.stringify(described[0] || '')} builder_default=${JSON.stringify(defaultLine)} builder_step=${JSON.stringify(stepLine)} weekday_chips=${chips} weekly_chips_shown=${weeklyChipsShown} shot=${JSON.stringify(shot.file || shot.error)}`,
     );
     await api.cronSave([]);
     if (target) {
