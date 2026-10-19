@@ -367,7 +367,10 @@ test('storageStats: one group per folder-group directory, sized from stat withou
     const g1 = path.join(root, 'g1');
     const g2 = path.join(root, 'g2');
     const big = makeSession(g1, 'big.jsonl', 5000);
-    makeSession(g1, 'small.jsonl', 100);
+    // an explicit older mtime: written back-to-back, both files used to land in the same clock
+    // tick, so the "newest first" sort below had nothing to order by and the assertion flipped
+    // about one run in fifteen
+    makeSession(g1, 'small.jsonl', 100, Date.now() - DAY);
     makeSession(g2, 'other.jsonl', 1000);
     fs.writeFileSync(path.join(g1, 'not-a-session.txt'), 'ignore me', 'utf8');
     fs.mkdirSync(path.join(root, 'loose'), { recursive: true });
