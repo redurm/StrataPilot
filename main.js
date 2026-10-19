@@ -118,6 +118,16 @@ function scheduleUsageRefresh(delayMs = 5000) {
   if (usageRefreshTimer.unref) usageRefreshTimer.unref();
 }
 
+/** The ledger summary for the diagnostics report - a broken ledger must never break the report. */
+function usageSummaryForReport() {
+  try {
+    return usageLedger.summary();
+  } catch (err) {
+    console.error(`[usage-ledger] summary for diagnostics failed: ${err.message}`);
+    return null;
+  }
+}
+
 /** Clamp what the renderer asks for into something safe to hand the ledger. */
 function usageQuery(payload = {}) {
   const unit = ['day', 'week', 'month', 'year'].includes(payload && payload.unit) ? payload.unit : 'day';
@@ -641,6 +651,7 @@ async function buildDiagnostics(payload = {}) {
       rows: Array.isArray(payload.rows) ? payload.rows : [],
     },
     log: diagnostics.tail(appLog.logPath()),
+    usage: usageSummaryForReport(),
   };
 
   const text = diagnostics.format(data);

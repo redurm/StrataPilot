@@ -137,6 +137,31 @@ test('format(): covers the five items docs/TROUBLESHOOTING.md asks reporters for
   }
 });
 
+test('format(): the token ledger summary is part of the report (D9)', () => {
+  const withUsage = {
+    ...SAMPLE,
+    usage: {
+      all: { in: 1004395, out: 446453, cacheRead: 39674771, cacheWrite: 0, total: 41125619, answers: 560, compactions: 3, branches: 0 },
+      entries: 6,
+      gone: 1,
+      truncated: 0,
+      dedupeMissed: 1,
+      dayCount: 9,
+      ledgerFile: 'U:/token_usage.json',
+    },
+  };
+  const flat = format(withUsage).replace(/ {2,}/g, ' ');
+  assert.ok(flat.includes('token ledger 41,125,619 tokens'), 'total missing');
+  assert.ok(flat.includes('in 1,004,395 / out 446,453 / cache read 39,674,771 / cache write 0'), 'the split is missing');
+  assert.ok(flat.includes('from 6 session file(s) over 9 session-days'));
+  assert.ok(flat.includes('560 model replies, 3 compaction summaries, 0 branch summaries'), 'compact spend must be visible');
+  assert.ok(flat.includes('U:/token_usage.json'));
+  assert.ok(flat.includes('1 session file(s) already deleted (history kept)'));
+  assert.ok(flat.includes('1 fork(s) not deduplicated (parent session file gone)'));
+  // no ledger summary, no half-empty lines
+  assert.ok(!format(SAMPLE).includes('token ledger'));
+});
+
 test('format(): a key never survives, even when the caller forgot to redact', () => {
   const leaky = {
     ...SAMPLE,

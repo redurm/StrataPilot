@@ -40,7 +40,7 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   cleanup rules (age, or keep the N newest per folder) with a mandatory preview and a second
   confirmation. A session that is open in a tab is filtered out by the main process, paths outside the
   sessions folder are refused, and a bulk delete invalidates the metadata cache in one pass.
-- **Token usage ledger and chart** - the sidebar footer gained a second chip (`Usage: 33.1M tok`) and
+- **Token usage ledger and chart** - the sidebar footer gained a second chip (`Usage: 41.3M tok`) and
   **Usage** (`/usage`) opens a stacked column chart of **in / out / cache read / cache write** per
   **day / week / month / year** over the last 7 / 30 / 90 / 365 days or everything, with the per-model
   breakdown under it. pi already writes usage per message, but only into the session file - so a storage
@@ -48,12 +48,25 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   `%APPDATA%\StrataPilot\token_usage.json`: one entry per session file (keyed by the file *name*, which
   embeds the session uuid, so moving a session to another folder group keeps its history instead of
   double counting), day buckets, and the same `(mtime, size)` stamp cache as the session list so an
-  unchanged file is never opened again. Deleted sessions stay in the chart until you press **Recount
-  from files**; buckets older than 3 years are pruned; a session over the 12 MB scan cap is reported
-  rather than silently undercounted. Because cache reads dwarf everything else (33.4M against 851k real
-  prompt reads here), a checkbox takes cache out of the stack so in / out can be compared. The chart is
-  inline SVG - no dependency, no CSP change. 23 unit tests on a temp sessions root, plus
-  `STRATAPILOT_SMOKE_USAGE=1` (read-only, two screenshots).
+  unchanged file is never opened again. Because cache reads dwarf everything else (39.9M against 1.0M
+  real prompt reads here), a checkbox takes cache out of the stack so in / out can be compared. The
+  chart is inline SVG - no dependency, no CSP change.
+  The ledger's rule is that **tokens are never written off**: day buckets are only ever added to, so a
+  session file being rewritten (`SessionManager._rewriteFile()` reopens it with `"w"`) or truncated
+  cannot subtract what was banked, and a watermark (`countedCount` + `lastRecordId`) makes the re-scan
+  add only records it has not seen. Every usage-bearing entry is counted, not just replies: pi stamps
+  usage on `message`, `usage`, **`compaction`** and **`branch_summary`**, and those summaries are real
+  model calls (one compaction here cost 72,124 tokens by itself), so compacting and switching branches
+  are charged for what they spend. Forks and clones are deduplicated by entry id, because pi copies the
+  parent's entries verbatim - ids included - into the new file; a fork whose parent file is already gone
+  is reported rather than quietly double counted. Deleted sessions stay in the chart until **Recount
+  from files** (which asks first - it is the one action that can lower the totals); buckets older than
+  3 years are pruned; a session over the 12 MB scan cap is reported rather than silently undercounted.
+  33 unit tests on a temp sessions root - including "a rewritten session file cannot write off banked
+  tokens", "a compaction entry's usage is counted" and "a fork's copied entries are not counted twice"
+  - plus `STRATAPILOT_SMOKE_USAGE=1` (read-only, two screenshots). The **Diagnostics** report now carries
+  the ledger summary (totals, how many calls were compaction / branch summaries, and the deleted-session
+  / scan-cap / fork-dedup flags), so a "the numbers look wrong" ticket arrives with the data attached.
 - **Accessibility pass** - dialogs are now real dialogs (`role="dialog"`, labelled by their heading,
   focus moved in, `Tab` wrapped, `Esc` closing through the Cancel button, focus returned to the
   opener), icon-only buttons get an accessible name from their `title`, queue rows are focusable and

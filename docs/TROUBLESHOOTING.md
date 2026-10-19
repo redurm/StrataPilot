@@ -125,7 +125,10 @@ parent [`README.md`](../README.md).
 | Settings lost / want a reset | `%APPDATA%\StrataPilot\stratapilot_settings.json` (delete it to reset; the older `pi-gui` and `Pi on Strata` files are migrated on first launch) |
 | The **Usage** chart is empty on a fresh install | expected: the ledger (`%APPDATA%\StrataPilot\token_usage.json`) is built from the session files, and it fills in as sessions run. Opening the dialog rescans, and **Recount from files** rebuilds it from what is on disk. Deleting the ledger file is safe - the next scan recreates it |
 | The Usage numbers are lower than the session list says | a session bigger than the 12 MB scan cap is only read up to that point; the dialog says how many sessions were affected (`N session(s) were bigger than the 12 MB scan cap`) |
-| The Usage chart shows tokens for sessions I already cleaned up | deliberate: deleting a session file does not delete its cost history. **Recount from files** drops the entries whose file is gone (`N of them no longer exist on disk` in the dialog header) |
+| The Usage chart shows tokens for sessions I already cleaned up | deliberate: deleting a session file does not delete its cost history. **Recount from files** rebuilds the ledger from what is on disk, so those sessions leave with their files (it asks first, and it is the only action that can lower the totals) |
+| Compact or a branch switch looks free | it is not: pi stamps `usage` on `compaction` and `branch_summary` entries as well as on model replies, and the ledger counts all four. The dialog spells it out (`561 model calls · (3 compact, 1 branch summary)`) |
+| The Usage total went **down** | only **Recount from files** can lower it (it rebuilds from the files that exist). A normal refresh never subtracts: day buckets are only ever added to, so a session file being rewritten or truncated cannot write off what was already banked |
+| The same tokens look counted twice | pi's **fork** / **clone** copies the parent session's entries (ids included) into a new file; the ledger skips those ids. If the parent file was deleted before the fork was ever scanned it cannot know, and says so: `N fork(s) could not be deduplicated because their parent session file is gone` |
 
 ## What to include when reporting an issue
 

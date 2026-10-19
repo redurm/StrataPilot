@@ -3365,8 +3365,14 @@ function usageTotalsLine(totals, extra) {
     `cache read ${fmtTokens(totals.cacheRead || 0)}`,
     `cache write ${fmtTokens(totals.cacheWrite || 0)}`,
     `total ${fmtTokens(totals.total || 0)}`,
-    `${totals.msgs || 0} model answers`,
+    `${totals.msgs || 0} model calls`,
   ];
+  // compact and branch-switch summaries are model calls too - saying so is what makes it obvious
+  // that their tokens were not written off
+  const extraCalls = [];
+  if (totals.compactions) extraCalls.push(`${totals.compactions} compact`);
+  if (totals.branches) extraCalls.push(`${totals.branches} branch summary`);
+  if (extraCalls.length) parts.push(`(${extraCalls.join(', ')})`);
   if (totals.cost) parts.push(`$${Number(totals.cost).toFixed(4)}`);
   if (extra) parts.push(extra);
   return parts.join(' \u00b7 ');
@@ -3557,7 +3563,7 @@ async function openUsageModal() {
 
   const actions = el('div', 'modal-actions');
   const recountButton = el('button', '', 'Recount from files');
-  recountButton.title = 'drop the ledger entries of sessions that no longer exist on disk and re-read the rest (the chart then matches the files, not the history)';
+  recountButton.title = 'rebuild the ledger from the session files that exist right now - the only action that can lower the totals (sessions a cleanup deleted leave with their files)';
   const openButton = el('button', 'ghost', 'Open ledger folder');
   openButton.title = 'reveal token_usage.json in the file manager';
   const closeButton = el('button', 'ghost', 'Close');
@@ -3620,6 +3626,7 @@ async function openUsageModal() {
     if (res.entries) notes.push(`${res.entries} session${res.entries === 1 ? '' : 's'} in the ledger`);
     if (res.gone) notes.push(`${res.gone} of them no longer exist on disk \u2014 their history is kept`);
     if (res.truncated) notes.push(`${res.truncated} session(s) were bigger than the 12 MB scan cap, so those are counted only up to that point`);
+    if (res.dedupeMissed) notes.push(`${res.dedupeMissed} fork(s) could not be deduplicated because their parent session file is gone, so their copied tokens may be counted twice`);
     hint.textContent = `${usageTotalsLine(res.totals)} \u00b7 ${notes.join(' \u00b7 ') || 'nothing recorded yet'} \u00b7 ledger: ${res.ledgerFile || 'not set'}`;
     totalsLine.textContent = `${USAGE_UNITS.find((entry) => entry.value === unit).label} \u00b7 ${res.buckets.length} columns \u00b7 ${USAGE_RANGES.find((entry) => entry.value === range).label}`;
     buildUsageChart(chartWrap, res, selectBucket, cacheBox.checked);
@@ -3638,6 +3645,15 @@ async function openUsageModal() {
     draw();
   });
   recountButton.addEventListener('click', async () => {
+    // the one action that can lower the numbers: it rebuilds from the files on disk, so sessions a
+    // cleanup already deleted leave the chart with it. Asking first is deliberate.
+    const answer = await openModal({
+      kind: 'confirm',
+      title: 'Recount the usage ledger from the files on disk?',
+      message: 'Everything currently banked stays unless it comes from a session file that no longer exists. Sessions a cleanup already deleted leave the chart with their files - that is the point of this button, and it cannot be undone.',
+      okLabel: 'Recount',
+    });
+    if (!answer || !answer.confirmed) return;
     recountButton.disabled = true;
     const res = await api.usageRecount();
     recountButton.disabled = false;
@@ -3645,7 +3661,7 @@ async function openUsageModal() {
       toast(`recount failed: ${(res && res.error) || 'unknown'}`, 'error', 8000);
       return;
     }
-    toast(`recounted: ${res.parsed} session files read, ${res.droppedGone || 0} deleted sessions dropped from the ledger`, 'info', 8000);
+    toast(`recounted: ${res.parsed} session files read, ${res.droppedGone || 0} entries of deleted sessions dropped${res.deduped ? `, ${res.deduped} copied records recognised as forks` : ''}`, 'info', 9000);
     await draw();
   });
   openButton.addEventListener('click', async () => {
@@ -7648,7 +7664,7 @@ async function smokeUsageScenario() {
   if (closeBox) closeBox.click();
   await opened;
   console.log(
-    `[smoke-usage] ok=${day.ok && month.ok && sums.ok} ipc_day=${day.buckets.length} ipc_month=${month.buckets.length} chart_columns=${columns} after_unit=${monthColumns} entries=${day.entries} gone=${day.gone} ledger=${JSON.stringify(String(day.ledgerFile || '').split(/[\\/]/).pop())} total=${sums.all ? sums.all.total : 0} cache_read=${sums.all ? sums.all.cacheRead : 0} axis_with_cache=${JSON.stringify(axisWithCache)} axis_without_cache=${JSON.stringify(axisWithoutCache)} rescaled=${axisWithCache !== axisWithoutCache} detail=${JSON.stringify(detail.slice(0, 70))} footer=${JSON.stringify(footer.slice(-46))} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
+    `[smoke-usage] ok=${day.ok && month.ok && sums.ok} ipc_day=${day.buckets.length} ipc_month=${month.buckets.length} chart_columns=${columns} after_unit=${monthColumns} entries=${day.entries} gone=${day.gone} dedupe_missed=${day.dedupeMissed} ledger=${JSON.stringify(String(day.ledgerFile || '').split(/[\\/]/).pop())} total=${sums.all ? sums.all.total : 0} cache_read=${sums.all ? sums.all.cacheRead : 0} answers=${sums.all ? sums.all.answers : 0} compactions=${sums.all ? sums.all.compactions : 0} branches=${sums.all ? sums.all.branches : 0} axis_with_cache=${JSON.stringify(axisWithCache)} axis_without_cache=${JSON.stringify(axisWithoutCache)} rescaled=${axisWithCache !== axisWithoutCache} detail=${JSON.stringify(detail.slice(0, 70))} footer=${JSON.stringify(footer.slice(-46))} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
   );
 }
 

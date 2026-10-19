@@ -380,7 +380,233 @@ test('day buckets older than the retention window are dropped', () => {
   assert.ok(RETENTION_DAYS >= 365, 'retention is at least a year, so a yearly chart still has data');
 });
 
-/* ---- summary + misc ---- */
+/* ---- never write tokens off: compact, branch switch, rewrite, fork ---- */
+
+function headerEntry(id, day, parentSession) {
+  const header = { type: 'session', version: 3, id, timestamp: `${day}T08:00:00.000Z`, cwd: 'C:/work/demo' };
+  if (parentSession) header.parentSession = parentSession;
+  return header;
+}
+
+function assistantEntry(id, day, model, tokens) {
+  return {
+    type: 'message',
+    id,
+    timestamp: `${day}T10:00:00.000Z`,
+    message: {
+      role: 'assistant',
+      model,
+      content: [{ type: 'text', text: 'answer' }],
+      usage: usage(tokens.in, tokens.out, tokens.cr || 0, tokens.cw || 0, tokens.cost || 0),
+    },
+  };
+}
+
+function writeRaw(dir, fileName, entries) {
+  const target = path.join(dir, fileName);
+  fs.writeFileSync(target, entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n', 'utf8');
+  return target;
+}
+
+test('a compaction entry carries real usage and IS counted (compact must not be free)', () => {
+  const day = today();
+  writeRaw(groupDir, 'compacted.jsonl', [
+    headerEntry('compacted', day),
+    assistantEntry('a1', day, 'model-a', { in: 100, out: 20 }),
+    {
+      type: 'compaction',
+      id: 'k1',
+      timestamp: `${day}T11:00:00.000Z`,
+      summary: 'summary of the session',
+      firstKeptEntryId: 'a1',
+      tokensBefore: 184990,
+      usage: usage(68725, 3399, 0, 0),
+    },
+    assistantEntry('a2', day, 'model-a', { in: 5, out: 2 }),
+  ]);
+  refresh();
+  const report = series({ unit: 'day' });
+  assert.equal(report.totals.in, 100 + 68725 + 5, 'the compaction request itself is real spend');
+  assert.equal(report.totals.out, 20 + 3399 + 2);
+  const bucket = report.buckets[0];
+  assert.equal(bucket.answers, 2, 'two model replies');
+  assert.equal(bucket.compactions, 1, 'one compaction');
+  assert.equal(bucket.msgs, 3, 'three usage-bearing records in total');
+});
+
+test('a branch_summary entry (tree switch) is counted too', () => {
+  const day = today();
+  writeRaw(groupDir, 'branchy.jsonl', [
+    headerEntry('branchy', day),
+    {
+      type: 'branch_summary',
+      id: 'b1',
+      timestamp: `${day}T09:00:00.000Z`,
+      fromId: 'a1',
+      summary: 'what the abandoned branch did',
+      usage: usage(4000, 800, 0, 0),
+    },
+  ]);
+  refresh();
+  const report = series({ unit: 'day' });
+  assert.equal(report.totals.in, 4000);
+  assert.equal(report.buckets[0].branches, 1);
+});
+
+test('a standalone usage entry names its own model and is attributed to it', () => {
+  const day = today();
+  writeRaw(groupDir, 'warm.jsonl', [
+    headerEntry('warm', day),
+    assistantEntry('a1', day, 'model-a', { in: 10, out: 5 }),
+    { type: 'usage', id: 'u1', kind: 'cache_warm', provider: 'strata', model: 'warmer-model', timestamp: `${day}T10:30:00.000Z`, usage: usage(1000, 0, 500, 0) },
+  ]);
+  refresh();
+  const report = series({ unit: 'day' });
+  const warmer = report.models.find((model) => model.model === 'warmer-model');
+  assert.ok(warmer, 'the cache warm is attributed to the model it names, not the session model');
+  assert.equal(warmer.in, 1000);
+  assert.equal(report.totals.in, 1010);
+});
+
+test('rewriting a session file (pi reopens it with "w") cannot write off banked tokens', () => {
+  const day = today();
+  const file = writeRaw(groupDir, 'rewritten.jsonl', [
+    headerEntry('rewritten', day),
+    assistantEntry('a1', day, 'model-a', { in: 100, out: 10 }),
+    assistantEntry('a2', day, 'model-a', { in: 200, out: 20 }),
+    assistantEntry('a3', day, 'model-a', { in: 300, out: 30 }),
+  ]);
+  refresh();
+  assert.equal(series({ unit: 'day' }).totals.in, 600);
+
+  // same file, truncated and rewritten with only the first entry kept (a rewind / migration path)
+  writeRaw(groupDir, 'rewritten.jsonl', [headerEntry('rewritten', day), assistantEntry('a1', day, 'model-a', { in: 100, out: 10 })]);
+  const info = refresh();
+  assert.ok(info.parsed >= 1, 'the changed file is re-read');
+  assert.equal(series({ unit: 'day' }).totals.in, 600, 'the 600 tokens already spent stay on the books');
+  assert.ok(fs.existsSync(file));
+});
+
+test('a rewritten file only banks the records it has not seen yet (no double count)', () => {
+  const day = today();
+  writeRaw(groupDir, 'grown.jsonl', [
+    headerEntry('grown', day),
+    assistantEntry('a1', day, 'model-a', { in: 100, out: 10 }),
+    assistantEntry('a2', day, 'model-a', { in: 200, out: 20 }),
+  ]);
+  refresh();
+  assert.equal(series({ unit: 'day' }).totals.in, 300);
+
+  // rewritten from scratch with the same ids plus one new record (SessionManager._rewriteFile)
+  writeRaw(groupDir, 'grown.jsonl', [
+    headerEntry('grown', day),
+    assistantEntry('a1', day, 'model-a', { in: 100, out: 10 }),
+    assistantEntry('a2', day, 'model-a', { in: 200, out: 20 }),
+    assistantEntry('a3', day, 'model-a', { in: 7, out: 1 }),
+  ]);
+  refresh();
+  assert.equal(series({ unit: 'day' }).totals.in, 307, 'only the new record is added');
+});
+
+test('fork / clone copies the parent entries verbatim - they are not counted twice', () => {
+  const day = today();
+  const parent = writeRaw(groupDir, 'parent.jsonl', [
+    headerEntry('parent', day),
+    assistantEntry('a1', day, 'model-a', { in: 100, out: 10 }),
+    assistantEntry('a2', day, 'model-a', { in: 200, out: 20 }),
+  ]);
+  refresh();
+  assert.equal(series({ unit: 'day' }).totals.in, 300);
+
+  // exactly what pi's fork does: new header with parentSession, then the copied entries as-is
+  writeRaw(groupDir, 'forked.jsonl', [
+    headerEntry('forked', day, parent),
+    assistantEntry('a1', day, 'model-a', { in: 100, out: 10 }),
+    assistantEntry('a2', day, 'model-a', { in: 200, out: 20 }),
+    assistantEntry('a3', day, 'model-a', { in: 5, out: 1 }),
+  ]);
+  const info = refresh();
+  assert.equal(series({ unit: 'day' }).totals.in, 305, 'the copied 300 tokens stay counted once');
+  assert.equal(info.deduped, 2, 'two copied records were recognised');
+  assert.equal(info.dedupeMissed, 0);
+});
+
+test('a fork of a fork, and two forks of the same parent, still count each record once', () => {
+  const day = today();
+  const parent = writeRaw(groupDir, 'p.jsonl', [
+    headerEntry('p', day),
+    assistantEntry('a1', day, 'model-a', { in: 100, out: 0 }),
+    assistantEntry('a2', day, 'model-a', { in: 200, out: 0 }),
+  ]);
+  const fork1 = writeRaw(groupDir, 'f1.jsonl', [
+    headerEntry('f1', day, parent),
+    assistantEntry('a1', day, 'model-a', { in: 100, out: 0 }),
+    assistantEntry('a2', day, 'model-a', { in: 200, out: 0 }),
+    assistantEntry('b1', day, 'model-a', { in: 1, out: 0 }),
+  ]);
+  refresh();
+  assert.equal(series({ unit: 'day' }).totals.in, 301);
+
+  // fork of the fork
+  writeRaw(groupDir, 'f2.jsonl', [
+    headerEntry('f2', day, fork1),
+    assistantEntry('a1', day, 'model-a', { in: 100, out: 0 }),
+    assistantEntry('a2', day, 'model-a', { in: 200, out: 0 }),
+    assistantEntry('b1', day, 'model-a', { in: 1, out: 0 }),
+    assistantEntry('c1', day, 'model-a', { in: 2, out: 0 }),
+  ]);
+  // a sibling fork of the original parent
+  writeRaw(groupDir, 'f3.jsonl', [
+    headerEntry('f3', day, parent),
+    assistantEntry('a1', day, 'model-a', { in: 100, out: 0 }),
+    assistantEntry('a2', day, 'model-a', { in: 200, out: 0 }),
+    assistantEntry('d1', day, 'model-a', { in: 3, out: 0 }),
+  ]);
+  refresh();
+  assert.equal(series({ unit: 'day' }).totals.in, 306, '100+200 once, plus b1, c1 and d1');
+});
+
+test('a fork whose parent file is already gone is counted and reported, not silently dropped', () => {
+  const day = today();
+  const parent = writeRaw(groupDir, 'gone-parent.jsonl', [
+    headerEntry('gone-parent', day),
+    assistantEntry('a1', day, 'model-a', { in: 50, out: 5 }),
+  ]);
+  const copied = fs.readFileSync(parent, 'utf8');
+  writeRaw(groupDir, 'orphan-fork.jsonl', [
+    headerEntry('orphan-fork', day, parent),
+    ...copied.trim().split('\n').slice(1).map((line) => JSON.parse(line)),
+    assistantEntry('z9', day, 'model-a', { in: 7, out: 1 }),
+  ]);
+  fs.rmSync(parent, { force: true }); // the parent is cleaned up before the fork is ever scanned
+  const info = refresh();
+  assert.ok(info.dedupeMissed >= 1, 'the ledger admits it could not deduplicate that fork');
+  assert.ok(series({ unit: 'day' }).totals.in >= 57, 'nothing is dropped: the fork is counted');
+});
+
+test('recount() rebuilds strictly from the files on disk (the one action that can lower the total)', () => {
+  const day = today();
+  const doomed = writeRaw(groupDir, 'doomed2.jsonl', [headerEntry('doomed2', day), assistantEntry('a1', day, 'model-a', { in: 900, out: 10 })]);
+  writeRaw(groupDir, 'kept.jsonl', [headerEntry('kept', day), assistantEntry('a1', day, 'model-a', { in: 100, out: 1 })]);
+  refresh();
+  assert.equal(series({ unit: 'day' }).totals.in, 1000);
+  fs.rmSync(doomed, { force: true });
+  refresh();
+  assert.equal(series({ unit: 'day' }).totals.in, 1000, 'a plain refresh never writes off');
+  const recounted = recount();
+  assert.equal(series({ unit: 'day' }).totals.in, 100, 'recount means: match the disk');
+  assert.equal(recounted.droppedGone, 1);
+});
+
+test('a ledger written by an older version is rebuilt, not trusted (semantics changed)', () => {
+  writeSession(groupDir, 'v1.jsonl', [{ day: today(), in: 4, out: 1 }]);
+  fs.writeFileSync(ledgerPath, JSON.stringify({ version: 1, entries: { 'v1.jsonl': { days: { [today()]: { in: 1e6 } } } } }), 'utf8');
+  setLedgerFile(ledgerPath);
+  refresh();
+  assert.equal(series({ unit: 'day' }).totals.in, 4, 'the v1 numbers are dropped and rebuilt from the files');
+});
+
+/* ---- misc ---- */
 
 test('summary() reports all-time plus the last 7 and 30 days', () => {
   writeSession(groupDir, 'summary.jsonl', [
