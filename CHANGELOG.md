@@ -132,6 +132,18 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   background process never sees, so the tab now reports its new session file (`pi:session-path`) and a
   cleanup can no longer delete the file a live process is writing to. The same reporting happens after
   a fork or clone, which may hand the process a different file.
+- **The session tree was unreadable on a long session** - pi's tree is a chain (every entry's parent is the
+  entry before it), and the view indented one level per entry. A 76-entry session was 76 levels deep:
+  `8 + 76 * 14 = 1072px` of padding inside a 900px modal, so the row's content box collapsed, the text and
+  the time column spilled over the edge, the time drifted further right the deeper the row was, and the list
+  grew a horizontal scrollbar. The indent now grows one level per **branch point** instead of one per entry
+  (a single child keeps its parent's level), capped at 12, so a session with no branch points renders as the
+  flat list it is and the time column lines up again. The **branch you are on** marker moved from a
+  `border-left` - which sits outside the indent, so it drew one unbroken stripe down the whole list, detached
+  from the rows it marked - to a tick drawn at the row's own indent, stepping with the tree and breaking where
+  the branch does. The list no longer scrolls sideways, and entry text is clipped by css alone with the full
+  text on hover (the old js slice plus css ellipsis meant the js `…` was itself hidden). Covered by
+  `test/tree-depth.test.js`.
 
 ### Changed
 

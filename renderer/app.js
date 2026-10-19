@@ -2900,6 +2900,30 @@ function indexTree(tree, leafId) {
   return { byId, onPath };
 }
 
+/**
+ * Flatten the tree into display rows.
+ *
+ * pi's session tree is a chain: every entry's parent is the entry before it (model change, thinking
+ * level, prompt, answer, tool result, ...). Indenting one level per entry therefore buried a 76-entry
+ * session 76 levels deep - 8 + 76*14 = 1072px of padding inside a 900px modal, which pushed the text
+ * and the time column off the row and gave the list a horizontal scrollbar. So indent one level per
+ * *branch point* instead: a node with a single child keeps that child at the same level, and only a
+ * node with several children nests what follows. A session with no branch points renders as a flat
+ * list, which is what it actually is. `maxLevel` keeps a pathological fork storm inside the modal.
+ */
+function flattenTree(tree, onPath, maxLevel = 12) {
+  const rows = [];
+  const walk = (node, level, on) => {
+    const children = node.children || [];
+    rows.push({ node, level: Math.min(level, maxLevel), on, siblings: children.length });
+    const childLevel = children.length > 1 ? level + 1 : level;
+    const ordered = [...children].sort((a, b) => Number(onPath.has(b.entry.id)) - Number(onPath.has(a.entry.id)));
+    for (const child of ordered) walk(child, childLevel, on && onPath.has(child.entry.id));
+  };
+  for (const root of tree || []) walk(root, 0, onPath.has(root.entry.id));
+  return rows;
+}
+
 /** The transcript is built from messages, not entries, so a jump matches on text. */
 function findItemForEntry(tab, entry) {
   const text = treeText(entry).trim();
@@ -2931,14 +2955,7 @@ async function openSessionTree(tab) {
   tab.branchPoints = branchPoints;
   renderStats(tab);
 
-  const rows = [];
-  const walk = (node, depth, on) => {
-    const children = node.children || [];
-    rows.push({ node, depth, on });
-    const ordered = [...children].sort((a, b) => Number(onPath.has(b.entry.id)) - Number(onPath.has(a.entry.id)));
-    for (const child of ordered) walk(child, depth + 1, on && onPath.has(child.entry.id));
-  };
-  for (const root of tree) walk(root, 0, onPath.has(root.entry.id));
+  const rows = flattenTree(tree, onPath);
 
   return new Promise((resolve) => {
     const backdrop = el('div', 'modal-backdrop tree-backdrop');
@@ -2955,12 +2972,16 @@ async function openSessionTree(tab) {
     const list = el('div', 'tree-list');
     for (const row of rows) {
       const entry = row.node.entry;
-      const siblings = (byId.get(entry.id).children || []).length;
+      const siblings = row.siblings;
       const line = el('div', `tree-row${row.on ? ' on-path' : ' off-path'}${siblings > 1 ? ' branch' : ''}`);
-      line.style.paddingLeft = `${8 + row.depth * 14}px`;
+      line.style.setProperty('--indent', `${8 + row.level * 14}px`);
       line.appendChild(el('span', 'tree-kind', treeKind(entry)));
       const text = treeText(entry);
-      line.appendChild(el('span', 'tree-text', text ? (text.length > 150 ? `${text.slice(0, 150)}\u2026` : text) : '(no text)'));
+      // css does the clipping (text-overflow), so the full text stays readable on hover instead of
+      // being cut twice - a js slice plus a css ellipsis hid the js ellipsis
+      const shown = el('span', 'tree-text', text || '(no text)');
+      if (text) shown.title = text;
+      line.appendChild(shown);
       if (siblings > 1) line.appendChild(el('span', 'tree-branch', `\u2295 ${siblings} branches`));
       if (entry.id === leafId) line.appendChild(el('span', 'tree-leaf', 'leaf'));
       if (entry.timestamp) line.appendChild(el('span', 'tree-time', new Date(entry.timestamp).toLocaleTimeString()));

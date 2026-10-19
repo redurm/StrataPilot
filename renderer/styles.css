@@ -2267,7 +2267,8 @@ button:disabled {
   flex-direction: column;
 }
 .tree-list {
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-sunken);
@@ -2278,13 +2279,27 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 8px;
+  padding: 3px 8px 3px var(--indent, 8px);
   font-size: 12.5px;
-  border-left: 2px solid transparent;
+  position: relative;
 }
+/*
+ * The branch you are on. A border-left would sit on the row's outer edge - outside the indent - so a
+ * session with no branch points drew one unbroken stripe down the whole list, detached from the rows
+ * it was meant to mark. The tick follows --indent, so it steps with the tree and breaks where the
+ * branch does.
+ */
 .tree-row.on-path {
-  border-left-color: var(--accent);
   background: var(--bg-soft);
+}
+.tree-row.on-path::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--indent, 8px) - 7px);
+  width: 2px;
+  background: var(--accent);
 }
 .tree-row.off-path {
   opacity: 0.55;
