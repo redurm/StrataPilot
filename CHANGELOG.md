@@ -194,6 +194,21 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 
 ### Changed
 
+- **The README now starts from a fresh clone instead of from the feature list.** A first-time user used to
+  read ~300 lines of prose before learning that Node.js 22.19+ has to be installed at all. Added:
+  **What you are installing (three moving parts)** (Strata / pi / this GUI, who installs what, how to prove
+  each one is there), a nine-step **Set up from a fresh clone** (machine requirements, the toolchain per
+  platform, Strata, pi, the provider config, `npm ci` - what it really downloads, where the Electron binary
+  is cached, proxy and mirror settings, no build step - `npm start`, a verification table covering every
+  layer, the first run in the window, and where the app keeps its files plus how to reset or uninstall),
+  and **When the install itself fails** (blocked Electron download, TLS-intercepting proxy, the wrong Node
+  on PATH, the Linux system libraries and `--no-sandbox`, SmartScreen and Gatekeeper, a locked
+  `node_modules` on Windows). Also: a table of contents, the old numbered "Installation, configuration and
+  first run" chapter became **Configuration reference** (its prerequisites and install steps moved up into
+  the new walkthrough), the Quick start's "single devDependency: Electron (~100 MB)" corrected to what is
+  actually installed (`electron` + `electron-builder`, 422 MB of `node_modules`), `npm install` replaced by
+  `npm ci` throughout, eight smoke-scenario rows that had been pasted into the wrong tables moved back to
+  the smoke table, and the pipes inside the Usage scenario's axis strings escaped so that table renders.
 - **Auto-compact and auto-retry are always on: the two composer checkboxes are gone.** Both were off
   switches nobody asked for, and leaving them off only produced avoidable context overflows and
   failed requests. `bootstrap()` now calls `ensureAlwaysOn()` at every (re)start of a tab: it reads

@@ -5,6 +5,10 @@ Each tab is its own `pi --mode rpc` process, so you can have **several sessions 
 time**; because Strata handles only one request at a time, sends across sessions are ordered by the
 built-in **serial queue**.
 
+**Cloning this repo?** Four things have to be installed before a prompt can come back: **git**, **Node.js 22.19+**, **Strata** (the local model server) and **pi** (the coding agent). This repo adds exactly
+one dependency of its own — Electron, fetched by `npm ci` — and has no build step. Start at
+[Set up from a fresh clone](#set-up-from-a-fresh-clone-step-by-step).
+
 > Renamed twice — `pi_gui` → **Pi on Strata** → **StrataPilot**. The app name, the settings file
 > (`%APPDATA%\StrataPilot\stratapilot_settings.json`; the `pi-gui` and `Pi on Strata` files are carried
 > over automatically on first launch) and the environment variable prefix
@@ -14,12 +18,115 @@ built-in **serial queue**.
 > the pi sessions folder name, the `cwd` recorded inside session files, and the paths stored in the app
 > settings.
 
-## Quick start (TL;DR)
+## Table of contents
 
-Four steps. The first two are one-time setup: **this repo is only the GUI — it ships no model and no
-pi**.
+**Just cloned this repo?** Read these four in order:
+[What you are installing](#what-you-are-installing-three-moving-parts) →
+[Set up from a fresh clone](#set-up-from-a-fresh-clone-step-by-step) →
+[When the install itself fails](#when-the-install-itself-fails) →
+[Configuration reference](#configuration-reference).
+Runtime problems of an already-working install: [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 
-**1) Install Strata (the local LLM server)**
+Behaviour and features: [Features](#features) ·
+[The two sidebar lists](#the-two-sidebar-lists-why-some-rows-overlap-and-others-dont) ·
+[Serial queue](#serial-queue-one-session-at-a-time) ·
+Bash mode (`!`) and slash commands (`/`) ·
+[Session tree and branching](#session-tree-and-branching) ·
+[Session storage](#session-storage-size-and-cleanup) ·
+[Token usage](#token-usage-per-day--week--month--year) ·
+[Theme (dark / light)](#theme-dark--light) ·
+[Scheduled prompts (cron)](#scheduled-prompts-cron) ·
+[Strata Monitor](#strata-monitor-server-monitoring)
+
+Reference and internals: [Keyboard shortcuts](#keyboard-shortcuts) ·
+[Accessibility](#accessibility) · [Auto-compaction](#auto-compaction-identical-to-the-cli) ·
+[Retry of transient model errors](#retry-of-transient-model-errors) ·
+[Token counts: in / out / cache](#token-counts-in--out--cache) ·
+[How links are handled](#how-links-are-handled) ·
+[Streaming performance](#streaming-performance-does-collapsing-thinking-change-tps) ·
+[Packaging](#packaging-installers-and-a-portable-build) ·
+[Linux and macOS](#linux-and-macos) · [Architecture](#architecture) ·
+[Smoke mode for development](#smoke-mode-for-development) ·
+[Logs and crash diagnosis](#logs-and-crash-diagnosis) ·
+[Known limitations](#known-limitations)
+
+## What you are installing (three moving parts)
+
+**This repo is only the GUI.** It ships no model, no agent and no server. Three separate installs
+have to meet before a prompt can come back with an answer:
+
+```
+  ┌──────────────────────────────┐  spawns  pi --mode rpc   ┌───────────────────────────┐
+  │  StrataPilot  (this repo)    │ ───────────────────────► │  pi  (the coding agent)   │
+  │  the Electron window: tabs,  │                          │  installed under          │
+  │  queue, monitor, settings    │                          │  ~/.pi/agent/install      │
+  │  npm ci && npm start         │                          │  reads ~/.pi/agent/       │
+  └──────────────────────────────┘                          │  models.json, settings    │
+                                                            └─────────────┬─────────────┘
+                                                                          │ OpenAI-compatible HTTP
+                                                                          ▼
+                        ┌────────────────────────────────────────────────────────────┐
+                        │  Strata  (the local model server, usually port 8081)       │
+                        │  /v1/chat/completions · /v1/models · /health · /metrics    │
+                        └────────────────────────────────────────────────────────────┘
+```
+
+| Part | What it does | Who installs it | Prove it is there |
+|---|---|---|---|
+| **Strata** | loads the weights and answers `/v1/*`; it owns Python, CUDA and the model file | its own repo (`START-HERE.bat` / `setup.sh` installs Python, detects the GPU and downloads a model by itself) | `curl http://127.0.0.1:8081/health` |
+| **pi** | the coding agent: it talks to the model, writes the session JSONL, exposes RPC | the `pi.dev` install script, into `~/.pi/agent/install` | `pi --version` |
+| **StrataPilot** | this repo: the window, the tabs, the serial queue, the Monitor | `npm ci` in this folder (Electron is the only runtime you download) | `npx electron --version` |
+
+The GUI **never installs anything for you**. It detects a missing pi or a dead Strata and tells you
+about it (the `/setup` check, the env bar, the diagnostics report), but every install command below
+is one you run yourself.
+
+## Set up from a fresh clone (step by step)
+
+Written for someone who has just cloned this repo and has nothing else installed. Each step ends with
+a command that proves it worked — do not skip ahead until the previous one prints what it should.
+
+### Step 0: what the machine needs
+
+| | Requirement | Notes |
+|---|---|---|
+| Operating system | Windows 10/11 x64 | developed and hand-tested on Windows; Linux and macOS run in CI — see [Linux and macOS](#linux-and-macos) |
+| Free disk | ~15 GB | Strata + Python + one quantised model (several GB, model-dependent) · this repo's `node_modules` **422 MB** · the Electron download cache ~110 MB · `dist/` installers if you package |
+| RAM / VRAM | whatever your model needs | the GUI is a normal Electron app; each open tab is one `pi --mode rpc` process, so memory grows with the tab count. The model's appetite belongs to Strata, not to this repo |
+| GPU | not needed by this repo | needed to get usable speed out of Strata (its launcher detects it for you) |
+| Outbound network | `registry.npmjs.org`, `github.com` (the pi installer and the Electron binary), Hugging Face (the model weights), `pi.dev` | behind a corporate proxy: see [Step 5](#step-5-this-repos-dependencies) |
+
+You do **not** need Python, CUDA, a Visual C++ redistributable or a global `electron` for this repo —
+Python and CUDA belong to Strata, and Electron is fetched per-project by `npm ci`.
+
+### Step 1: the toolchain (git and Node.js 22.19+)
+
+`package.json` declares `"engines": { "node": ">=22.19" }`. That floor is **pi's** requirement, and
+`npm` itself needs Node as well. Check first:
+
+```bash
+node -v          # must print v22.19.0 or newer
+npm -v           # 10.x or 11.x ships with Node 22+
+git --version
+```
+
+If `node` is missing or too old:
+
+| Platform | Install | Then |
+|---|---|---|
+| Windows | `winget install OpenJS.NodeJS.LTS`, or the installer from nodejs.org | close and reopen the terminal; an app started from the Start menu only sees a changed `PATH` after sign-out / sign-in |
+| macOS (Homebrew) | `brew install node@22 && brew link --overwrite node@22` | put the keg's `bin` on PATH (`/opt/homebrew/opt/node@22/bin`) |
+| any (recommended when several Node versions coexist) | `fnm install 22 && fnm use 22`, or `nvm install 22 && nvm use 22` | the version manager has to be loaded by the same shell you run `npm start` from |
+| Linux (distro package) | **avoid** `apt install nodejs`: Ubuntu 22.04 ships Node 12, which cannot run pi | use `fnm` / `nvm` or the NodeSource repository |
+
+`where node` (Windows) / `which node` (macOS, Linux) tells you which one actually wins when several
+are installed.
+
+> The GUI can still *run pi* with no `node` on PATH: `lib/pi-launch.js` falls back to `electron.exe`
+> with `ELECTRON_RUN_AS_NODE=1`. That fallback never helps you **install** anything — `npm` always
+> needs a real Node.
+
+### Step 2: Strata, the model server
 
 ```bash
 # On Windows you can also just download the zip from the Strata site and unzip it
@@ -29,9 +136,11 @@ git clone https://github.com/Niko1221/Strata.git && cd Strata
 # Linux: ./setup.sh    Mac (Apple Silicon): xcode-select --install once, then ./setup.sh
 ```
 
-Once it is running, open `http://127.0.0.1:8081/metrics` in a browser — JSON means the server is up.
+Prove it: open `http://127.0.0.1:8081/metrics` in a browser (or `curl -s
+http://127.0.0.1:8081/health`) — JSON means the server is up. **Remember the port and the model
+name** the launcher prints: Step 4 has to match them exactly.
 
-**2) Install pi (the coding agent)**
+### Step 3: pi, the coding agent
 
 ```powershell
 powershell -c "irm https://pi.dev/install.ps1 | iex"   # Windows
@@ -39,25 +148,159 @@ powershell -c "irm https://pi.dev/install.ps1 | iex"   # Windows
 pi --version    # pi requires Node.js 22.19+ (the installer provides it if missing)
 ```
 
-**3) Point pi at Strata** (one-time setup)
+Reopen the terminal so `pi` is on PATH. The managed install lands in `~/.pi/agent/install`, and this
+GUI resolves it from `~/.pi/agent/install/current-version` — a pi installed some other way (a global
+`npm i -g`, a checkout) is invisible to it unless you set `STRATAPILOT_PI_CLI`, see
+[Environment variables](#environment-variables-all-prefixed-stratapilot_).
+
+### Step 4: point pi at Strata
 
 Add Strata as a provider in `~/.pi/agent/models.json` and set `defaultProvider` in
-`~/.pi/agent/settings.json`. **Every value comes from your Strata install** — the mapping and the
-commands that read them: [Connecting pi to Strata](#connecting-pi-to-strata-one-time-setup).
-After this, plain `pi` works in a terminal — and only then does the GUI's model dropdown have
-anything in it.
+`~/.pi/agent/settings.json`. **Do not copy anyone's block: every value comes from *your* Strata
+install.** The field-by-field mapping, and the two `curl` calls that read the values back off the
+running server, are in [Connecting pi to Strata (one-time setup)](#connecting-pi-to-strata-one-time-setup).
 
-**4) Install this repo and start it**
+Prove it before touching the GUI: plain `pi` in a terminal must answer a prompt. Only then does the
+GUI's model dropdown have anything in it.
+
+### Step 5: this repo's dependencies
 
 ```bash
 git clone <this repo> && cd StrataPilot
-npm install     # single devDependency: Electron (~100 MB)
-npm start
+npm ci            # installs exactly what package-lock.json pins
 ```
 
-In the window: `Ctrl+T` → pick a working folder → choose model / thinking in the top bar → type and
-send. `Ctrl+M` opens the Strata Monitor. All shortcuts: [Keyboard shortcuts](#keyboard-shortcuts).
-If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
+Use `npm ci`, not `npm install`: the lockfile (v3) pins `electron@40.10.2` and
+`electron-builder@^26.15.3` exactly, and `npm ci` refuses to run if the lockfile and `package.json`
+disagree instead of quietly rewriting them. `npm install` is only what you want when you are
+deliberately changing a dependency.
+
+What that command actually brings down:
+
+| What | Where it comes from | Size on this machine |
+|---|---|---|
+| `electron@40.10.2` — the runtime the app runs on | the npm package, whose `postinstall` downloads the Electron **binary** zip from `github.com/electron/electron/releases` | the zip ~110 MB; `node_modules/electron/dist` **332 MB** |
+| `electron-builder@^26` — only needed for `npm run dist*` | npm | part of the same install |
+| **nothing else** | the markdown renderer, the session parser, the cron parser and the usage ledger are hand-written: **zero runtime dependencies** | `node_modules` total **422 MB** |
+
+Notes that save time:
+
+- The Electron zip is cached, so a second clone on the same machine does not re-download it:
+  `%LOCALAPPDATA%\electron\Cache` (Windows), `~/Library/Caches/electron` (macOS),
+  `~/.cache/electron` (Linux). Delete that cache to force a fresh download.
+- `node_modules/`, `dist/`, `.smoke/` and `*.log` are git-ignored: a fresh clone has none of them,
+  and they must never be committed.
+- To run only the unit tests you do not need the Electron binary at all — that is exactly what CI
+  does: `ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci && npm test`.
+- Do **not** `npm install -g electron`: `npm start` uses the local `node_modules/.bin/electron`.
+- There is **no build step**: no bundler, no TypeScript, no compile. `main.js`, `lib/` and `renderer/`
+  are loaded as they are, so `npm ci` followed by `npm start` is the whole install.
+
+Behind a proxy, or where GitHub is unreachable:
+
+```bash
+npm config set https-proxy http://proxy:8080      # and: npm config set proxy  http://proxy:8080
+npm config set cafile /path/to/corp-ca.pem        # TLS-intercepting proxy: give npm the CA, do not disable ssl
+
+# the Electron binary is fetched by @electron/get: it honours HTTPS_PROXY / HTTP_PROXY,
+# and ELECTRON_MIRROR points it somewhere else (an internal mirror, an SMB share, …)
+set ELECTRON_MIRROR=https://example.internal/electron/     # cmd
+$env:ELECTRON_MIRROR = "https://example.internal/electron/"  # PowerShell
+export ELECTRON_MIRROR="https://example.internal/electron/"  # bash
+```
+
+### Step 6: start it
+
+```bash
+npm start          # = electron .
+```
+
+- Only **one instance** is allowed (`requestSingleInstanceLock`); running `npm start` again just gives
+  focus to the window that is already open.
+- Tabs that were open are restored on the next launch (up to 4); switch it off in Settings
+  (`restoreTabs: false`).
+- To start without a terminal: `start "" /b npm start`, a shortcut pointing at `electron .`, or an
+  installer / portable zip — see [Packaging](#packaging-installers-and-a-portable-build). Nothing is
+  code-signed, so SmartScreen and Gatekeeper complain once.
+- The env bar shows the pi version and **turns amber when it is not the version this GUI was tested
+  against** (`TESTED_PI_VERSION` in `lib/pi-launch.js`, currently `1.2.0`). pi is resolved through
+  `current-version`, so a pi upgrade can move the RPC contract under the GUI: same major.minor is
+  treated as safe, a different minor warns (pi adds RPC commands in minor releases), a different major
+  turns red (the framing may have changed). Hover the version for what to do; the same comparison is
+  printed in the diagnostics report. Set `STRATAPILOT_SMOKE_PI_VERSION=1.4.2` to see the warning
+  without installing another pi.
+
+### Step 7: check every layer before blaming the GUI
+
+| Layer | Command | A good answer looks like |
+|---|---|---|
+| Node | `node -v` | `v22.19.0` or newer |
+| npm | `npm -v` | 10.x / 11.x |
+| Electron binary | `npx electron --version` | `v40.10.2`, matching `package.json` |
+| the repo's own logic (no Electron, no pi, no Strata) | `npm test` | every test passes |
+| pi is found by the launcher | `node test/smoke-rpc.js C:/some/project` | the first four lines are `cli:` (a real path), `node:`, `pi version:`, `sessions root:` — then one RPC round trip. `cli: null` means pi was not found: set `STRATAPILOT_PI_CLI` / `PI_MANAGED_INSTALL_ROOT` |
+| Strata answers | `curl http://127.0.0.1:8081/health` | JSON with `model`, `max_context`, `api_key` |
+| the model id pi must use | `curl http://127.0.0.1:8081/v1/models` | the `id` you put in `models.json` |
+| the window starts with **no** Strata running | `STRATAPILOT_SMOKE=1 STRATAPILOT_SMOKE_MS=6000 npx electron .` | a `[smoke] window` line on stderr, and the env bar reporting `pi ?` is fine here. Linux headless: `xvfb-run -a` in front, `--no-sandbox` after |
+| inside the app | `/setup` | three green steps: the pi it found, `/health` answering, the working folder new tabs start in |
+
+### Step 8: the first run in the window
+
+1. `Ctrl+T` → pick a **working folder** (this is the folder pi will read and edit; it is not the
+   folder this repo lives in).
+2. Pick the model and the thinking level in the top bar — if that dropdown is empty, Step 4 was not
+   done.
+3. Type a prompt and send. `Ctrl+M` opens the Strata Monitor, `/stats` prints tokens and context use.
+4. Every shortcut: [Keyboard shortcuts](#keyboard-shortcuts). Something broke: start at
+   [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md), and press **Diagnostics** (`/diagnostics`)
+   before reporting it.
+
+### Step 9: where the app keeps its files, reset and uninstall
+
+| What | Windows | Linux | macOS |
+|---|---|---|---|
+| settings | `%APPDATA%\StrataPilot\stratapilot_settings.json` | `~/.config/StrataPilot/` | `~/Library/Application Support/StrataPilot/` |
+| token ledger | `token_usage.json` next to it | same folder | same folder |
+| logs | `logs\stratapilot.log` (menu **Help ▸ Open Log Folder**) | same folder | same folder |
+| diagnostics dumps | `diagnostics\` | same folder | same folder |
+| sessions | `~/.pi/agent/sessions` | same | same |
+| the pi install | `~/.pi/agent/install` | same | same |
+
+The last two rows belong to **pi**, not to this app: they are the same path on all three platforms and
+survive anything you do here.
+
+- **Reset the app**: quit it, then delete or rename that `StrataPilot` folder under `userData`. The
+  settings, the ledger, the logs and the diagnostics dumps all start over. pi's config and sessions
+  are untouched.
+- **Uninstall a development clone**: quit the app, delete the repo folder (`node_modules` alone is
+  422 MB) and, if you want the settings gone, the `userData` folder above.
+- **Uninstall an installed build**: the NSIS entry in *Add or remove programs* (it keeps your settings
+  by default — `deleteAppDataOnUninstall: false`), or just delete the folder of the portable zip.
+- Neither removes pi, Strata, the model weights or the session files: those are separate installs.
+
+## When the install itself fails
+
+Runtime problems live in [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md); this table is only
+about *getting from a clone to a running window*.
+
+| Symptom | Cause and fix |
+|---|---|
+| `npm ERR! engine ... wanted {"node":">=22.19"}` | Node is older than pi's floor → [Step 1](#step-1-the-toolchain-git-and-nodejs-2219) |
+| `npm ci` hangs on `reify:electron`, then `ETIMEDOUT` / `ECONNRESET` / `403` | the Electron **binary** download is blocked: set `HTTPS_PROXY` or `ELECTRON_MIRROR` → [Step 5](#step-5-this-repos-dependencies) |
+| `self-signed certificate in certificate chain` / `unable to verify the first certificate` | a TLS-intercepting proxy: `npm config set cafile <corp-ca.pem>` (do not turn off `strict-ssl` unless you have to) |
+| `Error: Electron failed to install correctly, please delete node_modules/electron` | the download died halfway: delete `node_modules/electron`, set the mirror, run `npm ci` again |
+| `'electron' is not recognized` / `sh: electron: not found` | you ran `electron .` instead of `npm start`, or `npm ci` never finished |
+| `node -v` still prints an old version after installing a new one | PATH order or a version manager that is not loaded in this shell → `where node` / `which node` |
+| Linux: `error while loading shared libraries: libgtk-3.so.0`, or an immediate abort | Electron's system libraries are missing: `sudo apt-get install -y libgtk-3-0 libnss3 libasound2t64 libxss1 libgbm1` (older releases call it `libasound2`) — the same list CI installs |
+| Linux in a container, or running as root: `FATAL:setuid_sandbox_host.cc` | the sandbox cannot start: `npx electron . --no-sandbox` |
+| Linux with no display | `xvfb-run -a npx electron .` |
+| Windows: SmartScreen "Windows protected your PC" | expected — nothing in this repo is code-signed → **More info → Run anyway** |
+| macOS: "…is damaged and can't be opened" | also the missing signature: right-click → **Open**, or `xattr -dr com.apple.quarantine <path>` |
+| `EBUSY` / `EPERM` / `ENOTEMPTY` while `npm ci` runs on Windows | a `StrataPilot`/`electron.exe` is still running and holding files: quit it, delete `node_modules`, run again. Antivirus and OneDrive-synced folders do this too |
+| `npm ci` is very slow, or fails on a path that is too long | clone somewhere short (`C:\dev\StrataPilot`) instead of OneDrive / Desktop, and enable Win32 long paths |
+| the window opens but the model dropdown is empty | Step 4 was skipped — pi has no provider. Run `/setup` and then read [Connecting pi to Strata](#connecting-pi-to-strata-one-time-setup) |
+| the window opens, sending spins forever | Strata is not running, or the port in `baseUrl` is not the port the launcher uses → `curl http://127.0.0.1:8081/health` |
+| you want proof of all of this without opening a window | `node test/smoke-rpc.js <cwd>` — its first four lines are exactly what `lib/pi-launch.js` resolved |
 
 ## Features
 
@@ -333,7 +576,10 @@ session's working folder**:
 | Two Enters | the first completes the path, the second sends the prompt - the same rule as the command palette |
 | Not an attachment | the path is inserted as **text**; the model reads the file with its own tools. Drag & drop or **Attach files** is still what actually uploads content |
 
-## Installation, configuration and first run
+## Configuration reference
+
+What the GUI reads and writes, and what to set when auto-detection is not enough. Getting from a bare
+clone to a running window is [Set up from a fresh clone](#set-up-from-a-fresh-clone-step-by-step).
 
 ### First-run check (the `/setup` command)
 
@@ -350,17 +596,7 @@ Closing the dialog (or pressing **Start using it**) records `firstRunSeen: true`
 back. Remove that key - or run `/setup` - to see it again.
 
 
-### 1. Prerequisites
-
-| Requirement | How to check | Notes |
-|---|---|---|
-| Windows 10/11 x64 | — | Developed on Windows (paths, `%APPDATA%`, PowerShell scripts) |
-| Strata server running locally | Open `http://127.0.0.1:8081/metrics` in a browser | e.g. `C:\Strata\strata-src\START-HERE.bat` (first run installs Python and a model). This app is only the GUI, **it brings no model** |
-| pi coding agent installed | `pi --version`, or look at `~/.pi/agent/install/current-version` | This app does not use the pi SDK; it spawns `pi --mode rpc` directly. Install command: see Quick start |
-| Node.js **22.19+** on PATH | `node -v` | Hard requirement of pi, and needed for `npm install`. The pi child process prefers the `node` on PATH (if none is found it falls back to `electron.exe` acting as node, see `lib/pi-launch.js`) |
-| Electron can be downloaded | `npm install` succeeds | Only one devDependency (`electron`); everything else is dependency-free (the markdown renderer and session parsing are hand-written) |
-
-### 2. Connecting pi to Strata (one-time setup)
+### Connecting pi to Strata (one-time setup)
 
 The GUI reads pi's own configuration, so **add Strata as a provider in pi first** — only then does the
 GUI's model dropdown list anything.
@@ -434,39 +670,7 @@ switch in the top bar after launch):
 > and the port. Re-read the two endpoints above afterwards and update `contextWindow` / `baseUrl` —
 > the auto-compaction trigger point and the Monitor's context-fill donut both follow `contextWindow`.
 
-### 3. Installing and starting this repo
-
-```bash
-cd StrataPilot
-npm install          # installs Electron (fast if cached)
-npm start            # electron .
-```
-
-- Only **one instance** is allowed (`requestSingleInstanceLock`); running `npm start` again just gives
-  focus to the window that is already open.
-- Tabs that were open are restored on the next launch (up to 4).
-- The env bar shows the pi version first and **turns amber when it is not the version this GUI was
-  tested against** (`TESTED_PI_VERSION` in `lib/pi-launch.js`, currently `1.2.0`). pi is resolved
-  through `~/.pi/agent/install/current-version`, so a pi upgrade can move the RPC contract under the
-  GUI: same major.minor is treated as safe, a different minor warns (pi adds RPC commands in minor
-  releases), a different major turns red (the framing may have changed). Hover the version for what
-  to do; the same comparison is printed in the diagnostics report. Set
-  `STRATAPILOT_SMOKE_PI_VERSION=1.4.2` to see the warning without installing another pi.
-- Restoring the previous tabs can be switched off in the Settings dialog (`restoreTabs: false`).
-- To start without a terminal: `start "" /b npm start`, or make a shortcut pointing at `electron .`.
-- Packaging exists (see [Packaging](#packaging-installers-and-a-portable-build)): `npm run dist:win` builds an NSIS
-  installer and a portable zip; nothing is code-signed, so Windows and macOS will warn on first launch.
-- To check the environment without the UI (no Electron, no prompt sent):
-
-  ```bash
-  node test/smoke-rpc.js C:/some/project
-  # prints cli: / node: / pi version: / sessions root: and then does one RPC round trip
-  ```
-
-  The first four lines are exactly what `lib/pi-launch.js` resolved; `cli: null` means pi was not
-  found and you need the environment variables from the next section.
-
-### 4. Environment variables (all prefixed `STRATAPILOT_*`)
+### Environment variables (all prefixed `STRATAPILOT_*`)
 
 Normally you set **nothing**; only override when auto-detection fails.
 
@@ -491,7 +695,7 @@ STRATAPILOT_NODE="C:/Program Files/nodejs/node.exe" \
 STRATAPILOT_KEY=llama npm start
 ```
 
-### 5. Application settings file
+### Application settings file
 
 `%APPDATA%\StrataPilot\stratapilot_settings.json` — written and **edited by the GUI itself**: the
 topbar **Settings** button (`Ctrl+,`, also `/settings`) is a form over every key below, it saves and
@@ -533,7 +737,6 @@ Open it with **`/tree`** or the **tree** chip in the stats row (it counts branch
 | **refresh** | re-reads the tree, useful right after a fork |
 
 Verified end to end with `STRATAPILOT_SMOKE_FORK=1` against a throwaway session: forking from the first
-| `STRATAPILOT_SMOKE_SETUP=1` | C5 first run: expect `modal=true steps=3 pi="pi 1.2.0 - the version this GUI was tested against…" strata="http://127.0.0.1:8081/health answered /health with HTTP 200 in 30ms" classes=["setup-status good","setup-status good","setup-status"] closed=true first_run_seen=true` |
 prompt leaves the transcript with that one message (`items_before=5 items_after=1`).
 
 > Forking is a pi operation, not a GUI edit: an extension can cancel it (`session_before_fork`) and the
@@ -599,13 +802,6 @@ theme` (keeps following `prefers-color-scheme` while the app runs).
 | Implementation | every colour in `styles.css` goes through a CSS variable, so a theme is only a redefinition of those variables (`[data-theme="light"]`); there is no second stylesheet and no duplicated rule |
 | No flash on start | the last applied theme is mirrored in `localStorage` and read by `renderer/theme-boot.js` before the first paint; the real setting (including `system`) is applied a moment later from the settings file |
 | Screenshots | `STRATAPILOT_SMOKE_THEME=1` switches theme, prints the computed colours and writes both screenshots to the temp folder (see the smoke table) |
-| `STRATAPILOT_SMOKE_A11Y=1` | D3: expect `dialog=true role=dialog aria_modal=true labelled_by_heading=true focus_inside=true tab_wraps=true esc_closes=true focus_restored=true nameless_buttons=0 toasts_live=polite tabs_role=tablist` plus the `aria-label` of an idle queue row and of a working one (`working_row_label="..., running, queue position 1 of 1. ..."` - the working row is the one that carries a position, and it is the row that once threw) |
-| `STRATAPILOT_SMOKE_STORAGE=1` | D7: reads the totals and three plans (absurd age, absurd cap, everything), checks the open session is filtered out and that the dialog opens and closes: expect `ok=true files=15 bytes=8562058 groups=2 none=0 also_none=0 everything=15 scanned=15 open_in_list=false footer="15 / 15 sessionsStorage: 8.2 MB in 15 files" dialog=true dialog_closed=true`. **Nothing is deleted by the scenario** |
-| `STRATAPILOT_SMOKE_USAGE=1` | D9: reads the ledger through IPC (per day and per month), opens the Usage dialog, counts the columns drawn, clicks one (the breakdown line must follow), unticks the cache stack (the axis must rescale), writes rates through the same IPC the rate table uses and switches the columns to **cost (USD)** (the axis must become money, the rate rows and their four inputs must exist, the header must show a `$` total), puts the rates back, switches to per month and counts again, then closes it: expect `ok=true ipc_day=4 ipc_month=1 chart_columns=4 after_unit=1 entries=6 gone=0 dedupe_missed=0 ledger="token_usage.json" total=52495909 cache_read=50784926 answers=657 compactions=4 branches=0 axis_with_cache="0|8.00M|16.00M|24.00M|32.00M" axis_without_cache="0|300.0k|600.0k|900.0k|1.20M" rescaled=true cost_axis="$0|$0.40|$0.80|$1.20|$1.60" cost_is_money=true rate_rows=3 rate_inputs=8 money_in_header=true money_before="7.35" typed_model_rate="qwen3.8-flash-next-iq3_s" saved_by_model=["qwen3.8-flash-next-iq3_s"] money_after="10.92" money_changed=true money_up=true refilled_boxes=5 detail="…" footer="…Usage: 51.18M tok" dialog=true dialog_closed=true`, plus three screenshots (`stratapilot-smoke-usage-chart.png`, `...-nocache.png`, `...-cost.png`). **Read-only for sessions** - and the smoke profile's ledger and settings files are separate from the real ones |
-| `STRATAPILOT_SMOKE_SERVERS=1` | D6: adds an unreachable address (`http://127.0.0.1:9/v1`) through Settings, checks the pill and its red health dot, points the cards at it, then removes it through the pill's `x`: expect `pills=4 bogus_pill=true dot_before="mon-dot bad" dot_after="mon-dot bad" active=127.0.0.1:9× removed=true pills_after=3` |
-| `STRATAPILOT_SMOKE_PATH=1` | D1: types `@lib/d` in the composer, waits for the palette, presses Enter: expect `rows=1 first="@lib/diagnostics.js…" inserted="read @lib/diagnostics.js" menu_open_after=false sent_instead=false` (the path is inserted, the prompt is **not** sent) |
-| `STRATAPILOT_SMOKE_TREE=1` | B1 read-only: opens the tree of a loaded session: expect `modal=true rows=278 on_path=278 off_path=0 branch_heads=0 fork_buttons=12 chip="tree"` |
-| `STRATAPILOT_SMOKE_FORK=1` | B1, **writes**: run it against a throwaway session only. Opens the tree, clicks **fork here** on the first user message, confirms, re-reads: expect `fork_button=true confirm=true rows_after=2 items_before=5 items_after=1` |
 
 ## Scheduled prompts (cron)
 
@@ -1055,6 +1251,14 @@ Other smoke switches:
 | `STRATAPILOT_SMOKE_CRON=1` | B5: saves a job through the main process, reads it back with a computed `nextRun`, previews `30 9 * * 1-5`, rejects `nope`, then run-now, and finally opens the dialog to check the builder: expect `saved=true jobs=1 nextRun=set preview="every weekday, at 09:30" has_next=true invalid_rejected=true new_tab=true queued=true outbox_badges=1 list_words="every day, every 5 minutes · next …" builder_default="cron: 30 9 * * 1-5" builder_step="cron: */30 * * * *" weekday_chips=7 weekly_chips_shown=flex shot="…stratapilot-smoke-jobs-editor.png"`. The serial queue is off inside the scenario, so the prompt never reaches the model |
 | `STRATAPILOT_SMOKE_TABTAG=1` | D5/D8: expect `model_tag=qwen3.8-flash-n… tag_title="strata/qwen3.8-flash-next-iq3_s" shown_when_alive=false shown_when_dead=true hidden_when_alive_again=true` |
 | `STRATAPILOT_SMOKE_THEME=1` | D2: expect `changed=true` plus the computed colours of both themes (`dark: body=rgb(15, 17, 21)/rgb(223, 227, 234)`, `light: body=rgb(244, 246, 249)/rgb(27, 35, 48)`) and two screenshots in the temp folder: `stratapilot-smoke-light-theme.png`, `stratapilot-smoke-dark-theme.png` |
+| `STRATAPILOT_SMOKE_SETUP=1` | C5 first run: expect `modal=true steps=3 pi="pi 1.2.0 - the version this GUI was tested against…" strata="http://127.0.0.1:8081/health answered /health with HTTP 200 in 30ms" classes=["setup-status good","setup-status good","setup-status"] closed=true first_run_seen=true` |
+| `STRATAPILOT_SMOKE_A11Y=1` | D3: expect `dialog=true role=dialog aria_modal=true labelled_by_heading=true focus_inside=true tab_wraps=true esc_closes=true focus_restored=true nameless_buttons=0 toasts_live=polite tabs_role=tablist` plus the `aria-label` of an idle queue row and of a working one (`working_row_label="..., running, queue position 1 of 1. ..."` - the working row is the one that carries a position, and it is the row that once threw) |
+| `STRATAPILOT_SMOKE_STORAGE=1` | D7: reads the totals and three plans (absurd age, absurd cap, everything), checks the open session is filtered out and that the dialog opens and closes: expect `ok=true files=15 bytes=8562058 groups=2 none=0 also_none=0 everything=15 scanned=15 open_in_list=false footer="15 / 15 sessionsStorage: 8.2 MB in 15 files" dialog=true dialog_closed=true`. **Nothing is deleted by the scenario** |
+| `STRATAPILOT_SMOKE_USAGE=1` | D9: reads the ledger through IPC (per day and per month), opens the Usage dialog, counts the columns drawn, clicks one (the breakdown line must follow), unticks the cache stack (the axis must rescale), writes rates through the same IPC the rate table uses and switches the columns to **cost (USD)** (the axis must become money, the rate rows and their four inputs must exist, the header must show a `$` total), puts the rates back, switches to per month and counts again, then closes it: expect `ok=true ipc_day=4 ipc_month=1 chart_columns=4 after_unit=1 entries=6 gone=0 dedupe_missed=0 ledger="token_usage.json" total=52495909 cache_read=50784926 answers=657 compactions=4 branches=0 axis_with_cache="0\|8.00M\|16.00M\|24.00M\|32.00M" axis_without_cache="0\|300.0k\|600.0k\|900.0k\|1.20M" rescaled=true cost_axis="$0\|$0.40\|$0.80\|$1.20\|$1.60" cost_is_money=true rate_rows=3 rate_inputs=8 money_in_header=true money_before="7.35" typed_model_rate="qwen3.8-flash-next-iq3_s" saved_by_model=["qwen3.8-flash-next-iq3_s"] money_after="10.92" money_changed=true money_up=true refilled_boxes=5 detail="…" footer="…Usage: 51.18M tok" dialog=true dialog_closed=true`, plus three screenshots (`stratapilot-smoke-usage-chart.png`, `...-nocache.png`, `...-cost.png`). **Read-only for sessions** - and the smoke profile's ledger and settings files are separate from the real ones |
+| `STRATAPILOT_SMOKE_SERVERS=1` | D6: adds an unreachable address (`http://127.0.0.1:9/v1`) through Settings, checks the pill and its red health dot, points the cards at it, then removes it through the pill's `x`: expect `pills=4 bogus_pill=true dot_before="mon-dot bad" dot_after="mon-dot bad" active=127.0.0.1:9× removed=true pills_after=3` |
+| `STRATAPILOT_SMOKE_PATH=1` | D1: types `@lib/d` in the composer, waits for the palette, presses Enter: expect `rows=1 first="@lib/diagnostics.js…" inserted="read @lib/diagnostics.js" menu_open_after=false sent_instead=false` (the path is inserted, the prompt is **not** sent) |
+| `STRATAPILOT_SMOKE_TREE=1` | B1 read-only: opens the tree of a loaded session: expect `modal=true rows=278 on_path=278 off_path=0 branch_heads=0 fork_buttons=12 chip="tree"` |
+| `STRATAPILOT_SMOKE_FORK=1` | B1, **writes**: run it against a throwaway session only. Opens the tree, clicks **fork here** on the first user message, confirms, re-reads: expect `fork_button=true confirm=true rows_after=2 items_before=5 items_after=1` |
 
 ```bash
 # serial queue test: first should finish before second starts; groups go WWWI → IWWI → IIII
@@ -1150,7 +1354,6 @@ The full backlog, with effort and priority, is in [`docs/TODO.md`](docs/TODO.md)
 - The transcript shows the branch you are on; `/tree` shows the whole entry tree and can fork from an
   earlier prompt or clone the branch, but there is no way to move the leaf onto an abandoned branch - pi
   exposes no RPC for that, only `fork` (user messages) and `clone`.
-  added on top of `get_tree`).
 - Dropping a folder only inserts its path; it is not expanded into multiple attachments.
 - One pi process per tab, so many tabs cost memory.
 - Only one bash command per tab at a time (pi's own limit), and a bash command started by an
