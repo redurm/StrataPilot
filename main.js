@@ -8,6 +8,7 @@ const path = require('node:path');
 const { PiRpcProcess } = require('./lib/pi-process');
 const { resolvePiInvocation, TESTED_PI_VERSION, piVersionStatus } = require('./lib/pi-launch');
 const sessions = require('./lib/sessions');
+const usageLedger = require('./lib/usage-ledger');
 const appLog = require('./lib/log');
 const diagnostics = require('./lib/diagnostics');
 const cron = require('./lib/cron');
@@ -15,6 +16,9 @@ const cron = require('./lib/cron');
 const APP_ID = 'com.stratapilot.app';
 const SETTINGS_NAME = 'stratapilot_settings.json';
 const SETTINGS_FILE = () => path.join(app.getPath('userData'), SETTINGS_NAME);
+// D9: the token usage rollup (day buckets per session) lives next to the settings file
+const USAGE_LEDGER_NAME = 'token_usage.json';
+const USAGE_LEDGER_FILE = () => path.join(app.getPath('userData'), USAGE_LEDGER_NAME);
 
 /**
  * The app was renamed "Pi on Strata" -> "StrataPilot", which moved the environment prefix
@@ -85,6 +89,46 @@ function saveSettings(settings) {
   } catch (err) {
     console.error('settings save failed:', err.message);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* D9: token usage ledger (day buckets per session, for the usage chart) */
+/* ------------------------------------------------------------------ */
+
+let usageRefreshTimer = null;
+
+/**
+ * Re-scan the session files into the usage ledger, debounced. The scan is incremental - a session
+ * file whose (mtime, size) did not change is never opened - so this is cheap; the debounce is only
+ * about not writing the ledger while a run is finishing. `usage:series` refreshes by itself, so
+ * opening the chart is always current.
+ */
+function scheduleUsageRefresh(delayMs = 5000) {
+  clearTimeout(usageRefreshTimer);
+  usageRefreshTimer = setTimeout(() => {
+    try {
+      const info = usageLedger.refresh();
+      if (info.parsed || info.failed) {
+        console.log(`[usage-ledger] parsed=${info.parsed} skipped=${info.skipped} entries=${info.entries} gone=${info.gone} failed=${info.failed}`);
+      }
+    } catch (err) {
+      console.error(`[usage-ledger] refresh failed: ${err.stack || err}`);
+    }
+  }, delayMs);
+  if (usageRefreshTimer.unref) usageRefreshTimer.unref();
+}
+
+/** Clamp what the renderer asks for into something safe to hand the ledger. */
+function usageQuery(payload = {}) {
+  const unit = ['day', 'week', 'month', 'year'].includes(payload && payload.unit) ? payload.unit : 'day';
+  const limit = Number.isFinite(payload && payload.limit) ? Math.max(0, Math.min(400, Math.trunc(payload.limit))) : 0;
+  return {
+    unit,
+    limit,
+    fromMs: Number.isFinite(payload && payload.fromMs) ? payload.fromMs : null,
+    toMs: Number.isFinite(payload && payload.toMs) ? payload.toMs : null,
+    fill: !(payload && payload.fill === false),
+  };
 }
 
 function send(channel, payload) {
@@ -358,6 +402,9 @@ function spawnTab({ tabId, cwd, args = [], env = {} }) {
     );
     processes.delete(tabId);
     send('pi:exit', { tabId, ...info });
+    // D9: a finished run is when new usage exists - refresh the rollup a little later so the write
+    // does not compete with whatever the user is doing right now
+    scheduleUsageRefresh();
   });
 
   try {
@@ -663,6 +710,7 @@ function registerIpc() {
       smokeTabTag: !!process.env.STRATAPILOT_SMOKE_TABTAG,
       smokeTheme: !!process.env.STRATAPILOT_SMOKE_THEME,
       smokeA11y: !!process.env.STRATAPILOT_SMOKE_A11Y,
+      smokeUsage: !!process.env.STRATAPILOT_SMOKE_USAGE,
       smokeStorage: !!process.env.STRATAPILOT_SMOKE_STORAGE,
       smokeServers: !!process.env.STRATAPILOT_SMOKE_SERVERS,
       smokePath: !!process.env.STRATAPILOT_SMOKE_PATH,
@@ -888,9 +936,43 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
       const paths = Array.isArray(payload && payload.paths) ? payload.paths : [];
       const result = sessions.deleteSessions(paths, { skip: openSessionPaths() });
       console.log(`[sessions:cleanup] requested=${paths.length} deleted=${result.deleted} bytes=${result.bytes} skipped_open=${result.skipped.length} failed=${result.failed.length}`);
+      if (result.deleted) scheduleUsageRefresh(0); // the ledger marks those entries as gone
       return { ok: true, ...result };
     } catch (err) {
       console.error(`[sessions:cleanup-run] failed: ${err.stack || err}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  /* D9: token usage rollup - the chart in the Usage dialog reads through these */
+  ipcMain.handle('usage:series', (_event, payload) => {
+    try {
+      const scan = usageLedger.refresh(); // incremental: only files that changed since the last scan
+      const report = usageLedger.series(usageQuery(payload));
+      return { ok: true, scan, ...report };
+    } catch (err) {
+      console.error(`[usage:series] failed: ${err.stack || err}`);
+      return { ok: false, error: err.message, buckets: [], totals: null, models: [] };
+    }
+  });
+
+  ipcMain.handle('usage:summary', () => {
+    try {
+      return { ok: true, ...usageLedger.summary() };
+    } catch (err) {
+      console.error(`[usage:summary] failed: ${err.stack || err}`);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  /** "Recount from the files on disk": drop the entries of sessions that no longer exist. */
+  ipcMain.handle('usage:recount', () => {
+    try {
+      const info = usageLedger.recount();
+      console.log(`[usage-ledger] recount dropped_gone=${info.droppedGone} parsed=${info.parsed} entries=${info.entries}`);
+      return { ok: true, ...info, ...usageLedger.summary() };
+    } catch (err) {
+      console.error(`[usage:recount] failed: ${err.stack || err}`);
       return { ok: false, error: err.message };
     }
   });
@@ -1128,11 +1210,15 @@ if (!gotLock) {
       smoke: SMOKE,
     });
     migrateSettings();
+    usageLedger.setLedgerFile(USAGE_LEDGER_FILE());
     if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
     buildMenu();
     registerIpc();
     createWindow();
     cronStart();
+    // D9: build / update the usage rollup once the window is up, so the footer chip and the chart
+    // have numbers without making startup wait for a scan of every session on disk
+    setTimeout(() => scheduleUsageRefresh(0), 2500);
     // A laptop that slept through 09:30 must not fire it at 11:00; it re-arms for tomorrow and the
     // user is told the run was missed (cronRecompute reports it).
     for (const event of ['resume', 'unlock-screen']) {
@@ -1156,6 +1242,8 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     cronStop();
+    clearTimeout(usageRefreshTimer);
+    usageLedger.flush(); // the ledger writes are atomic; this only avoids re-scanning on next start
     for (const proc of processes.values()) proc.dispose({ graceMs: 300 });
     processes.clear();
   });

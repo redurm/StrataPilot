@@ -223,6 +223,7 @@ const state = {
   settings: {},
   tabs: new Map(),
   storage: null,
+  usage: null,
   theme: 'dark',
   themeMode: 'dark',
   order: [],
@@ -2332,6 +2333,12 @@ async function refreshSessions() {
   storageButton.title = 'what the sessions folder costs, and a way to clear old sessions without opening the file manager';
   storageButton.addEventListener('click', () => openStorageModal());
   els.sideFoot.appendChild(storageButton);
+  // D9: the same footer spot also reaches the token ledger - the number there is the whole history,
+  // including sessions a cleanup already deleted from disk
+  const usageButton = el('button', 'ghost foot-usage', usageFootLabel());
+  usageButton.title = 'tokens used per day / week / month / year (in, out, cache read, cache write), kept in token_usage.json';
+  usageButton.addEventListener('click', () => openUsageModal());
+  els.sideFoot.appendChild(usageButton);
   els.sessionList.textContent = '';
 
   if (!res.sessions.length) {
@@ -3281,6 +3288,379 @@ async function openStorageModal() {
       await refreshSessions();
     });
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* token usage ledger (D9): persisted in / out / cache + column chart    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * pi writes the usage of every assistant message into the session JSONL, and lib/usage-ledger.js
+ * rolls that up into day buckets in %APPDATA%\StrataPilot\token_usage.json. This section is only the
+ * viewer: a stacked column chart per day / week / month / year, built as inline SVG (no canvas, no
+ * dependency, and the CSP stays at default-src 'self').
+ *
+ * The stack order is deliberate: cacheRead is usually two orders of magnitude bigger than the rest
+ * (this machine: 29.5M cache reads against 842k real prompt reads), so it goes at the bottom and the
+ * interesting in / out sit on top of it where they stay readable.
+ */
+
+const USAGE_UNITS = [
+  { value: 'day', label: 'per day' },
+  { value: 'week', label: 'per week' },
+  { value: 'month', label: 'per month' },
+  { value: 'year', label: 'per year' },
+];
+
+const USAGE_RANGES = [
+  { value: '0', label: 'everything' },
+  { value: '7', label: 'last 7 days' },
+  { value: '30', label: 'last 30 days' },
+  { value: '90', label: 'last 90 days' },
+  { value: '365', label: 'last year' },
+];
+
+/** bottom -> top */
+const USAGE_STACK = [
+  { key: 'cacheRead', cls: 'uc-cr', label: 'cache read' },
+  { key: 'cacheWrite', cls: 'uc-cw', label: 'cache write' },
+  { key: 'in', cls: 'uc-in', label: 'in' },
+  { key: 'out', cls: 'uc-out', label: 'out' },
+];
+
+function usageStackTotal(bucket) {
+  return (bucket.cacheRead || 0) + (bucket.cacheWrite || 0) + (bucket.in || 0) + (bucket.out || 0);
+}
+
+function usageFootLabel() {
+  const usage = state.usage;
+  if (!usage || !usage.all || !usage.all.total) return 'Usage';
+  return `Usage: ${fmtTokens(usage.all.total)} tok`;
+}
+
+function updateUsageFoot() {
+  const button = els.sideFoot.querySelector('.foot-usage');
+  if (button) button.textContent = usageFootLabel();
+}
+
+async function refreshUsageSummary() {
+  const res = await api.usageSummary();
+  if (!res || !res.ok) return null;
+  state.usage = res;
+  updateUsageFoot();
+  return res;
+}
+
+function usageRangeFrom(rangeValue) {
+  const days = Number(rangeValue);
+  if (!Number.isFinite(days) || days <= 0) return null;
+  return Date.now() - days * 86400000;
+}
+
+function usageTotalsLine(totals, extra) {
+  if (!totals) return 'no usage recorded';
+  const parts = [
+    `in ${fmtTokens(totals.in || 0)}`,
+    `out ${fmtTokens(totals.out || 0)}`,
+    `cache read ${fmtTokens(totals.cacheRead || 0)}`,
+    `cache write ${fmtTokens(totals.cacheWrite || 0)}`,
+    `total ${fmtTokens(totals.total || 0)}`,
+    `${totals.msgs || 0} model answers`,
+  ];
+  if (totals.cost) parts.push(`$${Number(totals.cost).toFixed(4)}`);
+  if (extra) parts.push(extra);
+  return parts.join(' \u00b7 ');
+}
+
+function usageBucketLine(bucket) {
+  const models = (bucket.models || []).slice(0, 3).map((model) => `${model.model} ${fmtTokens(model.total)}`).join(', ');
+  return [
+    bucket.full || bucket.key,
+    usageTotalsLine(bucket),
+    `${bucket.sessions || 0} session${bucket.sessions === 1 ? '' : 's'}`,
+    models ? `models: ${models}` : '',
+  ].filter(Boolean).join(' \u00b7 ');
+}
+
+/**
+ * Axis maximum: a round number at least as big as the tallest column, chosen so the four gridlines
+ * land on readable values (22.69M -> 24M, so the lines are 6M / 12M / 18M / 24M). The headroom also
+ * keeps a column's own number from colliding with the top gridline.
+ */
+function usageAxisMax(maxValue) {
+  if (!(maxValue > 0)) return 1;
+  const quarter = maxValue / 4;
+  const base = 10 ** Math.floor(Math.log10(quarter));
+  for (const step of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) {
+    if (quarter <= step * base) return step * base * 4;
+  }
+  return 40 * base;
+}
+
+/**
+ * One stacked column per bucket, as SVG sized in pixels (the wrapper scrolls sideways when the range
+ * is wide, which keeps the axis labels readable instead of shrinking them into illegibility).
+ */
+function buildUsageChart(container, report, onSelect, showCache = true) {
+  container.textContent = '';
+  const buckets = (report && report.buckets) || [];
+  if (!buckets.length) {
+    container.appendChild(el('div', 'empty-hint', 'No usage recorded in this range yet. The ledger fills in as sessions run.'));
+    return 0;
+  }
+  const NS = 'http://www.w3.org/2000/svg';
+  const colW = buckets.length > 40 ? 16 : buckets.length > 20 ? 24 : 34;
+  const gap = buckets.length > 40 ? 6 : 10;
+  const padLeft = 56;
+  const padRight = 10;
+  const padTop = 16;
+  const padBottom = 30;
+  const height = 250;
+  const innerH = height - padTop - padBottom;
+  const width = padLeft + padRight + buckets.length * (colW + gap);
+  const maxRaw = Math.max(1, ...buckets.map((bucket) => (showCache ? usageStackTotal(bucket) : (bucket.in || 0) + (bucket.out || 0))));
+  const max = usageAxisMax(maxRaw);
+
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'usage-chart');
+  svg.setAttribute('width', width);
+  svg.setAttribute('height', height);
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', `token usage per ${report.unit}: ${buckets.length} columns`);
+
+  const mk = (tag, attrs, text) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [name, value] of Object.entries(attrs || {})) node.setAttribute(name, value);
+    if (text != null) node.textContent = text;
+    return node;
+  };
+
+  // grid + y axis: the scale is the tallest column, not the total, so a cache-heavy day does not
+  // flatten every other one
+  for (let step = 0; step <= 4; step += 1) {
+    const ratio = step / 4;
+    const y = padTop + innerH - ratio * innerH;
+    svg.appendChild(mk('line', { x1: padLeft - 6, y1: y, x2: width - padRight, y2: y, class: 'uc-grid' }));
+    svg.appendChild(mk('text', { x: padLeft - 10, y: y + 4, class: 'uc-ylab', 'text-anchor': 'end' }, fmtTokens(Math.round(max * ratio))));
+  }
+
+  const labelEvery = Math.max(1, Math.ceil(buckets.length / 16));
+  buckets.forEach((bucket, index) => {
+    const x = padLeft + index * (colW + gap);
+    const group = mk('g', { class: 'uc-col', tabindex: 0, role: 'button', 'aria-label': usageBucketLine(bucket) });
+    let acc = 0;
+    for (const segment of USAGE_STACK) {
+      if (!showCache && segment.key !== 'in' && segment.key !== 'out') continue;
+      const value = bucket[segment.key] || 0;
+      if (!value) continue;
+      const top = padTop + innerH - ((acc + value) / max) * innerH;
+      const h = (value / max) * innerH;
+      group.appendChild(mk('rect', { x, y: top, width: colW, height: Math.max(1, h), class: `uc-seg ${segment.cls}` }));
+      acc += value;
+    }
+    const total = showCache ? usageStackTotal(bucket) : (bucket.in || 0) + (bucket.out || 0);
+    // a number above the column only fits when there are few of them
+    if (buckets.length <= 16 && total) {
+      group.appendChild(mk('text', { x: x + colW / 2, y: padTop + innerH - (total / max) * innerH - 5, class: 'uc-val', 'text-anchor': 'middle' }, fmtTokens(total)));
+    }
+    if (index % labelEvery === 0) {
+      group.appendChild(mk('text', { x: x + colW / 2, y: height - 10, class: 'uc-xlab', 'text-anchor': 'middle' }, bucket.label));
+    }
+    // hit area: a thin column with a tiny value still has to be clickable
+    group.appendChild(mk('rect', { x, y: padTop, width: colW, height: innerH, class: 'uc-hit' }));
+    group.appendChild(mk('title', {}, usageBucketLine(bucket)));
+    const select = () => onSelect(bucket, group);
+    group.addEventListener('mouseenter', select);
+    group.addEventListener('click', select);
+    group.addEventListener('focus', select);
+    group.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        select();
+      }
+    });
+    svg.appendChild(group);
+  });
+
+  container.appendChild(svg);
+  return buckets.length;
+}
+
+async function openUsageModal() {
+  let unit = 'day';
+  let range = '90';
+  let report = null;
+
+  const backdrop = el('div', 'modal-backdrop usage-backdrop');
+  const modal = el('div', 'modal usage-modal');
+  modal.appendChild(el('h3', '', 'Token usage'));
+
+  const hint = el('div', 'set-hint', 'reading the usage ledger\u2026');
+  modal.appendChild(hint);
+
+  const controls = el('div', 'field-row usage-controls');
+  const unitSel = document.createElement('select');
+  unitSel.setAttribute('aria-label', 'Column size');
+  for (const option of USAGE_UNITS) {
+    const opt = document.createElement('option');
+    opt.value = option.value;
+    opt.textContent = option.label;
+    unitSel.appendChild(opt);
+  }
+  const rangeSel = document.createElement('select');
+  rangeSel.setAttribute('aria-label', 'Time range');
+  for (const option of USAGE_RANGES) {
+    const opt = document.createElement('option');
+    opt.value = option.value;
+    opt.textContent = option.label;
+    rangeSel.appendChild(opt);
+  }
+  controls.appendChild(unitSel);
+  controls.appendChild(rangeSel);
+  modal.appendChild(controls);
+
+  const legend = el('div', 'usage-legend');
+  for (const segment of [...USAGE_STACK].reverse()) {
+    const chip = el('span', 'usage-legend-item');
+    chip.appendChild(el('span', `usage-swatch ${segment.cls}`));
+    chip.appendChild(el('span', '', segment.label));
+    legend.appendChild(chip);
+  }
+  modal.appendChild(legend);
+
+  /*
+   * Cache reads are usually two orders of magnitude bigger than in/out (this machine: 32.4M against
+   * 850k), which makes the interesting part of the stack a one-pixel cap. The toggle takes cache out
+   * of the scale so in/out can actually be compared between days.
+   */
+  const cacheRow = el('label', 'usage-cache-toggle');
+  const cacheBox = document.createElement('input');
+  cacheBox.type = 'checkbox';
+  cacheBox.checked = true;
+  cacheBox.setAttribute('aria-label', 'Include cache read and cache write in the stack');
+  cacheRow.appendChild(cacheBox);
+  cacheRow.appendChild(el('span', '', 'stack cache read / write (off: the columns show only in and out)'));
+  modal.appendChild(cacheRow);
+
+  const chartWrap = el('div', 'usage-chart-wrap');
+  modal.appendChild(chartWrap);
+
+  const detail = el('div', 'usage-detail', 'Hover or click a column for the breakdown.');
+  modal.appendChild(detail);
+
+  const totalsLine = el('div', 'usage-totals', '');
+  modal.appendChild(totalsLine);
+
+  const models = el('div', 'usage-models');
+  modal.appendChild(models);
+
+  const actions = el('div', 'modal-actions');
+  const recountButton = el('button', '', 'Recount from files');
+  recountButton.title = 'drop the ledger entries of sessions that no longer exist on disk and re-read the rest (the chart then matches the files, not the history)';
+  const openButton = el('button', 'ghost', 'Open ledger folder');
+  openButton.title = 'reveal token_usage.json in the file manager';
+  const closeButton = el('button', 'ghost', 'Close');
+  actions.appendChild(recountButton);
+  actions.appendChild(openButton);
+  actions.appendChild(closeButton);
+  modal.appendChild(actions);
+  backdrop.appendChild(modal);
+  els.modalRoot.appendChild(backdrop);
+
+  let done = false;
+  const opened = new Promise((resolve) => {
+    const finish = () => {
+      if (done) return;
+      done = true;
+      backdrop.remove();
+      modalOpen = null;
+      resolve(report);
+    };
+    modalOpen = { finish, backdrop };
+    closeButton.addEventListener('click', finish);
+    backdrop.addEventListener('mousedown', (event) => {
+      if (event.target === backdrop) finish();
+    });
+  });
+
+  const selectBucket = (bucket, group) => {
+    for (const node of chartWrap.querySelectorAll('.uc-col.selected')) node.classList.remove('selected');
+    if (group) group.classList.add('selected');
+    detail.textContent = usageBucketLine(bucket);
+  };
+
+  function renderModels() {
+    models.textContent = '';
+    const list = (report && report.models) || [];
+    if (!list.length) return;
+    models.appendChild(el('div', 'set-hint', 'models in this range'));
+    for (const model of list.slice(0, 8)) {
+      const row = el('div', 'usage-model-row');
+      row.appendChild(el('span', 'usage-model-name', model.model));
+      row.appendChild(el('span', 'usage-model-totals', `in ${fmtTokens(model.in)} \u00b7 out ${fmtTokens(model.out)} \u00b7 cache ${fmtTokens((model.cacheRead || 0) + (model.cacheWrite || 0))} \u00b7 total ${fmtTokens(model.total)}`));
+      row.appendChild(el('span', 'usage-model-msgs', `${model.msgs} ans`));
+      models.appendChild(row);
+    }
+    if (list.length > 8) models.appendChild(el('div', 'set-hint', `${list.length - 8} more models not shown`));
+  }
+
+  async function draw() {
+    const res = await api.usageSeries({ unit, fromMs: usageRangeFrom(range), limit: 0 });
+    if (!res || !res.ok) {
+      hint.textContent = `usage ledger failed: ${(res && res.error) || 'unknown error'}`;
+      chartWrap.textContent = '';
+      chartWrap.appendChild(el('div', 'note error', 'could not read the usage ledger'));
+      return;
+    }
+    report = res;
+    state.usage = { ...(state.usage || {}), all: res.totals, entries: res.entries, gone: res.gone, truncated: res.truncated, ledgerFile: res.ledgerFile };
+    updateUsageFoot();
+    const notes = [];
+    if (res.entries) notes.push(`${res.entries} session${res.entries === 1 ? '' : 's'} in the ledger`);
+    if (res.gone) notes.push(`${res.gone} of them no longer exist on disk \u2014 their history is kept`);
+    if (res.truncated) notes.push(`${res.truncated} session(s) were bigger than the 12 MB scan cap, so those are counted only up to that point`);
+    hint.textContent = `${usageTotalsLine(res.totals)} \u00b7 ${notes.join(' \u00b7 ') || 'nothing recorded yet'} \u00b7 ledger: ${res.ledgerFile || 'not set'}`;
+    totalsLine.textContent = `${USAGE_UNITS.find((entry) => entry.value === unit).label} \u00b7 ${res.buckets.length} columns \u00b7 ${USAGE_RANGES.find((entry) => entry.value === range).label}`;
+    buildUsageChart(chartWrap, res, selectBucket, cacheBox.checked);
+    renderModels();
+  }
+
+  cacheBox.addEventListener('change', () => {
+    if (report) buildUsageChart(chartWrap, report, selectBucket, cacheBox.checked);
+  });
+  unitSel.addEventListener('change', () => {
+    unit = unitSel.value;
+    draw();
+  });
+  rangeSel.addEventListener('change', () => {
+    range = rangeSel.value;
+    draw();
+  });
+  recountButton.addEventListener('click', async () => {
+    recountButton.disabled = true;
+    const res = await api.usageRecount();
+    recountButton.disabled = false;
+    if (!res || !res.ok) {
+      toast(`recount failed: ${(res && res.error) || 'unknown'}`, 'error', 8000);
+      return;
+    }
+    toast(`recounted: ${res.parsed} session files read, ${res.droppedGone || 0} deleted sessions dropped from the ledger`, 'info', 8000);
+    await draw();
+  });
+  openButton.addEventListener('click', async () => {
+    const file = report && report.ledgerFile;
+    if (!file) {
+      toast('the ledger file is not set', 'warning');
+      return;
+    }
+    await api.openPath(file, true);
+  });
+
+  rangeSel.value = range;
+  unitSel.value = unit;
+  await draw();
+  return opened;
 }
 
 /* accessibility (D3)                                                  */
@@ -4317,6 +4697,7 @@ const GUI_COMMANDS = [
   { name: 'setup', args: '', desc: 'first-run check: is pi installed, is Strata reachable, which folder do new tabs start in' },
   { name: 'tree', args: '', desc: 'show the session tree: branches, abandoned branches, fork from an earlier prompt, clone the branch' },
   { name: 'jobs', args: '', desc: 'scheduled prompts: list, add, edit, run now (cron in the main process, prompts through the serial queue)' },
+  { name: 'usage', args: '', desc: 'tokens used per day / week / month / year (in, out, cache), kept in a ledger that survives session deletion' },
   { name: 'settings', args: '', desc: 'open the settings dialog (working folder, serial queue, Strata address, Monitor, paths)' },
   { name: 'diagnostics', args: '', desc: 'copy a diagnostics report (versions, paths, Strata health, log tail, queue) for a bug report' },
   { name: 'commands', args: '', desc: 'list the slash commands available here' },
@@ -4501,6 +4882,10 @@ async function runSlashCommand(tab, text) {
     case 'jobs':
       clearComposer();
       await openJobsModal();
+      return true;
+    case 'usage':
+      clearComposer();
+      await openUsageModal();
       return true;
     case 'retry': {
       const what = arg.toLowerCase();
@@ -6419,6 +6804,7 @@ async function init() {
   wireUi();
   observeDialogs(); // D3: every dialog becomes a real dialog without touching its creator
   refreshStorage().catch(() => {}); // D7: the footer shows the folder size once this lands
+  refreshUsageSummary().catch(() => {}); // D9: and the token ledger total
   // the wizard is for a human first run; smoke scenarios open it explicitly when they want it
   if (firstRunNeeded() && !(state.info && state.info.smoke)) openFirstRunWizard().catch((err) => console.error('[setup] first-run wizard failed', err));
   observeControlNames();
@@ -6569,6 +6955,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeStorage) {
     setTimeout(() => smokeStorageScenario().catch((err) => console.error('[smoke] storage scenario failed', err)), 1500);
+  }
+
+  if (state.info.smoke && state.info.smokeUsage) {
+    setTimeout(() => smokeUsageScenario().catch((err) => console.error('[smoke] usage scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeA11y) {
@@ -7214,6 +7604,51 @@ async function smokeStorageScenario() {
   const closed = !els.modalRoot.querySelector('.modal');
   console.log(
     `[smoke-storage] ok=${stats.ok} files=${stats.totalFiles} bytes=${stats.totalBytes} groups=${stats.groups.length} none=${none.candidates.length} also_none=${alsoNone.candidates.length} everything=${everything.candidates.length} scanned=${everything.scannedFiles} open_in_list=${openListed} footer=${JSON.stringify(footer)} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
+  );
+}
+
+/**
+ * STRATAPILOT_SMOKE_USAGE=1: D9. Reads the ledger through IPC (day and month), opens the Usage
+ * dialog, counts the columns it drew, clicks one (the breakdown line must follow), switches the
+ * granularity to month and counts again, then closes it. Read-only: nothing is deleted, and the
+ * smoke profile's ledger file is separate from the real one.
+ */
+async function smokeUsageScenario() {
+  const day = await api.usageSeries({ unit: 'day', limit: 30 });
+  const month = await api.usageSeries({ unit: 'month' });
+  const sums = await api.usageSummary();
+  const opened = openUsageModal();
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const modal = els.modalRoot.querySelector('.usage-modal');
+  const columns = modal ? modal.querySelectorAll('.uc-col').length : 0;
+  const firstColumn = modal ? modal.querySelector('.uc-col') : null;
+  if (firstColumn) firstColumn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const detail = modal ? modal.querySelector('.usage-detail').textContent : '';
+  if (modal) await api.smokeShot('usage-chart'); // the chart is the part a screenshot can actually check
+  const axisLabels = (node) => (node ? [...node.querySelectorAll('.uc-ylab')].map((label) => label.textContent).join('|') : '');
+  const axisWithCache = axisLabels(modal);
+  const cacheBox = modal ? modal.querySelector('input[type="checkbox"]') : null;
+  if (cacheBox) {
+    cacheBox.checked = false;
+    cacheBox.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const axisWithoutCache = axisLabels(modal);
+  if (modal) await api.smokeShot('usage-chart-nocache'); // still per day, now scaled to in / out only
+  const unitSel = modal ? modal.querySelector('select[aria-label="Column size"]') : null;
+  if (unitSel) {
+    unitSel.value = 'month';
+    unitSel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const monthColumns = modal ? modal.querySelectorAll('.uc-col').length : 0;
+  const footer = els.sideFoot.textContent;
+  const closeBox = modal ? [...modal.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Close') : null;
+  if (closeBox) closeBox.click();
+  await opened;
+  console.log(
+    `[smoke-usage] ok=${day.ok && month.ok && sums.ok} ipc_day=${day.buckets.length} ipc_month=${month.buckets.length} chart_columns=${columns} after_unit=${monthColumns} entries=${day.entries} gone=${day.gone} ledger=${JSON.stringify(String(day.ledgerFile || '').split(/[\\/]/).pop())} total=${sums.all ? sums.all.total : 0} cache_read=${sums.all ? sums.all.cacheRead : 0} axis_with_cache=${JSON.stringify(axisWithCache)} axis_without_cache=${JSON.stringify(axisWithoutCache)} rescaled=${axisWithCache !== axisWithoutCache} detail=${JSON.stringify(detail.slice(0, 70))} footer=${JSON.stringify(footer.slice(-46))} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
   );
 }
 

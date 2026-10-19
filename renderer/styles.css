@@ -35,6 +35,11 @@
   --shadow-mid: 0 8px 24px rgba(0, 0, 0, 0.4);
   --shadow-soft: 0 6px 18px rgba(0, 0, 0, 0.45);
   --accent-wash: rgba(79, 156, 249, 0.12);
+  /* D9: the four stacked segments of the token usage chart, picked for both themes */
+  --uc-cr: #35597f;
+  --uc-cw: #6b7488;
+  --uc-in: #4f9cf9;
+  --uc-out: #4ec9a5;
 }
 
 /*
@@ -76,6 +81,10 @@
   --shadow-mid: 0 8px 24px rgba(31, 41, 55, 0.16);
   --shadow-soft: 0 6px 18px rgba(31, 41, 55, 0.14);
   --accent-wash: rgba(31, 111, 235, 0.1);
+  --uc-cr: #a9c8e8;
+  --uc-cw: #a9b3c4;
+  --uc-in: #1f6feb;
+  --uc-out: #14795a;
 }
 
 * {
@@ -2209,6 +2218,156 @@ button:disabled {
   margin-left: 8px;
   font-size: 11.5px;
   padding: 1px 6px;
+}
+.foot-usage {
+  margin-left: 8px;
+  font-size: 11.5px;
+  padding: 1px 6px;
+}
+
+/*
+ * D9: the token usage dialog. The chart is inline SVG, so the colours come from the theme variables
+ * like everywhere else; `fill` for the columns, `background` for the legend swatches.
+ */
+.usage-modal {
+  width: min(900px, 96vw);
+  max-height: 90vh;
+  overflow: auto;
+}
+.usage-controls {
+  margin: 8px 0 4px;
+  gap: 8px;
+}
+.usage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.usage-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.usage-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.usage-swatch.uc-cr {
+  background: var(--uc-cr);
+}
+.usage-swatch.uc-cw {
+  background: var(--uc-cw);
+}
+.usage-swatch.uc-in {
+  background: var(--uc-in);
+}
+.usage-swatch.uc-out {
+  background: var(--uc-out);
+}
+.usage-cache-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 8px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.usage-chart-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-sunken);
+  padding: 4px;
+}
+.usage-chart {
+  display: block;
+}
+.uc-grid {
+  stroke: var(--line-soft);
+  stroke-width: 1;
+}
+.uc-ylab,
+.uc-xlab {
+  fill: var(--text-faint);
+  font-size: 11px;
+  font-family: var(--mono);
+}
+.uc-val {
+  fill: var(--text-dim);
+  font-size: 11px;
+  font-family: var(--mono);
+}
+.uc-hit {
+  fill: transparent;
+}
+.uc-col {
+  cursor: pointer;
+}
+.uc-col:hover .uc-hit,
+.uc-col.selected .uc-hit {
+  fill: var(--accent-wash);
+}
+.uc-col:focus-visible .uc-hit {
+  fill: var(--accent-wash);
+  stroke: var(--accent);
+}
+.uc-cr {
+  fill: var(--uc-cr);
+}
+.uc-cw {
+  fill: var(--uc-cw);
+}
+.uc-in {
+  fill: var(--uc-in);
+}
+.uc-out {
+  fill: var(--uc-out);
+}
+.usage-detail {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  font-size: 12.5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+.usage-totals {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.usage-models {
+  margin-top: 10px;
+}
+.usage-model-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto 56px;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--line-faint);
+}
+.usage-model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-model-totals {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.usage-model-msgs {
+  color: var(--text-faint);
+  text-align: right;
 }
 
 /* D6: the Monitor's server switcher */

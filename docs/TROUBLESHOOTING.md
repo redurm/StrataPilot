@@ -123,6 +123,9 @@ parent [`README.md`](../README.md).
 | The `/tree` branches are not visible | `get_messages` returns only the current active branch; branch switching has no UI yet |
 | Many open tabs feel slow | Each tab is a `pi --mode rpc` process, so memory grows linearly with the tab count |
 | Settings lost / want a reset | `%APPDATA%\StrataPilot\stratapilot_settings.json` (delete it to reset; the older `pi-gui` and `Pi on Strata` files are migrated on first launch) |
+| The **Usage** chart is empty on a fresh install | expected: the ledger (`%APPDATA%\StrataPilot\token_usage.json`) is built from the session files, and it fills in as sessions run. Opening the dialog rescans, and **Recount from files** rebuilds it from what is on disk. Deleting the ledger file is safe - the next scan recreates it |
+| The Usage numbers are lower than the session list says | a session bigger than the 12 MB scan cap is only read up to that point; the dialog says how many sessions were affected (`N session(s) were bigger than the 12 MB scan cap`) |
+| The Usage chart shows tokens for sessions I already cleaned up | deliberate: deleting a session file does not delete its cost history. **Recount from files** drops the entries whose file is gone (`N of them no longer exist on disk` in the dialog header) |
 
 ## What to include when reporting an issue
 

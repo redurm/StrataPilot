@@ -104,6 +104,9 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   engines on two ports can be compared without editing settings by hand
 - **Session storage**: the footer shows how much disk the sessions take; a dialog cleans up by age or by
   "keep the N newest per folder", always after a preview, and never touching a session that is open
+- **Token usage ledger**: the footer also shows the all-time token total, and **Usage** (`/usage`) opens a
+  column chart of in / out / cache read / cache write per **day, week, month or year**. The rollup is kept
+  in its own file, so the history survives a session cleanup
 - **Accessibility**: dialogs are real dialogs (role, label, focus trapped and restored, `Esc`), icon-only
   buttons get an accessible name, queue rows describe their state in words instead of colour, focus is
   visible for keyboard users, and the animations honour `prefers-reduced-motion`
@@ -307,6 +310,7 @@ passed to pi, which expands extension commands, prompt templates and `/skill:nam
 | `/setup` | open the first-run check: is pi installed, is Strata reachable, which folder do new tabs start in |
 | `/tree` | show the session tree: the branch you are on, abandoned entries, fork from an earlier prompt, clone the branch |
 | `/stats` | print tokens / cost / context usage into the transcript |
+| `/usage` | token usage per day / week / month / year (in, out, cache), from the ledger - see [Token usage (per day / week / month / year)](#token-usage-per-day--week--month--year) |
 | `/monitor` | toggle the Strata monitor |
 | `/diagnostics` | copy a diagnostics report for a bug report (see [One-click diagnostics report](#one-click-diagnostics-report)) |
 | `/commands`, `/help` | list the app commands plus everything `get_commands` reports from pi |
@@ -551,6 +555,29 @@ Code: `storageStats()`, `cleanupPlan()`, `deleteSessions()` in `lib/sessions.js`
 temp sessions root, never the real one), IPC `sessions:stats` / `sessions:cleanup-plan` /
 `sessions:cleanup-run`, dialog `openStorageModal()`.
 
+## Token usage (per day / week / month / year)
+
+The sidebar footer shows the all-time total: `Usage: 33.1M tok`. Click **Usage** (or `/usage`) for the
+dialog: a stacked column chart of **in / out / cache read / cache write** per **day, week, month or
+year**, over the last 7 / 30 / 90 / 365 days or everything.
+
+| Thing | How |
+|---|---|
+| Where it is kept | `%APPDATA%\StrataPilot\token_usage.json` - one entry per session file, each holding day buckets (`in`, `out`, `cacheRead`, `cacheWrite`, `total`, `cost`, messages, split per model) |
+| Why a ledger at all | pi's numbers live in the session JSONL, so a D7 cleanup deletes them along with the file. The ledger is the record of what those sessions cost, and it is what makes "what did this week cost" answerable without re-reading every session |
+| Keyed by file name | pi names a session file `<createdAt>Z_<uuid>.jsonl`, so a session that moves to another folder group keeps its history instead of being counted twice (that is exactly what the `pi-on-strata` → `StrataPilot` folder rename did to every session on this machine) |
+| Deleted sessions | their day buckets stay in the chart (history). **Recount from files** drops the entries whose file is gone, so the chart matches what is on disk |
+| Incremental | the same `(mtime, size)` stamp trick as the session list cache: a session file that did not change is never opened again, so opening the chart over thousands of sessions stays cheap |
+| Local calendar | day buckets are the user's local day, not UTC - a session that ran at 23:30 belongs to their day. Weeks start on Monday |
+| Retention | day buckets older than 3 years are dropped on the next refresh |
+| Cache dominates | cache reads are usually two orders of magnitude bigger than real work (this machine: 33.4M cache reads against 851k prompt reads), so the dialog has a **stack cache read / write** checkbox: untick it and the columns show only in / out, rescaled |
+| Honest about limits | a session bigger than the 12 MB scan cap is counted only up to that point, and the dialog says how many sessions were affected |
+| Kept up to date | the ledger is refreshed once after startup, after every pi process exit, and whenever the dialog is opened; the file is written atomically (`tmp` + rename) |
+
+Code: `lib/usage-ledger.js` (23 unit tests against a temp sessions root), IPC `usage:series` /
+`usage:summary` / `usage:recount`, dialog `openUsageModal()` and `buildUsageChart()` (inline SVG, no
+dependency, CSP untouched).
+
 ## Theme (dark / light)
 
 Pick it in **Settings ▸ Interface ▸ Theme**: `Dark` (the default), `Light`, or `Follow the system
@@ -564,6 +591,7 @@ theme` (keeps following `prefers-color-scheme` while the app runs).
 | Screenshots | `STRATAPILOT_SMOKE_THEME=1` switches theme, prints the computed colours and writes both screenshots to the temp folder (see the smoke table) |
 | `STRATAPILOT_SMOKE_A11Y=1` | D3: expect `dialog=true role=dialog aria_modal=true labelled_by_heading=true focus_inside=true tab_wraps=true esc_closes=true focus_restored=true nameless_buttons=0 toasts_live=polite tabs_role=tablist` plus the `aria-label` of an idle queue row and of a working one (`working_row_label="..., running, queue position 1 of 1. ..."` - the working row is the one that carries a position, and it is the row that once threw) |
 | `STRATAPILOT_SMOKE_STORAGE=1` | D7: reads the totals and three plans (absurd age, absurd cap, everything), checks the open session is filtered out and that the dialog opens and closes: expect `ok=true files=15 bytes=8562058 groups=2 none=0 also_none=0 everything=15 scanned=15 open_in_list=false footer="15 / 15 sessionsStorage: 8.2 MB in 15 files" dialog=true dialog_closed=true`. **Nothing is deleted by the scenario** |
+| `STRATAPILOT_SMOKE_USAGE=1` | D9: reads the ledger through IPC (per day and per month), opens the Usage dialog, counts the columns drawn, clicks one (the breakdown line must follow), unticks the cache stack (the axis must rescale), switches to per month and counts again, then closes it: expect `ok=true ipc_day=4 ipc_month=1 chart_columns=4 after_unit=1 entries=6 gone=0 ledger="token_usage.json" total=34689740 cache_read=33442446 axis_with_cache="0|6.00M|12.00M|18.00M|24.00M" axis_without_cache="0|250.0k|500.0k|750.0k|1.00M" rescaled=true footer="...Usage: 34.69M tok" dialog=true dialog_closed=true`, plus two screenshots (`stratapilot-smoke-usage-chart.png`, `...-nocache.png`). **Read-only** - and the smoke profile's ledger file is separate from the real one |
 | `STRATAPILOT_SMOKE_SERVERS=1` | D6: adds an unreachable address (`http://127.0.0.1:9/v1`) through Settings, checks the pill and its red health dot, points the cards at it, then removes it through the pill's `x`: expect `pills=4 bogus_pill=true dot_before="mon-dot bad" dot_after="mon-dot bad" active=127.0.0.1:9× removed=true pills_after=3` |
 | `STRATAPILOT_SMOKE_PATH=1` | D1: types `@lib/d` in the composer, waits for the palette, presses Enter: expect `rows=1 first="@lib/diagnostics.js…" inserted="read @lib/diagnostics.js" menu_open_after=false sent_instead=false` (the path is inserted, the prompt is **not** sent) |
 | `STRATAPILOT_SMOKE_TREE=1` | B1 read-only: opens the tree of a loaded session: expect `modal=true rows=278 on_path=278 off_path=0 branch_heads=0 fork_buttons=12 chip="tree"` |

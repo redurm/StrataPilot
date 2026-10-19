@@ -26,6 +26,11 @@ const api = {
   sessionsCleanupRun: (payload = {}) => ipcRenderer.invoke('sessions:cleanup-run', payload),
   sessionsRename: (sessionPath, name) => ipcRenderer.invoke('sessions:rename', { sessionPath, name }),
 
+  /* token usage ledger (D9) ------------------------------------------ */
+  usageSeries: (payload = {}) => ipcRenderer.invoke('usage:series', payload),
+  usageSummary: () => ipcRenderer.invoke('usage:summary'),
+  usageRecount: () => ipcRenderer.invoke('usage:recount'),
+
   /* filesystem -------------------------------------------------------- */
   chooseFolder: () => ipcRenderer.invoke('fs:choose-folder'),
   chooseFile: (payload = {}) => ipcRenderer.invoke('fs:choose-file', payload),

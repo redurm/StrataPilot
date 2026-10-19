@@ -1,6 +1,7 @@
 # Changelog
 
-All notable changes to **Pi on Strata** are documented here. The format follows
+All notable changes to **StrataPilot** (earlier **Pi on Strata**, earlier still **pi_gui**) are
+documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the version in `package.json` is the one
 that is shipped (`0.x` while the app has no packaging/installer yet).
 
@@ -39,6 +40,20 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   cleanup rules (age, or keep the N newest per folder) with a mandatory preview and a second
   confirmation. A session that is open in a tab is filtered out by the main process, paths outside the
   sessions folder are refused, and a bulk delete invalidates the metadata cache in one pass.
+- **Token usage ledger and chart** - the sidebar footer gained a second chip (`Usage: 33.1M tok`) and
+  **Usage** (`/usage`) opens a stacked column chart of **in / out / cache read / cache write** per
+  **day / week / month / year** over the last 7 / 30 / 90 / 365 days or everything, with the per-model
+  breakdown under it. pi already writes usage per message, but only into the session file - so a storage
+  cleanup deleted the history along with it. `lib/usage-ledger.js` keeps its own rollup in
+  `%APPDATA%\StrataPilot\token_usage.json`: one entry per session file (keyed by the file *name*, which
+  embeds the session uuid, so moving a session to another folder group keeps its history instead of
+  double counting), day buckets, and the same `(mtime, size)` stamp cache as the session list so an
+  unchanged file is never opened again. Deleted sessions stay in the chart until you press **Recount
+  from files**; buckets older than 3 years are pruned; a session over the 12 MB scan cap is reported
+  rather than silently undercounted. Because cache reads dwarf everything else (33.4M against 851k real
+  prompt reads here), a checkbox takes cache out of the stack so in / out can be compared. The chart is
+  inline SVG - no dependency, no CSP change. 23 unit tests on a temp sessions root, plus
+  `STRATAPILOT_SMOKE_USAGE=1` (read-only, two screenshots).
 - **Accessibility pass** - dialogs are now real dialogs (`role="dialog"`, labelled by their heading,
   focus moved in, `Tab` wrapped, `Esc` closing through the Cancel button, focus returned to the
   opener), icon-only buttons get an accessible name from their `title`, queue rows are focusable and
