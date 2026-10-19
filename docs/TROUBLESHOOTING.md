@@ -68,7 +68,7 @@ parent [`README.md`](../README.md).
 | `Nothing to compact (session too small)` | The session is too small to have anything worth compacting (not an error) |
 | Compaction takes a long time and the transcript looks frozen | Big sessions really are slow (measured 86 MB / 141k tokens: about 5 minutes total, 3–4 of them rewriting the JSONL). Trust the `compaction_end` event; the timeout is 30 minutes |
 | Want to abort a compaction that runs too long | Press `Esc` (`session.abort()` calls `abortCompaction()`) → shows `compaction cancelled` |
-| Auto-compaction never happens | Check `compaction.enabled` in `~/.pi/agent/settings.json`; the `auto-compact` checkbox next to the editor is per-session (reopening a tab goes back to the global value). With ctx ≥85% and it off, the status bar shows an amber warning |
+| Auto-compaction never happens | The GUI turns auto-compaction on at every session start (`set_auto_compaction`), so `"compaction": { "enabled": false }` in `~/.pi/agent/settings.json` cannot leave a tab without it. If that RPC fails a toast says so and, with ctx ≥85%, the status bar shows an amber `auto-compact off` warning — check stderr for the RPC error |
 | Footer `ctx` still shows the pre-compaction number | Should no longer happen (`refreshStats()` runs after `compaction_end`); if you see it, report it together with stderr |
 
 ## Export (`/export`)

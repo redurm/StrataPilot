@@ -146,10 +146,10 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
   queued messages back into the editor; while they wait, the bottom bar shows their text (the top bar keeps
   showing the request that is running, and switches to the steering message once pi delivers it)
 - **Compact**: manual context compaction; the status bar shows context usage, tokens
-  (`in / out / cache`) and cost; the
-  **`auto-compact`** checkbox next to the editor toggles auto-compaction for this session (see below);
-  the **`auto-retry`** checkbox does the same for pi's retry of transient model errors, and a
-  **`stop retry`** button appears while a retry is waiting (`abort_retry`)
+  (`in / out / cache`) and cost. Auto-compaction and auto-retry are **always on** - the GUI turns
+  both on when a session starts and there is no checkbox for them (see
+  [Auto-compaction](#auto-compaction-identical-to-the-cli)); the composer only gets a
+  **`stop retry`** button while a retry is waiting (`abort_retry`)
 - **Extension UI bridging**: `select` / `confirm` / `input` / `editor` emitted by an extension become
   in-window dialogs; `notify` / `setStatus` / `setWidget` / `setTitle` / `set_editor_text` are shown too
 - **Settings dialog** (topbar **Settings**, `Ctrl+,`, `/settings`): working folder, serial queue,
@@ -631,7 +631,7 @@ with its `nextRun` cleared.
 ## Auto-compaction (identical to the CLI)
 
 Every tab is a real `pi --mode rpc` process reading the same `~/.pi/agent/settings.json`, so
-**auto-compaction is already on** — the GUI does not have to implement anything:
+**auto-compaction is already on** — the GUI only has to keep it on:
 
 | pi setting (`compaction`) | Default |
 |---|---|
@@ -648,13 +648,11 @@ compaction never cuts off a reply that is being generated**; only a **manual** C
 What the GUI shows and lets you change:
 
 - When it happens the transcript shows `compacting (auto)…`, then `compacted 183k → ~24k tokens`
-- The **`auto-compact`** checkbox next to the editor: toggles **this session** via RPC
-  `set_auto_compaction` (each tab independently); the state is read back from
-  `get_state.autoCompactionEnabled` (reopening a tab goes back to the global setting)
-- If you turn auto-compact off and ctx is already ≥85%, the status bar shows an amber warning
+- **Always on, on purpose**: at every (re)start the tab reads `get_state.autoCompactionEnabled` and,
+  if pi came up without it (a `"compaction": { "enabled": false }` in that settings file), puts it
+  back on with `set_auto_compaction`. The composer has no `auto-compact` checkbox any more
+- If that RPC ever fails and ctx is already ≥85%, the status bar shows an amber warning
   `auto-compact off · compact before it overflows`, so you do not hit overflow blind
-- To turn it off **permanently**: set `"compaction": { "enabled": false }` in
-  `~/.pi/agent/settings.json`
 
 ## Token counts: in / out / cache
 
@@ -685,15 +683,15 @@ Monitor panel reports as `prompt tokens read (reused) · written`.
 ## Retry of transient model errors
 
 Strata drops a request now and then (overloaded, rate limit, 5xx, and - the common one here - a
-Strata restart mid-request). pi retries those by itself, and the GUI exposes both halves of it:
+Strata restart mid-request). pi retries those by itself, and the GUI keeps that on and exposes the
+one half of it that still needs a hand:
 
 | What | Where |
 |---|---|
 | The retry itself | transcript notes: `retry 2/4 in 3000ms: <error>` (`auto_retry_start`) and, if it gives up, `retry failed after 4 attempts: ...` (`auto_retry_end`) |
-| **`auto-retry`** checkbox | next to `auto-compact`, per session, RPC `set_auto_retry` - off means the request fails on the first transient error instead of waiting |
+| **always on** | every (re)start sends `set_auto_retry { enabled: true }`, so a tab never comes up without retries even if pi's own settings have `"retry": { "enabled": false }` - there is no `auto-retry` checkbox in the composer |
 | **`stop retry`** button | appears in the composer **only while a retry is sitting in its delay**, and sends `abort_retry`: the delay is cancelled and the request fails now instead of hammering a server that is clearly down |
-| `/retry`, `/retry on`, `/retry off`, `/retry stop` | same from the palette; bare `/retry` prints the current state and the attempt it is waiting for |
-| Off for every session | pi's own setting: `"retry": { "enabled": false }` in `~/.pi/agent/settings.json` (the checkbox is per tab and resets when a tab is reopened, because `get_state` does not report the current value) |
+| `/retry`, `/retry on`, `/retry off`, `/retry stop` | same from the palette; bare `/retry` prints the current state and the attempt it is waiting for. `on` / `off` are the escape hatch for one bad stretch in one session - a restarted session is always on |
 
 ## Compaction and an in-flight request (not a bug, but confusing)
 
@@ -1044,7 +1042,7 @@ Other smoke switches:
 | `STRATAPILOT_SMOKE_MONITOR=1` | Opens the Monitor panel right after startup (with `STRATAPILOT_SMOKE_PROMPT` you can watch the generating state) |
 | `STRATAPILOT_SMOKE_COMPACT=1` | Queues a compact during a long generation: "wait for idle" must not kill the request (Strata should show `stop`, not `disconnect`) |
 | `STRATAPILOT_SMOKE_ORDER=1` | Opens tabs A/B/C, starts B, then sends in C and A; the order should become `B C A` (A moves from first to the back of Working), execution order B → C → A |
-| `STRATAPILOT_SMOKE_AUTO_COMPACT=1` | Tests `get_state.autoCompactionEnabled` → `set_auto_compaction off/on` → read back; should print `initial=true … now=false … now=true` |
+| `STRATAPILOT_SMOKE_AUTO_COMPACT=1` | Checks auto-compaction is always on: `get_state` at boot, `set_auto_compaction off`, then `ensureAlwaysOn()` and read back; should print `boot=true … now=false … ensureOn=true tab.autoCompact=true` |
 | `STRATAPILOT_SMOKE_BASH=1` | Runs `!echo …`, `!!echo …` and `!exit 3`, then `/commands`, and checks the slash palette (`/co` + `Tab`): expect `cards=1 class=bash-card done`, `sign=!!`, `class=bash-card error … exit 3`, and `open=true rows=5` |
 | `STRATAPILOT_SMOKE_BARS=1` | Sends a long prompt, queues a steer while it runs and prints both pinned bars: expect `top="working on prompt …"` with `bottom="… steering … next turn"`, then `top="last request steering …"` and `bottom="(hidden)"` after the steer is delivered; also checks `↓ jump` (`node=true flashed=true`) |
 | `STRATAPILOT_SMOKE_PASTE=1` | Synthesises `paste` events carrying a generated 1×1 PNG: expect `files=1 images=1 chips=1 first=pasted-1.png size=70b`, then `images=2 chips=2 first=pasted-2.png`; also checks a two-image paste, `bmp` → "unsupported image type" toast, an 8 MB+ image → "image too large" toast, plain-text paste (`prevented=false`) and the modal guard (`modalOpen=true prevented=false images` unchanged) |
@@ -1052,7 +1050,7 @@ Other smoke switches:
 | `STRATAPILOT_SMOKE_EXPORT=1` | Use with `STRATAPILOT_SMOKE_SESSION=<path>`: runs `/export <temp>\stratapilot_smoke_export.html` (no dialog; override the target with `STRATAPILOT_SMOKE_EXPORT_OUT`), then stats pi's returned path through the read-only `fs:stat-paths`: expect `ok=true path=… exists=true bytes=N` |
 | `STRATAPILOT_SMOKE_DIAG=1` | Clicks **Diagnostics** (clipboard write is captured in JS) and checks the report: expect `copied=1 chars=… lines=… missing_sections=none unredacted_apikeys=0` — all seven sections present and no `apiKey` value left unredacted |
 | `STRATAPILOT_SMOKE_SETTINGS=1` | Opens the Settings dialog, counts its fields, clicks **Save** and re-reads the file: expect `fields=8 rendered=8 prefilled=3 missing=none saved_monitorWidth=520 css=520px serial=true restoreTabs=true` (the smoke profile keeps these writes away from your real settings) |
-| `STRATAPILOT_SMOKE_RETRY=1` | Exercises `set_auto_retry off/on` and `abort_retry`, then feeds the two retry events the composer reacts to: expect `setOff=true setOn=true checkbox_after_off=false stop_shown=true stop_hidden_after_end=true abort=true` |
+| `STRATAPILOT_SMOKE_RETRY=1` | Checks auto-retry starts on, exercises `/retry`'s `set_auto_retry off/on` and `abort_retry`, then feeds the two retry events the composer reacts to: expect `bootOn=true setOff=true tabOff=true setOn=true tabOn=true stop_shown=true stop_hidden_after_end=true abort=true` |
 | `STRATAPILOT_SMOKE_OUTBOX=1` | B4: packs an outbox entry (an oversized image is dropped instead of bloating the settings file), restores it and checks nothing was sent: expect `packed=2 images_dropped=1 restored=2 pending=2 badge=pending 2 outbox=0 auto_sent=false` |
 | `STRATAPILOT_SMOKE_CRON=1` | B5: saves a job through the main process, reads it back with a computed `nextRun`, previews `30 9 * * 1-5`, rejects `nope`, then run-now, and finally opens the dialog to check the builder: expect `saved=true jobs=1 nextRun=set preview="every weekday, at 09:30" has_next=true invalid_rejected=true new_tab=true queued=true outbox_badges=1 list_words="every day, every 5 minutes · next …" builder_default="cron: 30 9 * * 1-5" builder_step="cron: */30 * * * *" weekday_chips=7 weekly_chips_shown=flex shot="…stratapilot-smoke-jobs-editor.png"`. The serial queue is off inside the scenario, so the prompt never reaches the model |
 | `STRATAPILOT_SMOKE_TABTAG=1` | D5/D8: expect `model_tag=qwen3.8-flash-n… tag_title="strata/qwen3.8-flash-next-iq3_s" shown_when_alive=false shown_when_dead=true hidden_when_alive_again=true` |

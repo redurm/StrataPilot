@@ -194,6 +194,18 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 
 ### Changed
 
+- **Auto-compact and auto-retry are always on: the two composer checkboxes are gone.** Both were off
+  switches nobody asked for, and leaving them off only produced avoidable context overflows and
+  failed requests. `bootstrap()` now calls `ensureAlwaysOn()` at every (re)start of a tab: it reads
+  `get_state.autoCompactionEnabled` and, if pi came up without it (a `"compaction": { "enabled": false }`
+  in `~/.pi/agent/settings.json`), sends `set_auto_compaction {enabled:true}`; `set_auto_retry
+  {enabled:true}` goes out every time, because `get_state` does not report the retry policy. What is
+  left in the composer is the **`stop retry`** button (`abort_retry`, only while a retry waits) and
+  `/retry [on|off|stop]` as the per-session escape hatch; a restarted session is always on again. If
+  the force-on RPC fails, the amber `auto-compact off · compact before it overflows` warning is still
+  what stops an overflow from arriving blind. `STRATAPILOT_SMOKE_AUTO_COMPACT=1` and
+  `STRATAPILOT_SMOKE_RETRY=1` now assert the always-on behaviour instead of the checkboxes
+  (`boot=true … now=false … ensureOn=true`, `bootOn=true setOff=true tabOff=true setOn=true tabOn=true`).
 - **The project is renamed `Pi on Strata` -> `StrataPilot`.** Everything that carried the old name
   moved with it: `package.json` `name` (`stratapilot`) / `productName` (`StrataPilot`), the
   `appId` (`com.pionstrata.app` -> `com.stratapilot.app`), the artifact names

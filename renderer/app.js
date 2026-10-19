@@ -26,10 +26,6 @@ const els = {
   btnAbort: $('btnAbort'),
   btnClearQueue: $('btnClearQueue'),
   btnCompact: $('btnCompact'),
-  autoCompactToggle: $('autoCompactToggle'),
-  autoCompactWrap: $('autoCompactWrap'),
-  autoRetryToggle: $('autoRetryToggle'),
-  autoRetryWrap: $('autoRetryWrap'),
   btnStopRetry: $('btnStopRetry'),
   btnRestart: $('btnRestart'),
   extWidgets: $('extWidgets'),
@@ -272,9 +268,12 @@ function makeTab({ tabId = '', cwd, sessionPath, name, ephemeral, extraArgs = []
     // never sent automatically - firing model requests by itself after a restart is exactly what
     // the user did not ask for - and move into the outbox only when the row says so.
     pendingOutbox: [],
-    autoCompact: true, // pi's own automatic compaction (read back from get_state)
-    // pi's automatic retry of transient provider errors: get_state does not report it, so the
-    // GUI tracks what it last asked for (pi's own default is enabled)
+    // pi's own automatic compaction and its own retry of transient provider errors. Both are
+    // always on: bootstrap() forces them on through pi's RPC, and the composer has no switch for
+    // them. get_state reports autoCompactionEnabled but not the retry policy, so autoRetry only
+    // tracks what the GUI last asked for - /retry off is the only thing that can move it, and the
+    // next restart puts it back on.
+    autoCompact: true,
     autoRetry: true,
     retrying: null, // {attempt, maxAttempts, delayMs} while an auto_retry_start is waiting
     compacting: false, // a compaction (manual or auto) is in flight in this session
@@ -1378,6 +1377,8 @@ function renderStats(tab) {
     const cu = tab.stats.contextUsage;
     const percent = cu.percent == null ? null : Math.round(cu.percent * 10) / 10;
     add('ctx', `${fmtTokens(cu.tokens)} / ${fmtTokens(cu.contextWindow)}${percent == null ? '' : ` (${percent}%)`}`);
+    // auto-compact is forced on by bootstrap(), so this can only mean that force failed - and then
+    // the warning is what stops an overflow from arriving blind
     if (tab.autoCompact === false && percent != null && percent >= 85) {
       add('auto-compact off', 'compact before it overflows', 'warn');
     }
@@ -1602,16 +1603,6 @@ function renderComposerState() {
     const dead = !!(tab && !tab.alive && !tab.starting);
     els.btnRestart.classList.toggle('hidden', !dead);
     if (dead) els.btnRestart.title = `restart the pi process of this tab (cwd: ${tab.cwd})`;
-  }
-  const autoOn = !(tab && tab.autoCompact === false);
-  els.autoCompactToggle.checked = autoOn;
-  els.autoCompactToggle.disabled = !tab || !tab.alive;
-  els.autoCompactWrap.classList.toggle('off', !autoOn);
-  const retryOn = !(tab && tab.autoRetry === false);
-  if (els.autoRetryToggle) {
-    els.autoRetryToggle.checked = retryOn;
-    els.autoRetryToggle.disabled = !tab || !tab.alive;
-    els.autoRetryWrap.classList.toggle('off', !retryOn);
   }
   // a retry wait is the only moment "stop retrying" means anything: pi is sitting in the delay
   if (els.btnStopRetry) {
@@ -2206,6 +2197,7 @@ async function bootstrap(tab) {
     tab.isStreaming = !!data.isStreaming;
     tab.autoCompact = data.autoCompactionEnabled !== false;
   }
+  await ensureAlwaysOn(tab);
 
   const modelsRes = await api.cmd(tab.id, 'get_available_models');
   if (modelsRes.success && modelsRes.data && modelsRes.data.models) {
@@ -2264,6 +2256,25 @@ async function bootstrap(tab) {
   markCurrentSession();
   scheduleSave();
   scheduler.pumpSoon(400);
+}
+
+/**
+ * auto-compact and auto-retry are always on in this GUI - the composer has no switch for either.
+ * pi's own defaults are on too, but `"compaction": { "enabled": false }` or
+ * `"retry": { "enabled": false }` in ~/.pi/agent/settings.json would leave a tab without them, so
+ * every (re)start puts both back on through pi's RPC. get_state reports autoCompactionEnabled but
+ * not the retry policy, so the retry call goes out every time; it is a no-op when pi already has it
+ * on. A failure is left visible: tab.autoCompact stays false and the stats row warns about it.
+ */
+async function ensureAlwaysOn(tab) {
+  if (tab.autoCompact === false) {
+    const res = await api.cmd(tab.id, 'set_auto_compaction', { enabled: true });
+    if (res.success) tab.autoCompact = true;
+    else toast(res.error || 'set_auto_compaction failed', 'error');
+  }
+  const retry = await api.cmd(tab.id, 'set_auto_retry', { enabled: true });
+  if (retry.success) tab.autoRetry = true;
+  else toast(retry.error || 'set_auto_retry failed', 'error');
 }
 
 async function refreshStats(tab) {
@@ -5187,7 +5198,7 @@ async function runSlashCommand(tab, text) {
         return true;
       }
       const waiting = tab.retrying ? `waiting ${tab.retrying.delayMs}ms before attempt ${tab.retrying.attempt}/${tab.retrying.maxAttempts}` : 'not retrying';
-      pushNote(tab, `auto-retry is ${tab.autoRetry === false ? 'off' : 'on'} for this session \u00b7 ${waiting}\n/retry on | /retry off | /retry stop (cancels a retry that is waiting)`, 'info');
+      pushNote(tab, `auto-retry is ${tab.autoRetry === false ? 'off' : 'on'} for this session (a restarted session is always on) \u00b7 ${waiting}\n/retry on | /retry off | /retry stop (cancels a retry that is waiting)`, 'info');
       clearComposer();
       return true;
     }
@@ -5662,8 +5673,10 @@ async function runCompact(tab, instructions) {
 /* ------------------------------------------------------------------ */
 
 /**
- * `set_auto_retry` is per session (like auto-compaction). get_state does not report the current
- * value, so the checkbox reflects what the GUI last asked for; pi's own default is enabled.
+ * `/retry on|off` only: there is no auto-retry switch in the composer any more, and bootstrap()
+ * turns it on with every (re)start, so this is the escape hatch for one bad stretch in one session.
+ * `set_auto_retry` is per session (like auto-compaction) and get_state does not report the current
+ * value, so tab.autoRetry is just what the GUI last asked for.
  */
 async function setAutoRetry(tab, enabled) {
   const res = await api.cmd(tab.id, 'set_auto_retry', { enabled });
@@ -6641,28 +6654,6 @@ function wireUi() {
   $('btnAbort').addEventListener('click', stopActive);
   $('btnCompact').addEventListener('click', compactNow);
 
-  els.autoCompactToggle.addEventListener('change', async () => {
-    const tab = activeTab();
-    if (!tab) return;
-    const enabled = els.autoCompactToggle.checked;
-    const res = await api.cmd(tab.id, 'set_auto_compaction', { enabled });
-    if (!res.success) {
-      toast(res.error || 'set_auto_compaction failed', 'error');
-      els.autoCompactToggle.checked = tab.autoCompact !== false;
-      return;
-    }
-    tab.autoCompact = enabled;
-    toast(`auto-compact ${enabled ? 'on' : 'off'} · ${tabLabel(tab)}`);
-    renderComposerState();
-    renderStats(tab);
-  });
-  els.autoRetryToggle.addEventListener('change', async () => {
-    const tab = activeTab();
-    if (!tab) return;
-    const wanted = els.autoRetryToggle.checked;
-    const ok = await setAutoRetry(tab, wanted);
-    if (!ok) els.autoRetryToggle.checked = tab.autoRetry !== false;
-  });
   els.btnRestart.addEventListener('click', async () => {
     const tab = activeTab();
     if (!tab) return;
@@ -7293,16 +7284,22 @@ async function init() {
   }
 }
 
+/**
+ * STRATAPILOT_SMOKE_AUTO_COMPACT=1: auto-compaction is always on. bootstrap() must have left the
+ * session with it on, and ensureAlwaysOn() must put it back after pi turned it off (which is what a
+ * `"compaction": { "enabled": false }` in ~/.pi/agent/settings.json would hand the tab). The
+ * scenario ends with it on, because the composer has no switch that could put it back.
+ */
 async function smokeAutoCompactScenario() {
   const tab = activeTab();
-  const before = await api.cmd(tab.id, 'get_state');
-  const initial = before.success ? before.data.autoCompactionEnabled : 'n/a';
+  const boot = await api.cmd(tab.id, 'get_state');
   const off = await api.cmd(tab.id, 'set_auto_compaction', { enabled: false });
-  const after1 = await api.cmd(tab.id, 'get_state');
-  const back = await api.cmd(tab.id, 'set_auto_compaction', { enabled: true });
-  const after2 = await api.cmd(tab.id, 'get_state');
+  const afterOff = await api.cmd(tab.id, 'get_state');
+  tab.autoCompact = afterOff.success ? afterOff.data.autoCompactionEnabled !== false : true;
+  await ensureAlwaysOn(tab);
+  const afterOn = await api.cmd(tab.id, 'get_state');
   console.log(
-    `[smoke-autocompact] initial=${initial} tab.autoCompact=${tab.autoCompact} setOff=${off.success} now=${after1.success && after1.data.autoCompactionEnabled} setOn=${back.success} now=${after2.success && after2.data.autoCompactionEnabled} checkbox=${els.autoCompactToggle.checked}`,
+    `[smoke-autocompact] boot=${boot.success ? boot.data.autoCompactionEnabled : 'n/a'} setOff=${off.success} now=${afterOff.success && afterOff.data.autoCompactionEnabled} ensureOn=${afterOn.success && afterOn.data.autoCompactionEnabled} tab.autoCompact=${tab.autoCompact}`,
   );
 }
 
@@ -7641,9 +7638,10 @@ async function smokeSettingsScenario() {
 }
 
 /**
- * STRATAPILOT_SMOKE_RETRY=1: the two retry RPCs must answer, and the two events pi already
- * renders as notes must also drive the composer ("stop retry" only appears while a retry is
- * waiting; auto_retry_end takes it away again).
+ * STRATAPILOT_SMOKE_RETRY=1: auto-retry is on when the session starts (bootstrap() forces it), the
+ * two retry RPCs must answer, and the two events pi already renders as notes must also drive the
+ * composer ("stop retry" only appears while a retry is waiting; auto_retry_end takes it away
+ * again). The scenario leaves auto-retry on.
  */
 async function smokeRetryScenario() {
   const tab = activeTab();
@@ -7651,17 +7649,17 @@ async function smokeRetryScenario() {
     console.log('[smoke-retry] no active tab');
     return;
   }
-  const off = await api.cmd(tab.id, 'set_auto_retry', { enabled: false });
-  const on = await api.cmd(tab.id, 'set_auto_retry', { enabled: true });
-  els.autoRetryToggle.checked = false;
-  els.autoRetryToggle.dispatchEvent(new Event('change'));
+  const bootOn = tab.autoRetry !== false;
+  const off = await setAutoRetry(tab, false);
+  const afterOff = tab.autoRetry === false;
+  const on = await setAutoRetry(tab, true);
   handleRecord(tab, { type: 'auto_retry_start', attempt: 2, maxAttempts: 4, delayMs: 60000, errorMessage: 'simulated overload' });
   const shown = !els.btnStopRetry.classList.contains('hidden');
   const note = [...els.transcript.querySelectorAll('.note')].pop();
   const stop = await api.cmd(tab.id, 'abort_retry');
   handleRecord(tab, { type: 'auto_retry_end', success: false, attempt: 2, finalError: 'simulated' });
   console.log(
-    `[smoke-retry] setOff=${off.success} setOn=${on.success} checkbox_after_off=${els.autoRetryToggle.checked} stop_shown=${shown} stop_hidden_after_end=${els.btnStopRetry.classList.contains('hidden')} abort=${stop.success} retrying=${tab.retrying} note=${note ? note.textContent.slice(0, 40) : ''}`,
+    `[smoke-retry] bootOn=${bootOn} setOff=${off} tabOff=${afterOff} setOn=${on} tabOn=${tab.autoRetry !== false} stop_shown=${shown} stop_hidden_after_end=${els.btnStopRetry.classList.contains('hidden')} abort=${stop.success} retrying=${tab.retrying} note=${note ? note.textContent.slice(0, 40) : ''}`,
   );
 }
 
