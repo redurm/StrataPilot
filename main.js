@@ -652,6 +652,9 @@ async function buildDiagnostics(payload = {}) {
     },
     log: diagnostics.tail(appLog.logPath()),
     usage: usageSummaryForReport(),
+    // the rates are the other half of a "the money looks wrong" report - they live in settings, not in
+    // the ledger, so the report has to carry them separately
+    usageRates: settings.usagePrices || null,
   };
 
   const text = diagnostics.format(data);

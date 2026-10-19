@@ -1502,6 +1502,14 @@ button:disabled {
   display: flex;
   gap: 6px;
 }
+/* same trap as .usage-cache-toggle: `.modal input { width: 100% }` stretches a checkbox across the
+   row and shoves its label away (`.set-check` already worked around it; this covers the rest) */
+.field-row input[type="checkbox"] {
+  width: auto;
+  flex: 0 0 auto;
+  align-self: center;
+  accent-color: var(--accent);
+}
 
 /* ---------- settings dialog ---------- */
 .settings-modal {
@@ -2278,6 +2286,18 @@ button:disabled {
   color: var(--text-dim);
   cursor: pointer;
 }
+/*
+ * `.modal input { width: 100% }` (line 1477) is meant for text fields; applied to this checkbox it
+ * stretched the box across the row and pushed its own label ~300px to the right, leaving a stray
+ * white square floating in the middle of the dialog.
+ */
+.usage-cache-toggle input[type="checkbox"] {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
 .usage-chart-wrap {
   overflow-x: auto;
   border: 1px solid var(--border);
@@ -2367,6 +2387,45 @@ button:disabled {
 }
 .usage-model-msgs {
   color: var(--text-faint);
+  text-align: right;
+}
+
+/* the rate table: one row per model plus a default row, four USD-per-million fields */
+.usage-rates {
+  margin-top: 12px;
+}
+.usage-rates-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.usage-rate-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) repeat(4, minmax(70px, 96px));
+  gap: 8px;
+  align-items: center;
+}
+.usage-rate-head {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.usage-rate-cell {
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.usage-rate-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+.usage-rate-row input[type="number"] {
+  width: 100%;
+  padding: 3px 6px;
+  font-family: var(--mono);
+  font-size: 12.5px;
   text-align: right;
 }
 

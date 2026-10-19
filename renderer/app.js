@@ -3332,10 +3332,147 @@ function usageStackTotal(bucket) {
   return (bucket.cacheRead || 0) + (bucket.cacheWrite || 0) + (bucket.in || 0) + (bucket.out || 0);
 }
 
+/*
+ * What it costs. Strata reports no prices (pi's `usage.cost.total` is 0 for every call here), so the
+ * money side has to be computed from rates the user enters: USD per 1,000,000 tokens, per model, with
+ * a default row for models that have no row yet. The ledger deliberately stores only token counts -
+ * prices change over time, and re-pricing old days must not need a re-scan.
+ */
+const PRICE_FIELDS = ['in', 'out', 'cacheRead', 'cacheWrite'];
+const PRICE_LABELS = { in: 'in', out: 'out', cacheRead: 'cache read', cacheWrite: 'cache write' };
+const TOKENS_PER_MILLION = 1000000;
+
+function priceNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function normalizePrice(price) {
+  if (!price || typeof price !== 'object') return { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 };
+  const out = {};
+  for (const field of PRICE_FIELDS) out[field] = priceNumber(price[field]);
+  return out;
+}
+
+/**
+ * Rate row for one model. Settings may key a row by the bare id (`qwen3.8-flash-next-iq3_s`) or the
+ * provider-qualified one (`strata/qwen3.8-flash-next-iq3_s`); the ledger records the bare id, so both
+ * spellings are accepted rather than making the user guess which one pi writes.
+ *
+ * A model row is a PATCH over the default row, not a replacement: filling in only `in` must not
+ * silently make that model's output and cache free.
+ */
+function priceForModel(usagePrices, model) {
+  const table = usagePrices && usagePrices.byModel ? usagePrices.byModel : {};
+  const merged = normalizePrice(usagePrices && usagePrices.default);
+  const name = String(model || '');
+  let row = table[name] || null;
+  if (!row) {
+    for (const key of Object.keys(table)) {
+      if (!key) continue;
+      if (key.endsWith(`/${name}`) || name.endsWith(`/${key}`)) {
+        row = table[key];
+        break;
+      }
+    }
+  }
+  if (!row) return merged;
+  for (const field of PRICE_FIELDS) {
+    const value = Number(row[field]);
+    if (Number.isFinite(value) && value > 0) merged[field] = value;
+  }
+  return merged;
+}
+
+function hasPrices(usagePrices) {
+  if (!usagePrices) return false;
+  const rows = [usagePrices.default].concat(Object.values((usagePrices.byModel || {})));
+  return rows.some((row) => row && PRICE_FIELDS.some((field) => priceNumber(row[field]) > 0));
+}
+
+function costOf(tokens, price) {
+  const p = normalizePrice(price);
+  return (
+    ((tokens.in || 0) / TOKENS_PER_MILLION) * p.in +
+    ((tokens.out || 0) / TOKENS_PER_MILLION) * p.out +
+    ((tokens.cacheRead || 0) / TOKENS_PER_MILLION) * p.cacheRead +
+    ((tokens.cacheWrite || 0) / TOKENS_PER_MILLION) * p.cacheWrite
+  );
+}
+
+/**
+ * An all-empty model row means "the default rate applies", not "this model is free": keeping the
+ * zeros would shadow the default row and make the whole chart read $0.
+ */
+function pruneRateRows(byModel) {
+  const kept = {};
+  for (const model of Object.keys(byModel || {})) {
+    const row = byModel[model];
+    if (row && PRICE_FIELDS.some((field) => priceNumber(row[field]) > 0)) kept[model] = normalizePrice(row);
+  }
+  return kept;
+}
+
+/** What one field (in / out / cacheRead / cacheWrite) costs, so the stack can be split by field. */
+function fieldCost(tokens, price, field) {
+  return ((tokens[field] || 0) / TOKENS_PER_MILLION) * normalizePrice(price)[field];
+}
+
+/**
+ * Dollar split of one column, priced per model (a cheap model's cache reads and an expensive model's
+ * output must not be averaged into one rate). Falls back to the bucket totals with the default rate
+ * when the ledger entry has no model split.
+ */
+function bucketCostParts(bucket, usagePrices) {
+  const parts = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  const models = (bucket && bucket.models) || [];
+  if (models.length) {
+    for (const model of models) {
+      const price = priceForModel(usagePrices, model.model);
+      for (const field of PRICE_FIELDS) parts[field] += fieldCost(model, price, field);
+    }
+  } else {
+    const price = priceForModel(usagePrices, '');
+    for (const field of PRICE_FIELDS) parts[field] += fieldCost(bucket, price, field);
+  }
+  parts.total = parts.in + parts.out + parts.cacheRead + parts.cacheWrite;
+  return parts;
+}
+
+function fmtMoney(value) {
+  const amount = Number(value) || 0;
+  if (amount === 0) return '$0';
+  if (amount < 0.01) return `<$0.01`;
+  if (amount < 1000) return `$${amount.toFixed(2)}`;
+  return `$${amount.toLocaleString('en-US', { maximumFractionDigits: amount < 10000 ? 1 : 0 })}`;
+}
+
+function usageValueText(value, mode) {
+  return mode === 'cost' ? fmtMoney(value) : fmtTokens(value);
+}
+
+/** What one column stacks into, in tokens or in dollars. */
+function usageSegmentValues(bucket, mode, usagePrices) {
+  if (mode === 'cost') {
+    const parts = bucketCostParts(bucket, usagePrices);
+    return { cacheRead: parts.cacheRead, cacheWrite: parts.cacheWrite, in: parts.in, out: parts.out, total: parts.total };
+  }
+  return { cacheRead: bucket.cacheRead || 0, cacheWrite: bucket.cacheWrite || 0, in: bucket.in || 0, out: bucket.out || 0, total: usageStackTotal(bucket) };
+}
+
+function usageCostOfSummary(usage, usagePrices) {
+  const models = (usage && usage.allModels) || [];
+  if (models.length) return models.reduce((sum, model) => sum + costOf(model, priceForModel(usagePrices, model.model)), 0);
+  return usage && usage.all ? costOf(usage.all, priceForModel(usagePrices, '')) : 0;
+}
+
 function usageFootLabel() {
   const usage = state.usage;
   if (!usage || !usage.all || !usage.all.total) return 'Usage';
-  return `Usage: ${fmtTokens(usage.all.total)} tok`;
+  const prices = state.settings && state.settings.usagePrices;
+  const cost = hasPrices(prices) ? usageCostOfSummary(usage, prices) : 0;
+  const money = cost ? ` \u00b7 ${fmtMoney(cost)}` : usage.all.cost ? ` \u00b7 ${fmtMoney(usage.all.cost)}` : '';
+  return `Usage: ${fmtTokens(usage.all.total)} tok${money}`;
 }
 
 function updateUsageFoot() {
@@ -3357,7 +3494,7 @@ function usageRangeFrom(rangeValue) {
   return Date.now() - days * 86400000;
 }
 
-function usageTotalsLine(totals, extra) {
+function usageTotalsLine(totals, extra, costParts) {
   if (!totals) return 'no usage recorded';
   const parts = [
     `in ${fmtTokens(totals.in || 0)}`,
@@ -3373,16 +3510,21 @@ function usageTotalsLine(totals, extra) {
   if (totals.compactions) extraCalls.push(`${totals.compactions} compact`);
   if (totals.branches) extraCalls.push(`${totals.branches} branch summary`);
   if (extraCalls.length) parts.push(`(${extraCalls.join(', ')})`);
-  if (totals.cost) parts.push(`$${Number(totals.cost).toFixed(4)}`);
+  if (costParts && costParts.total) {
+    parts.push(`${fmtMoney(costParts.total)} = ${fmtMoney(costParts.in)} in + ${fmtMoney(costParts.out)} out + ${fmtMoney(costParts.cacheRead)} cache read + ${fmtMoney(costParts.cacheWrite)} cache write`);
+  } else if (totals.cost) {
+    parts.push(`reported $${Number(totals.cost).toFixed(4)}`);
+  }
   if (extra) parts.push(extra);
   return parts.join(' \u00b7 ');
 }
 
-function usageBucketLine(bucket) {
+function usageBucketLine(bucket, mode, usagePrices) {
   const models = (bucket.models || []).slice(0, 3).map((model) => `${model.model} ${fmtTokens(model.total)}`).join(', ');
+  const money = mode === 'cost' || hasPrices(usagePrices) ? bucketCostParts(bucket, usagePrices) : null;
   return [
     bucket.full || bucket.key,
-    usageTotalsLine(bucket),
+    usageTotalsLine(bucket, '', money),
     `${bucket.sessions || 0} session${bucket.sessions === 1 ? '' : 's'}`,
     models ? `models: ${models}` : '',
   ].filter(Boolean).join(' \u00b7 ');
@@ -3407,7 +3549,7 @@ function usageAxisMax(maxValue) {
  * One stacked column per bucket, as SVG sized in pixels (the wrapper scrolls sideways when the range
  * is wide, which keeps the axis labels readable instead of shrinking them into illegibility).
  */
-function buildUsageChart(container, report, onSelect, showCache = true) {
+function buildUsageChart(container, report, onSelect, showCache = true, mode = 'tokens', usagePrices = null) {
   container.textContent = '';
   const buckets = (report && report.buckets) || [];
   if (!buckets.length) {
@@ -3424,7 +3566,10 @@ function buildUsageChart(container, report, onSelect, showCache = true) {
   const height = 250;
   const innerH = height - padTop - padBottom;
   const width = padLeft + padRight + buckets.length * (colW + gap);
-  const maxRaw = Math.max(1, ...buckets.map((bucket) => (showCache ? usageStackTotal(bucket) : (bucket.in || 0) + (bucket.out || 0))));
+  const maxRaw = Math.max(1, ...buckets.map((bucket) => {
+    const values = usageSegmentValues(bucket, mode, usagePrices);
+    return showCache ? values.total : values.in + values.out;
+  }));
   const max = usageAxisMax(maxRaw);
 
   const svg = document.createElementNS(NS, 'svg');
@@ -3448,34 +3593,35 @@ function buildUsageChart(container, report, onSelect, showCache = true) {
     const ratio = step / 4;
     const y = padTop + innerH - ratio * innerH;
     svg.appendChild(mk('line', { x1: padLeft - 6, y1: y, x2: width - padRight, y2: y, class: 'uc-grid' }));
-    svg.appendChild(mk('text', { x: padLeft - 10, y: y + 4, class: 'uc-ylab', 'text-anchor': 'end' }, fmtTokens(Math.round(max * ratio))));
+    svg.appendChild(mk('text', { x: padLeft - 10, y: y + 4, class: 'uc-ylab', 'text-anchor': 'end' }, usageValueText(max * ratio, mode)));
   }
 
   const labelEvery = Math.max(1, Math.ceil(buckets.length / 16));
   buckets.forEach((bucket, index) => {
     const x = padLeft + index * (colW + gap);
-    const group = mk('g', { class: 'uc-col', tabindex: 0, role: 'button', 'aria-label': usageBucketLine(bucket) });
+    const values = usageSegmentValues(bucket, mode, usagePrices);
+    const group = mk('g', { class: 'uc-col', tabindex: 0, role: 'button', 'aria-label': usageBucketLine(bucket, mode, usagePrices) });
     let acc = 0;
     for (const segment of USAGE_STACK) {
       if (!showCache && segment.key !== 'in' && segment.key !== 'out') continue;
-      const value = bucket[segment.key] || 0;
+      const value = values[segment.key] || 0;
       if (!value) continue;
       const top = padTop + innerH - ((acc + value) / max) * innerH;
       const h = (value / max) * innerH;
       group.appendChild(mk('rect', { x, y: top, width: colW, height: Math.max(1, h), class: `uc-seg ${segment.cls}` }));
       acc += value;
     }
-    const total = showCache ? usageStackTotal(bucket) : (bucket.in || 0) + (bucket.out || 0);
+    const total = showCache ? values.total : values.in + values.out;
     // a number above the column only fits when there are few of them
     if (buckets.length <= 16 && total) {
-      group.appendChild(mk('text', { x: x + colW / 2, y: padTop + innerH - (total / max) * innerH - 5, class: 'uc-val', 'text-anchor': 'middle' }, fmtTokens(total)));
+      group.appendChild(mk('text', { x: x + colW / 2, y: padTop + innerH - (total / max) * innerH - 5, class: 'uc-val', 'text-anchor': 'middle' }, usageValueText(total, mode)));
     }
     if (index % labelEvery === 0) {
       group.appendChild(mk('text', { x: x + colW / 2, y: height - 10, class: 'uc-xlab', 'text-anchor': 'middle' }, bucket.label));
     }
     // hit area: a thin column with a tiny value still has to be clickable
     group.appendChild(mk('rect', { x, y: padTop, width: colW, height: innerH, class: 'uc-hit' }));
-    group.appendChild(mk('title', {}, usageBucketLine(bucket)));
+    group.appendChild(mk('title', {}, usageBucketLine(bucket, mode, usagePrices)));
     const select = () => onSelect(bucket, group);
     group.addEventListener('mouseenter', select);
     group.addEventListener('click', select);
@@ -3496,7 +3642,9 @@ function buildUsageChart(container, report, onSelect, showCache = true) {
 async function openUsageModal() {
   let unit = 'day';
   let range = '90';
+  let mode = 'tokens';
   let report = null;
+  const currentPrices = () => (state.settings && state.settings.usagePrices) || null;
 
   const backdrop = el('div', 'modal-backdrop usage-backdrop');
   const modal = el('div', 'modal usage-modal');
@@ -3522,8 +3670,20 @@ async function openUsageModal() {
     opt.textContent = option.label;
     rangeSel.appendChild(opt);
   }
+  const metricSel = document.createElement('select');
+  metricSel.setAttribute('aria-label', 'What the columns measure');
+  for (const option of [
+    { value: 'tokens', label: 'tokens' },
+    { value: 'cost', label: 'cost (USD)' },
+  ]) {
+    const opt = document.createElement('option');
+    opt.value = option.value;
+    opt.textContent = option.label;
+    metricSel.appendChild(opt);
+  }
   controls.appendChild(unitSel);
   controls.appendChild(rangeSel);
+  controls.appendChild(metricSel);
   modal.appendChild(controls);
 
   const legend = el('div', 'usage-legend');
@@ -3561,6 +3721,18 @@ async function openUsageModal() {
   const models = el('div', 'usage-models');
   modal.appendChild(models);
 
+  /*
+   * Strata reports no prices (pi's usage.cost is 0 for every call), so the money side is computed
+   * from rates typed here: USD per 1,000,000 tokens, one row per model plus a default row. They live
+   * in the settings file, and the ledger deliberately stores only token counts - re-pricing an old
+   * day must not need a re-scan, and a rate change must not rewrite history.
+   */
+  const rates = el('div', 'usage-rates');
+  rates.appendChild(el('div', 'set-hint', 'rates (USD per 1,000,000 tokens) - Strata reports no prices, so these numbers are what the money side uses. Saved as soon as you leave a box. A model row only overrides the fields you fill in, the rest come from the default rate (its placeholder shows them); to make one model free, set the default row to 0 and give the others their own rows.'));
+  const ratesGrid = el('div', 'usage-rates-grid');
+  rates.appendChild(ratesGrid);
+  modal.appendChild(rates);
+
   const actions = el('div', 'modal-actions');
   const recountButton = el('button', '', 'Recount from files');
   recountButton.title = 'rebuild the ledger from the session files that exist right now - the only action that can lower the totals (sessions a cleanup deleted leave with their files)';
@@ -3593,18 +3765,89 @@ async function openUsageModal() {
   const selectBucket = (bucket, group) => {
     for (const node of chartWrap.querySelectorAll('.uc-col.selected')) node.classList.remove('selected');
     if (group) group.classList.add('selected');
-    detail.textContent = usageBucketLine(bucket);
+    detail.textContent = usageBucketLine(bucket, mode, currentPrices());
   };
+
+  function renderRates() {
+    ratesGrid.textContent = '';
+    const prices = currentPrices() || {};
+    const head = el('div', 'usage-rate-row usage-rate-head');
+    head.appendChild(el('span', 'usage-rate-model', 'model'));
+    for (const field of PRICE_FIELDS) head.appendChild(el('span', 'usage-rate-cell', PRICE_LABELS[field]));
+    ratesGrid.appendChild(head);
+
+    const rows = [{ key: 'default', label: 'default rate' }];
+    for (const model of (report && report.models) || []) {
+      if (!rows.some((row) => row.key === model.model)) rows.push({ key: model.model, label: model.model });
+    }
+    const fallback = normalizePrice(prices.default);
+    for (const row of rows) {
+      const line = el('div', 'usage-rate-row');
+      const name = el('span', 'usage-rate-model', row.label);
+      name.title = row.key === 'default' ? 'used for any model that has no row of its own' : `rate for ${row.key}`;
+      line.appendChild(name);
+      const source = row.key === 'default' ? prices.default : (prices.byModel || {})[row.key];
+      for (const field of PRICE_FIELDS) {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.step = '0.01';
+        input.value = source && source[field] != null && Number(source[field]) !== 0 ? String(source[field]) : '';
+        // an empty model row means "the default rate applies", so show what that is
+        input.placeholder = row.key === 'default' ? '0' : String(fallback[field] || 0);
+        input.dataset.field = field;
+        input.dataset.model = row.key;
+        input.setAttribute('aria-label', `${row.label} ${PRICE_LABELS[field]} in USD per million tokens`);
+        input.addEventListener('change', () => saveRates());
+        line.appendChild(input);
+      }
+      ratesGrid.appendChild(line);
+    }
+  }
+
+  async function saveRates() {
+    const previous = (state.settings && state.settings.usagePrices) || {};
+    const next = {
+      unit: 'usd_per_million',
+      default: { ...normalizePrice(previous.default) },
+      byModel: {},
+    };
+    for (const [model, row] of Object.entries(previous.byModel || {})) next.byModel[model] = { ...normalizePrice(row) };
+    for (const input of ratesGrid.querySelectorAll('input[type="number"]')) {
+      const field = input.dataset.field;
+      const modelKey = input.dataset.model;
+      if (!PRICE_FIELDS.includes(field)) continue;
+      const value = input.value === '' ? 0 : Number(input.value);
+      const target = modelKey === 'default' ? next.default : next.byModel[modelKey] || (next.byModel[modelKey] = normalizePrice(null));
+      target[field] = Number.isFinite(value) && value >= 0 ? value : 0;
+    }
+    // an all-empty model row must mean "the default rate applies", not "this model is free"
+    next.byModel = pruneRateRows(next.byModel);
+    const merged = await api.settingsSet({ usagePrices: next });
+    state.settings = merged || { ...state.settings, usagePrices: next };
+    updateUsageFoot();
+    await draw();
+    toast(hasPrices(next) ? `rates saved - ${fmtMoney(bucketCostParts({ models: (report && report.models) || [] }, next).total)} for this range` : 'rates cleared - the money side reads $0', 'info', 6000);
+  }
 
   function renderModels() {
     models.textContent = '';
     const list = (report && report.models) || [];
     if (!list.length) return;
-    models.appendChild(el('div', 'set-hint', 'models in this range'));
+    const prices = currentPrices();
+    const priced = hasPrices(prices);
+    models.appendChild(el('div', 'set-hint', priced ? 'models in this range (priced at the rates below)' : 'models in this range'));
     for (const model of list.slice(0, 8)) {
       const row = el('div', 'usage-model-row');
       row.appendChild(el('span', 'usage-model-name', model.model));
-      row.appendChild(el('span', 'usage-model-totals', `in ${fmtTokens(model.in)} \u00b7 out ${fmtTokens(model.out)} \u00b7 cache ${fmtTokens((model.cacheRead || 0) + (model.cacheWrite || 0))} \u00b7 total ${fmtTokens(model.total)}`));
+      const money = priced ? costOf(model, priceForModel(prices, model.model)) : 0;
+      row.appendChild(
+        el(
+          'span',
+          'usage-model-totals',
+          `in ${fmtTokens(model.in)} \u00b7 out ${fmtTokens(model.out)} \u00b7 cache ${fmtTokens((model.cacheRead || 0) + (model.cacheWrite || 0))} \u00b7 total ${fmtTokens(model.total)}${money ? ` \u00b7 ${fmtMoney(money)}` : ''}`,
+        ),
+      );
       row.appendChild(el('span', 'usage-model-msgs', `${model.msgs} ans`));
       models.appendChild(row);
     }
@@ -3620,21 +3863,45 @@ async function openUsageModal() {
       return;
     }
     report = res;
-    state.usage = { ...(state.usage || {}), all: res.totals, entries: res.entries, gone: res.gone, truncated: res.truncated, ledgerFile: res.ledgerFile };
+    const prices = currentPrices();
+    const priced = hasPrices(prices);
+    const costParts = bucketCostParts({ models: res.models || [] }, prices);
+    // the footer chip is the ALL-TIME total, so a narrowed range in this dialog must not overwrite it -
+    // only the `everything` range feeds the chip
+    state.usage = {
+      ...(state.usage || {}),
+      ...(range === 'all' ? { all: res.totals, allModels: res.models } : {}),
+      entries: res.entries,
+      gone: res.gone,
+      truncated: res.truncated,
+      dedupeMissed: res.dedupeMissed,
+      ledgerFile: res.ledgerFile,
+    };
     updateUsageFoot();
     const notes = [];
     if (res.entries) notes.push(`${res.entries} session${res.entries === 1 ? '' : 's'} in the ledger`);
     if (res.gone) notes.push(`${res.gone} of them no longer exist on disk \u2014 their history is kept`);
     if (res.truncated) notes.push(`${res.truncated} session(s) were bigger than the 12 MB scan cap, so those are counted only up to that point`);
     if (res.dedupeMissed) notes.push(`${res.dedupeMissed} fork(s) could not be deduplicated because their parent session file is gone, so their copied tokens may be counted twice`);
-    hint.textContent = `${usageTotalsLine(res.totals)} \u00b7 ${notes.join(' \u00b7 ') || 'nothing recorded yet'} \u00b7 ledger: ${res.ledgerFile || 'not set'}`;
-    totalsLine.textContent = `${USAGE_UNITS.find((entry) => entry.value === unit).label} \u00b7 ${res.buckets.length} columns \u00b7 ${USAGE_RANGES.find((entry) => entry.value === range).label}`;
-    buildUsageChart(chartWrap, res, selectBucket, cacheBox.checked);
+    if (!priced) notes.push('no rates entered below, so the money side is $0');
+    hint.textContent = `${usageTotalsLine(res.totals, '', costParts)} \u00b7 ${notes.join(' \u00b7 ') || 'nothing recorded yet'} \u00b7 ledger: ${res.ledgerFile || 'not set'}`;
+    totalsLine.textContent = `${USAGE_UNITS.find((entry) => entry.value === unit).label} \u00b7 ${res.buckets.length} columns \u00b7 ${USAGE_RANGES.find((entry) => entry.value === range).label} \u00b7 ${mode === 'cost' ? 'columns in USD' : 'columns in tokens'}`;
+    if (mode === 'cost' && !priced) {
+      chartWrap.textContent = '';
+      chartWrap.appendChild(el('div', 'empty-hint', 'Enter the rates below (USD per 1,000,000 tokens) and the columns will show what each period cost.'));
+    } else {
+      buildUsageChart(chartWrap, res, selectBucket, cacheBox.checked, mode, prices);
+    }
     renderModels();
+    renderRates();
   }
 
   cacheBox.addEventListener('change', () => {
-    if (report) buildUsageChart(chartWrap, report, selectBucket, cacheBox.checked);
+    if (report) buildUsageChart(chartWrap, report, selectBucket, cacheBox.checked, mode, currentPrices());
+  });
+  metricSel.addEventListener('change', () => {
+    mode = metricSel.value === 'cost' ? 'cost' : 'tokens';
+    draw();
   });
   unitSel.addEventListener('change', () => {
     unit = unitSel.value;
@@ -3675,6 +3942,7 @@ async function openUsageModal() {
 
   rangeSel.value = range;
   unitSel.value = unit;
+  metricSel.value = mode;
   await draw();
   return opened;
 }
@@ -7652,6 +7920,57 @@ async function smokeUsageScenario() {
   await new Promise((resolve) => setTimeout(resolve, 300));
   const axisWithoutCache = axisLabels(modal);
   if (modal) await api.smokeShot('usage-chart-nocache'); // still per day, now scaled to in / out only
+
+  /*
+   * The money side: rates are typed into the settings file by the user, so the scenario writes them
+   * through the same IPC the dialog uses, switches the columns to USD, checks the axis became money,
+   * then puts the settings back. The smoke profile's settings file is not the real one.
+   */
+  const ratesBefore = (state.settings && state.settings.usagePrices) || null;
+  const merged = await api.settingsSet({ usagePrices: { unit: 'usd_per_million', default: { in: 1, out: 2, cacheRead: 0.1, cacheWrite: 0.5 }, byModel: {} } });
+  state.settings = merged || { ...state.settings, usagePrices: { unit: 'usd_per_million', default: { in: 1, out: 2, cacheRead: 0.1, cacheWrite: 0.5 }, byModel: {} } };
+  const metricSel = modal ? modal.querySelector('select[aria-label="What the columns measure"]') : null;
+  if (metricSel) {
+    metricSel.value = 'cost';
+    metricSel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1400));
+  const costAxis = axisLabels(modal);
+  const rateRows = modal ? modal.querySelectorAll('.usage-rate-row').length : 0;
+  const rateInputs = modal ? modal.querySelectorAll('.usage-rate-row input[type="number"]').length : 0;
+  const moneyShown = /\$/.test(modal ? modal.querySelector('.set-hint').textContent : '');
+  const moneyOf = () => {
+    const match = /\$([\d,.]+) =/.exec(modal ? modal.querySelector('.set-hint').textContent : '');
+    return match ? match[1] : '';
+  };
+  const moneyBefore = moneyOf();
+  if (modal) await api.smokeShot('usage-chart-cost');
+
+  /*
+   * Typing a rate must go through the dialog's own save path, not straight into the settings file:
+   * that is where an all-empty model row is dropped again so it keeps falling back to the default
+   * rate instead of silently making that model free.
+   */
+  const modelIn = modal ? modal.querySelector('.usage-rate-row input[data-model]:not([data-model="default"])') : null;
+  const modelKey = modelIn ? modelIn.dataset.model : '';
+  if (modelIn) {
+    modelIn.value = '4';
+    modelIn.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1600));
+  const savedPrices = (state.settings && state.settings.usagePrices) || {};
+  const savedByModel = Object.keys(savedPrices.byModel || {});
+  const moneyAfter = moneyOf();
+  const refilled = modal ? Array.from(modal.querySelectorAll('.usage-rate-row input[type="number"]')).filter((input) => input.value !== '').length : 0;
+
+  const restored = await api.settingsSet({ usagePrices: ratesBefore || { unit: 'usd_per_million', default: {}, byModel: {} } });
+  state.settings = restored || state.settings;
+  if (metricSel) {
+    metricSel.value = 'tokens';
+    metricSel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 800));
+
   const unitSel = modal ? modal.querySelector('select[aria-label="Column size"]') : null;
   if (unitSel) {
     unitSel.value = 'month';
@@ -7664,7 +7983,7 @@ async function smokeUsageScenario() {
   if (closeBox) closeBox.click();
   await opened;
   console.log(
-    `[smoke-usage] ok=${day.ok && month.ok && sums.ok} ipc_day=${day.buckets.length} ipc_month=${month.buckets.length} chart_columns=${columns} after_unit=${monthColumns} entries=${day.entries} gone=${day.gone} dedupe_missed=${day.dedupeMissed} ledger=${JSON.stringify(String(day.ledgerFile || '').split(/[\\/]/).pop())} total=${sums.all ? sums.all.total : 0} cache_read=${sums.all ? sums.all.cacheRead : 0} answers=${sums.all ? sums.all.answers : 0} compactions=${sums.all ? sums.all.compactions : 0} branches=${sums.all ? sums.all.branches : 0} axis_with_cache=${JSON.stringify(axisWithCache)} axis_without_cache=${JSON.stringify(axisWithoutCache)} rescaled=${axisWithCache !== axisWithoutCache} detail=${JSON.stringify(detail.slice(0, 70))} footer=${JSON.stringify(footer.slice(-46))} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
+    `[smoke-usage] ok=${day.ok && month.ok && sums.ok} ipc_day=${day.buckets.length} ipc_month=${month.buckets.length} chart_columns=${columns} after_unit=${monthColumns} entries=${day.entries} gone=${day.gone} dedupe_missed=${day.dedupeMissed} ledger=${JSON.stringify(String(day.ledgerFile || '').split(/[\\/]/).pop())} total=${sums.all ? sums.all.total : 0} cache_read=${sums.all ? sums.all.cacheRead : 0} answers=${sums.all ? sums.all.answers : 0} compactions=${sums.all ? sums.all.compactions : 0} branches=${sums.all ? sums.all.branches : 0} axis_with_cache=${JSON.stringify(axisWithCache)} axis_without_cache=${JSON.stringify(axisWithoutCache)} rescaled=${axisWithCache !== axisWithoutCache} cost_axis=${JSON.stringify(costAxis)} cost_is_money=${costAxis.includes('$')} rate_rows=${rateRows} rate_inputs=${rateInputs} money_in_header=${moneyShown} money_before=${JSON.stringify(moneyBefore)} typed_model_rate=${JSON.stringify(modelKey)} saved_by_model=${JSON.stringify(savedByModel)} money_after=${JSON.stringify(moneyAfter)} money_changed=${moneyBefore !== moneyAfter && !!moneyAfter} money_up=${parseFloat(moneyAfter) > parseFloat(moneyBefore)} refilled_boxes=${refilled} detail=${JSON.stringify(detail.slice(0, 70))} footer=${JSON.stringify(footer.slice(-46))} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
   );
 }
 

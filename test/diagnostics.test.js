@@ -149,6 +149,14 @@ test('format(): the token ledger summary is part of the report (D9)', () => {
       dayCount: 9,
       ledgerFile: 'U:/token_usage.json',
     },
+    usageRates: {
+      unit: 'usd_per_million',
+      default: { in: 1, out: 2, cacheRead: 0.1, cacheWrite: 0 },
+      byModel: {
+        'qwen3.8-flash-next-iq3_s': { in: 0.5, out: 1, cacheRead: 0.05, cacheWrite: 0 },
+        untouched: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    },
   };
   const flat = format(withUsage).replace(/ {2,}/g, ' ');
   assert.ok(flat.includes('token ledger 41,125,619 tokens'), 'total missing');
@@ -158,8 +166,21 @@ test('format(): the token ledger summary is part of the report (D9)', () => {
   assert.ok(flat.includes('U:/token_usage.json'));
   assert.ok(flat.includes('1 session file(s) already deleted (history kept)'));
   assert.ok(flat.includes('1 fork(s) not deduplicated (parent session file gone)'));
+  // the rates live in settings, not in the ledger, so the report has to carry them
+  assert.ok(flat.includes('USD per 1,000,000 tokens - default: in 1 / out 2 / cache read 0.1 / cache write 0'), 'the default rate is missing');
+  assert.ok(flat.includes('qwen3.8-flash-next-iq3_s: in 0.5 / out 1 / cache read 0.05 / cache write 0'), 'the model rate row is missing');
+  assert.ok(!flat.includes('untouched:'), 'an all-empty model row must not be reported as a rate');
   // no ledger summary, no half-empty lines
   assert.ok(!format(SAMPLE).includes('token ledger'));
+});
+
+test('format(): with a ledger but no rates it says the money side reads $0', () => {
+  const flat = format({
+    ...SAMPLE,
+    usage: { all: { in: 10, out: 5, cacheRead: 0, cacheWrite: 0, total: 15, answers: 2, compactions: 0, branches: 0 }, entries: 1, gone: 0, truncated: 0, dedupeMissed: 0, dayCount: 1, ledgerFile: 'U:/token_usage.json' },
+  }).replace(/ {2,}/g, ' ');
+  assert.ok(flat.includes('no rates entered'), 'the report must not leave the reader guessing why there is no money');
+  assert.ok(!flat.includes('rate rows'));
 });
 
 test('format(): a key never survives, even when the caller forgot to redact', () => {

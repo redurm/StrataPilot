@@ -64,9 +64,28 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   3 years are pruned; a session over the 12 MB scan cap is reported rather than silently undercounted.
   33 unit tests on a temp sessions root - including "a rewritten session file cannot write off banked
   tokens", "a compaction entry's usage is counted" and "a fork's copied entries are not counted twice"
-  - plus `STRATAPILOT_SMOKE_USAGE=1` (read-only, two screenshots). The **Diagnostics** report now carries
-  the ledger summary (totals, how many calls were compaction / branch summaries, and the deleted-session
-  / scan-cap / fork-dedup flags), so a "the numbers look wrong" ticket arrives with the data attached.
+  - plus `STRATAPILOT_SMOKE_USAGE=1` (read-only for sessions, three screenshots). The **Diagnostics**
+  report now carries the ledger summary (totals, how many calls were compaction / branch summaries, and
+  the deleted-session / scan-cap / fork-dedup flags), so a "the numbers look wrong" ticket arrives with
+  the data attached.
+- **What it costs** (same dialog): Strata reports no prices - pi's `usage.cost` is `0` for every call
+  here - so the Usage dialog carries a **rate table**: **USD per 1,000,000 tokens**, one row per model
+  plus a **default rate** row, saved into `usagePrices` in the settings file as soon as a box loses
+  focus. Picking **cost (USD)** turns the columns into money, split into the same four stacked parts and
+  rescaled; the totals line spells the sum out (`$6.91 = $1.17 in + $0.99 out + $4.75 cache read + $0
+  cache write`), each model row shows its own money, and the sidebar chip gains the total. The ledger
+  keeps storing only token counts, so changing a rate re-prices every past day instantly and never
+  rewrites what was banked. `test/usage-cost.test.js` (11 tests) covers rate lookup (bare model id vs
+  provider-qualified, both directions), per-model pricing, the four priced fields adding up to the priced
+  total, and `$0` instead of `NaN` when no rates are set. A model row is a **patch** over the default row
+  - filling in only `in` does not make that model's output and cache free - and an all-empty model row is
+  not stored at all (`pruneRateRows()`), so it keeps falling back to the default instead of quietly making
+  that model free; each box's placeholder shows the value that currently applies. The **Diagnostics**
+  report carries the rates as well (`ledger rates` with the default row, `rate rows` with every model row
+  that has one), or says plainly that no rates were entered.
+- Fixed on the way: `.modal input { width: 100% }` stretched every checkbox in a dialog across its row -
+  the Usage dialog's cache toggle showed up as a stray white square with its label 300px away. `.field-row
+  input[type="checkbox"]` now gets `width: auto`, the way `.set-check` already did.
 - **Accessibility pass** - dialogs are now real dialogs (`role="dialog"`, labelled by their heading,
   focus moved in, `Tab` wrapped, `Esc` closing through the Cancel button, focus returned to the
   opener), icon-only buttons get an accessible name from their `title`, queue rows are focusable and
