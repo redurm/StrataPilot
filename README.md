@@ -141,7 +141,8 @@ If something breaks, start at [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.m
 - **Sending while busy**: `steer` or `follow-up` (dropdown), `Esc` to abort, `Clear queue` pulls the
   queued messages back into the editor; while they wait, the bottom bar shows their text (the top bar keeps
   showing the request that is running, and switches to the steering message once pi delivers it)
-- **Compact**: manual context compaction; the status bar shows context usage, tokens and cost; the
+- **Compact**: manual context compaction; the status bar shows context usage, tokens
+  (`in / out / cache`) and cost; the
   **`auto-compact`** checkbox next to the editor toggles auto-compaction for this session (see below);
   the **`auto-retry`** checkbox does the same for pi's retry of transient model errors, and a
   **`stop retry`** button appears while a retry is waiting (`abort_retry`)
@@ -617,6 +618,32 @@ What the GUI shows and lets you change:
 - To turn it off **permanently**: set `"compaction": { "enabled": false }` in
   `~/.pi/agent/settings.json`
 
+## Token counts: in / out / cache
+
+Every token chip - the stats row, each assistant message header, the session list, and `/stats` -
+spells the same three numbers out, because pi's total is their sum:
+
+```
+total = in + out + cache
+```
+
+| | what it is |
+|---|---|
+| **in** | prompt tokens read that **missed** the prompt cache - the work Strata actually had to prefill |
+| **out** | tokens the model generated (thinking tokens are included when the provider reports them) |
+| **cache** | context **re-read** from the prompt cache (`cacheRead + cacheWrite`) |
+
+The old single total hid this, and it was misleading in both directions. pi re-sends the whole
+conversation on every tool round, so a long session's total is mostly re-read context: one real
+session reads `in 36.5k / out 26.4k / cache 2.26M` and totals **2.33M** - 97% of it is cache. Its
+last turn had **156** uncached prompt tokens against **60,934** re-read ones. So `in + out` is the
+number that answers "how much new work did this session do", while the total mostly answers "how much
+context did it carry" - which is also what drives compaction.
+
+`cache` is left out of the label when it is zero, which is exactly when `in + out` already equals the
+total. Hover any chip for the exact figures, written out as the sum. This is the same split the
+Monitor panel reports as `prompt tokens read (reused) · written`.
+
 ## Retry of transient model errors
 
 Strata drops a request now and then (overloaded, rate limit, 5xx, and - the common one here - a
@@ -974,7 +1001,7 @@ Other smoke switches:
 |---|---|
 | `STRATAPILOT_SMOKE_PROMPT="…"` | Sends one prompt after startup (tests streaming / markdown / tool cards) |
 | `STRATAPILOT_SMOKE_STEER=1` | Sends a second message to exercise the steer path while busy |
-| `STRATAPILOT_SMOKE_SESSION=<path>` | Loads a given session with `switch_session` after startup (tests session switching / history rendering); with A2 it also prints `msg_actions=… copy=… resend=…` so you can see the hover actions exist on history-rendered messages |
+| `STRATAPILOT_SMOKE_SESSION=<path>` | Loads a given session with `switch_session` after startup (tests session switching / history rendering); with A2 it also prints `msg_actions=… copy=… resend=…` so you can see the hover actions exist on history-rendered messages, and `[smoke-tokens] bar="tok in … / out … / cache …" message_chips=N first="in … / out …" tooltip="…"` so the token chips are proven to carry the split, not a blended total |
 | `STRATAPILOT_SMOKE_QUEUE=1` | Opens 4 tabs and sends 3 messages to test the serial queue (Working/Idle, outbox, order) |
 | `STRATAPILOT_SMOKE_MONITOR=1` | Opens the Monitor panel right after startup (with `STRATAPILOT_SMOKE_PROMPT` you can watch the generating state) |
 | `STRATAPILOT_SMOKE_COMPACT=1` | Queues a compact during a long generation: "wait for idle" must not kill the request (Strata should show `stop`, not `disconnect`) |

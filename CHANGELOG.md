@@ -169,16 +169,23 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   instead of showing only `30 9 * * 1-5`. `describeCron` says "every 15 minutes" rather than listing
   the 60 minutes a step expands to.
 
-- **Token counts are shown as *in* and *out*, never as one blended total.** The stats row chip is now
-  `tok in 36.5k / out 26.4k` instead of `tok 105k`, each assistant message header shows
-  `in 2.2k / out 99` instead of `2.3k tok`, and the session list spells the same pair out. A single
-  total could not tell you *where* a session was spending - a huge prompt read and a huge answer need
-  different fixes - so the split is now the headline number and the exact figures (uncached prompt read,
+- **Token counts are shown as *in*, *out* and *cache*, never as one blended total.** The stats row
+  chip is now `tok in 36.5k / out 26.4k / cache 2.3M` instead of `tok 2.3M`, each assistant message
+  header shows `in 2.2k / out 99 / cache 60.9k` instead of `62.5k tok`, and the session list spells
+  the same triple out. A single total could not tell you *where* a session was spending, and worse,
+  it was mostly *not* new work: pi defines `total = input + output + cacheRead + cacheWrite`, so the
+  total is dominated by the context every tool round re-reads from prompt cache. One real session
+  reads `in 36.5k / out 26.4k` but totals `2.33M` - 2.26M of it is cache, and its last turn had only
+  156 uncached prompt tokens against 60,934 re-read ones. Showing all three makes the chip add up and
+  matches the Monitor panel's `read / reused / written` wording; `cache` is left out when it is zero,
+  which is exactly when in + out already equals total. The exact figures (uncached prompt read,
   generated, cache read/write, total, and thinking tokens when the provider reports them) sit in the
-  chip's tooltip. `lib/sessions.js` accumulates `inputTokens` / `outputTokens` / `cacheReadTokens` /
-  `cacheWriteTokens` alongside the existing `totalTokens`, so old session files (which only carry a
-  total) still render. `STRATAPILOT_SMOKE_SESSION` now also prints
-  `[smoke-tokens] bar="tok in … / out …" message_chips=N first="in … / out …" tooltip="…"`.
+  chip's tooltip, spelled out as the sum. `tokenLabel()` and `usageTooltip()` keep the stats row, the
+  message headers, the session list and `/stats` on one wording. `lib/sessions.js` accumulates
+  `inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens` alongside the existing
+  `totalTokens`, so old session files (which only carry a total) still render.
+  `STRATAPILOT_SMOKE_SESSION` now also prints
+  `[smoke-tokens] bar="tok in … / out … / cache …" message_chips=N first="in … / out …" tooltip="…"`.
 
 ## [0.1.0] - 2026-10-15
 

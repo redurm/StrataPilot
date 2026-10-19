@@ -113,19 +113,36 @@ function fmtTokens(n) {
 }
 
 /**
- * Hover text for a token chip: exact numbers, and the cache split that the compact
- * `in / out` label leaves out. `input` is the uncached read; `cacheRead` is the part of
- * the prompt that came back from cache and was not re-billed at full price.
+ * The compact token label: `in` is the prompt read that missed the cache, `out` is what the
+ * model generated, `cache` is the context re-read from prompt cache. pi defines
+ * total = in + out + cache (see pi's `usage.input + usage.output + usage.cacheRead +
+ * usage.cacheWrite`), so all three have to be on screen or the chip looks like it does not
+ * add up: in a long session the total is mostly re-read context, not new work - one real
+ * session reads in 36.5k / out 26.4k but totals 2.33M, because 2.26M of it is cache.
+ * `cache` is left out when it is zero, which is exactly when in + out already equals total.
+ */
+function tokenLabel(u) {
+  if (!u) return '';
+  const cache = (u.cacheRead || 0) + (u.cacheWrite || 0);
+  const label = `in ${fmtTokens(u.input || 0)} / out ${fmtTokens(u.output || 0)}`;
+  return cache ? `${label} / cache ${fmtTokens(cache)}` : label;
+}
+
+/**
+ * Hover text for a token chip: the exact figures behind the compact label, spelled out as
+ * the sum so the numbers visibly add up.
  */
 function usageTooltip(u) {
   if (!u) return '';
+  const cache = (u.cacheRead || 0) + (u.cacheWrite || 0);
+  const total = u.totalTokens != null ? u.totalTokens : u.total || 0;
   const lines = [
-    `prompt read (uncached): ${nfmt(u.input || 0)}`,
-    `generated: ${nfmt(u.output || 0)}`,
-    `cache read: ${nfmt(u.cacheRead || 0)} · cache write: ${nfmt(u.cacheWrite || 0)}`,
-    `total: ${nfmt(u.totalTokens != null ? u.totalTokens : u.total || 0)}`,
+    `in    prompt read, uncached: ${nfmt(u.input || 0)}`,
+    `out   generated: ${nfmt(u.output || 0)}`,
+    `cache context re-read: ${nfmt(cache)} (read ${nfmt(u.cacheRead || 0)} + write ${nfmt(u.cacheWrite || 0)})`,
+    `total in + out + cache: ${nfmt(total)}`,
   ];
-  if (u.reasoning != null) lines.push(`thinking: ${nfmt(u.reasoning)} (included in generated)`);
+  if (u.reasoning != null) lines.push(`thinking: ${nfmt(u.reasoning)} (included in out)`);
   return lines.join('\n');
 }
 
@@ -551,7 +568,7 @@ function buildMessageNode(tab, item) {
     if (message.thinkingLevel && message.thinkingLevel !== 'off') head.appendChild(el('span', '', `thinking: ${message.thinkingLevel}`));
     if (message.usage && message.usage.totalTokens) {
       const u = message.usage;
-      const tokChip = el('span', '', `in ${fmtTokens(u.input || 0)} / out ${fmtTokens(u.output || 0)}`);
+      const tokChip = el('span', '', tokenLabel(u));
       tokChip.title = usageTooltip(u);
       head.appendChild(tokChip);
       const cost = message.usage.cost && message.usage.cost.total;
@@ -1368,7 +1385,7 @@ function renderStats(tab) {
     const t = tab.stats.tokens || {};
     // in / out separately: a single total cannot tell you whether the session is paying
     // for a long prompt read or for a long answer, and those need different fixes.
-    add('tok', `in ${fmtTokens(t.input || 0)} / out ${fmtTokens(t.output || 0)}`, '', usageTooltip({
+    add('tok', tokenLabel(t), '', usageTooltip({
       input: t.input, output: t.output, cacheRead: t.cacheRead, cacheWrite: t.cacheWrite, total: t.total,
     }));
     if (tab.stats.cost) add('cost', `$${tab.stats.cost.toFixed(3)}`);
@@ -2341,8 +2358,11 @@ async function refreshSessions() {
     metaRow.appendChild(el('span', '', timeAgo(meta.updatedAt)));
     metaRow.appendChild(el('span', '', `${meta.messageCount} msg`));
     if (meta.model) metaRow.appendChild(el('span', '', meta.model));
-    if (meta.inputTokens || meta.outputTokens) {
-      const chip = el('span', '', `in ${fmtTokens(meta.inputTokens)} / out ${fmtTokens(meta.outputTokens)}`);
+    if (meta.inputTokens || meta.outputTokens || meta.cacheReadTokens || meta.cacheWriteTokens) {
+      const chip = el('span', '', tokenLabel({
+        input: meta.inputTokens, output: meta.outputTokens,
+        cacheRead: meta.cacheReadTokens, cacheWrite: meta.cacheWriteTokens,
+      }));
       chip.title = usageTooltip({
         input: meta.inputTokens, output: meta.outputTokens, cacheRead: meta.cacheReadTokens,
         cacheWrite: meta.cacheWriteTokens, total: meta.totalTokens,
@@ -4442,7 +4462,7 @@ async function runSlashCommand(tab, text) {
       pushNote(
         tab,
         `stats — user ${d.userMessages || 0}, assistant ${d.assistantMessages || 0}, tool calls ${d.toolCalls || 0}\n`
-          + `tokens in ${fmtTokens(t.input || 0)} / out ${fmtTokens(t.output || 0)} / cache read ${fmtTokens(t.cacheRead || 0)} / total ${fmtTokens(t.total || 0)}\n`
+          + `tokens ${tokenLabel(t)} · total (in+out+cache) ${fmtTokens(t.total || 0)}\n`
           + `cost $${Number(d.cost || 0).toFixed(4)} · context ${ctx.percent || 0}% (${fmtTokens(ctx.tokens || 0)} / ${fmtTokens(ctx.contextWindow || 0)})\n`
           + `session: ${d.sessionFile || '(ephemeral)'}`,
       );
