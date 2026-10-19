@@ -948,6 +948,7 @@ function handleRecord(tab, record) {
       renderComposerState();
       refreshStats(tab);
       refreshSessionsSoon();
+      scheduleUsageSummary(); // D9: the run is over, so its tokens are in the session file now
       if (tab.pendingCompact != null) {
         // a compaction the user queued while this session was running: run it now (idle),
         // then let the scheduler start whatever this session still has queued
@@ -1055,6 +1056,7 @@ function handleRecord(tab, record) {
       else if (record.errorMessage) pushNote(tab, `compaction failed: ${record.errorMessage}`, 'error');
       refreshStats(tab);
       refreshSessionsSoon();
+      scheduleUsageSummary(); // a compaction is a model call: its usage belongs in the ledger too
       renderTabs();
       renderOpenSessions();
       renderComposerState();
@@ -3297,6 +3299,7 @@ async function openStorageModal() {
       previewBox.textContent = 'Done. The totals above are refreshed.';
       await refreshStorage();
       await refreshSessions();
+      scheduleUsageSummary(0); // the ledger marks those entries as gone; the chip must follow at once
     });
   });
 }
@@ -3497,6 +3500,32 @@ async function refreshUsageSummary() {
   state.usage = res;
   updateUsageFoot();
   return res;
+}
+
+/*
+ * The footer chip and an open Usage dialog must not need an app restart to show what the last run
+ * cost. Every run that settles - and every compaction, which is a model call of its own - re-reads
+ * the ledger a moment later, once pi has flushed the session file. The scan is incremental, so
+ * unchanged session files are never opened again and this stays cheap.
+ */
+let usageSummaryTimer = null;
+let usageDialogDraw = null; // set while the Usage dialog is open, so a settle can redraw it too
+
+function scheduleUsageSummary(delayMs = 1500) {
+  clearTimeout(usageSummaryTimer);
+  usageSummaryTimer = setTimeout(() => {
+    const before = state.usage && state.usage.all ? state.usage.all.total : 0;
+    refreshUsageSummary()
+      .then((res) => {
+        if (!res || !res.ok) return;
+        const moved = res.all && res.all.total !== before;
+        if (moved) console.log(`[usage-live] ledger total ${before} \u2192 ${res.all.total} (the chip follows without a restart)`);
+        // redraw an open dialog only when the numbers actually moved, so hovering a column is not
+        // yanked away every time some other tab settles
+        if (moved && usageDialogDraw) usageDialogDraw();
+      })
+      .catch((err) => console.error('[usage] summary refresh failed', err));
+  }, delayMs);
 }
 
 function usageRangeFrom(rangeValue) {
@@ -3762,6 +3791,7 @@ async function openUsageModal() {
     const finish = () => {
       if (done) return;
       done = true;
+      usageDialogDraw = null;
       backdrop.remove();
       modalOpen = null;
       resolve(report);
@@ -3906,6 +3936,7 @@ async function openUsageModal() {
     renderModels();
     renderRates();
   }
+  usageDialogDraw = draw;
 
   cacheBox.addEventListener('change', () => {
     if (report) buildUsageChart(chartWrap, report, selectBucket, cacheBox.checked, mode, currentPrices());
@@ -7080,6 +7111,9 @@ async function init() {
   observeDialogs(); // D3: every dialog becomes a real dialog without touching its creator
   refreshStorage().catch(() => {}); // D7: the footer shows the folder size once this lands
   refreshUsageSummary().catch(() => {}); // D9: and the token ledger total
+  // coming back to the window is when a stale chip is noticed, so make it current then; the scan is
+  // incremental, so an idle app re-reads nothing
+  window.addEventListener('focus', () => scheduleUsageSummary(0));
   // the wizard is for a human first run; smoke scenarios open it explicitly when they want it
   if (firstRunNeeded() && !(state.info && state.info.smoke)) openFirstRunWizard().catch((err) => console.error('[setup] first-run wizard failed', err));
   observeControlNames();
@@ -7899,6 +7933,17 @@ async function smokeUsageScenario() {
   const day = await api.usageSeries({ unit: 'day', limit: 30 });
   const month = await api.usageSeries({ unit: 'month' });
   const sums = await api.usageSummary();
+  /*
+   * The reported bug: the on-screen Usage total only moved after an app restart. The settle / focus /
+   * cleanup path pulls a fresh summary, so the chip must follow the ledger the main process just
+   * computed - with no restart anywhere in sight.
+   */
+  const chipNode = els.sideFoot.querySelector('.foot-usage');
+  const chipBefore = chipNode ? chipNode.textContent : '';
+  scheduleUsageSummary(0);
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const chipAfter = chipNode ? chipNode.textContent : '';
+  const chipFollowsLedger = !!chipNode && chipAfter === usageFootLabel() && chipAfter.includes('Usage:');
   const opened = openUsageModal();
   await new Promise((resolve) => setTimeout(resolve, 900));
   const modal = els.modalRoot.querySelector('.usage-modal');
@@ -7981,7 +8026,7 @@ async function smokeUsageScenario() {
   if (closeBox) closeBox.click();
   await opened;
   console.log(
-    `[smoke-usage] ok=${day.ok && month.ok && sums.ok} ipc_day=${day.buckets.length} ipc_month=${month.buckets.length} chart_columns=${columns} after_unit=${monthColumns} entries=${day.entries} gone=${day.gone} dedupe_missed=${day.dedupeMissed} ledger=${JSON.stringify(String(day.ledgerFile || '').split(/[\\/]/).pop())} total=${sums.all ? sums.all.total : 0} cache_read=${sums.all ? sums.all.cacheRead : 0} answers=${sums.all ? sums.all.answers : 0} compactions=${sums.all ? sums.all.compactions : 0} branches=${sums.all ? sums.all.branches : 0} axis_with_cache=${JSON.stringify(axisWithCache)} axis_without_cache=${JSON.stringify(axisWithoutCache)} rescaled=${axisWithCache !== axisWithoutCache} cost_axis=${JSON.stringify(costAxis)} cost_is_money=${costAxis.includes('$')} rate_rows=${rateRows} rate_inputs=${rateInputs} money_in_header=${moneyShown} money_before=${JSON.stringify(moneyBefore)} typed_model_rate=${JSON.stringify(modelKey)} saved_by_model=${JSON.stringify(savedByModel)} money_after=${JSON.stringify(moneyAfter)} money_changed=${moneyBefore !== moneyAfter && !!moneyAfter} money_up=${parseFloat(moneyAfter) > parseFloat(moneyBefore)} refilled_boxes=${refilled} detail=${JSON.stringify(detail.slice(0, 70))} footer=${JSON.stringify(footer.slice(-46))} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
+    `[smoke-usage] ok=${day.ok && month.ok && sums.ok} ipc_day=${day.buckets.length} ipc_month=${month.buckets.length} chart_columns=${columns} after_unit=${monthColumns} entries=${day.entries} chip_before=${JSON.stringify(chipBefore)} chip_after=${JSON.stringify(chipAfter)} chip_follows_ledger=${chipFollowsLedger} gone=${day.gone} dedupe_missed=${day.dedupeMissed} ledger=${JSON.stringify(String(day.ledgerFile || '').split(/[\\/]/).pop())} total=${sums.all ? sums.all.total : 0} cache_read=${sums.all ? sums.all.cacheRead : 0} answers=${sums.all ? sums.all.answers : 0} compactions=${sums.all ? sums.all.compactions : 0} branches=${sums.all ? sums.all.branches : 0} axis_with_cache=${JSON.stringify(axisWithCache)} axis_without_cache=${JSON.stringify(axisWithoutCache)} rescaled=${axisWithCache !== axisWithoutCache} cost_axis=${JSON.stringify(costAxis)} cost_is_money=${costAxis.includes('$')} rate_rows=${rateRows} rate_inputs=${rateInputs} money_in_header=${moneyShown} money_before=${JSON.stringify(moneyBefore)} typed_model_rate=${JSON.stringify(modelKey)} saved_by_model=${JSON.stringify(savedByModel)} money_after=${JSON.stringify(moneyAfter)} money_changed=${moneyBefore !== moneyAfter && !!moneyAfter} money_up=${parseFloat(moneyAfter) > parseFloat(moneyBefore)} refilled_boxes=${refilled} detail=${JSON.stringify(detail.slice(0, 70))} footer=${JSON.stringify(footer.slice(-46))} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
   );
 }
 

@@ -86,6 +86,17 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 - Fixed on the way: `.modal input { width: 100% }` stretched every checkbox in a dialog across its row -
   the Usage dialog's cache toggle showed up as a stray white square with its label 300px away. `.field-row
   input[type="checkbox"]` now gets `width: auto`, the way `.set-check` already did.
+- **Fixed: the Usage total needed an app restart to move.** The ledger was only re-scanned at startup and
+  when a pi process exited, so a session that was still running never showed up in the footer chip. Now a
+  settled run, a compaction, the window regaining focus, a storage cleanup and a process exit all refresh
+  it: the renderer pulls a fresh summary 1.5 s after the settle (the chip follows, and an open dialog is
+  redrawn only when the numbers actually moved, so hovering a column is not yanked away), and the main
+  process re-scans 2.5 s later so the ledger file on disk is current for the diagnostics report too. It
+  logs `[usage-live] ledger total X → Y` when that happens. Proven end to end against a throwaway
+  sessions root with records being appended while the app ran:
+  `[usage-live] ledger total 100378346 → 100448046` and `chip_before="Usage: 100.36M tok" chip_after="Usage: 100.38M tok"`.
+  A unit test covers the ledger half: a session file that is still being written is picked up by the next
+  refresh with every record counted exactly once, and an idle refresh re-reads nothing.
 - **Accessibility pass** - dialogs are now real dialogs (`role="dialog"`, labelled by their heading,
   focus moved in, `Tab` wrapped, `Esc` closing through the Cancel button, focus returned to the
   opener), icon-only buttons get an accessible name from their `title`, queue rows are focusable and

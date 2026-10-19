@@ -90,7 +90,9 @@ function appendTurn(filePath, turn) {
   const day = typeof turn.day === 'string' ? turn.day : dayKeyOf(new Date());
   const entry = {
     type: 'message',
-    id: `a${Date.now()}`,
+    // an explicit id keeps the test deterministic: Date.now() alone can repeat inside the same
+    // millisecond, and duplicate ids would confuse the watermark being tested
+    id: turn.id || `a${Date.now()}`,
     timestamp: `${day}T11:00:00.000Z`,
     message: {
       role: 'assistant',
@@ -238,6 +240,22 @@ test('a growing session file is re-read and its day bucket updated', () => {
   const info = refresh();
   assert.equal(info.parsed, 1, 'the changed file must be re-parsed');
   assert.equal(series({ unit: 'day' }).totals.total, 25);
+});
+
+test('a session that is still being written shows up on the next refresh, each record counted once (no restart needed)', () => {
+  // the reported bug: the on-screen Usage total only moved after an app restart, because the ledger
+  // was refreshed on process exit only. A live tab keeps appending, so a refresh must follow it.
+  const file = writeSession(groupDir, 'live.jsonl', [{ day: today(), in: 10, out: 5 }]);
+  refresh();
+  assert.equal(series({ unit: 'day' }).totals.total, 15);
+  for (const turn of [{ in: 6, out: 4, id: 'live-2' }, { in: 1, out: 1, id: 'live-3' }]) {
+    appendTurn(file, turn);
+    refresh();
+  }
+  assert.equal(series({ unit: 'day' }).totals.total, 27, 'every turn of the live session is in, exactly once');
+  const idle = refresh();
+  assert.equal(idle.parsed, 0, 'nothing changed since the last refresh, so nothing may be re-read');
+  assert.equal(series({ unit: 'day' }).totals.total, 27, 'and the total must not drift');
 });
 
 test('the ledger is written to disk and re-read without touching the session files again', () => {

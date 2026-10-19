@@ -394,7 +394,12 @@ function spawnTab({ tabId, cwd, args = [], env = {} }) {
     proc.sessionPath = flagIndex >= 0 && args[flagIndex + 1] ? String(args[flagIndex + 1]) : null;
   }
 
-  proc.on('record', (record) => send('pi:record', { tabId, record }));
+  proc.on('record', (record) => {
+    send('pi:record', { tabId, record });
+    // D9: a settled run - and a compaction, which is a model call of its own - is when new usage
+    // lands in the session file, so the ledger follows without waiting for the process to exit
+    if (record && (record.type === 'agent_settled' || record.type === 'compaction_end')) scheduleUsageRefresh(2500);
+  });
   proc.on('stderr', (text) => {
     console.error(`[pi stderr tab=${tabId}] ${text.slice(0, 1000)}`);
     send('pi:stderr', { tabId, text: text.slice(0, 4000) });
@@ -972,6 +977,10 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
 
   ipcMain.handle('usage:summary', () => {
     try {
+      // incremental scan first: the footer chip asks after every settled run and every window focus,
+      // and answering from a stale ledger file is exactly what made the number look like it needed an
+      // app restart to update
+      usageLedger.refresh();
       return { ok: true, ...usageLedger.summary() };
     } catch (err) {
       console.error(`[usage:summary] failed: ${err.stack || err}`);
