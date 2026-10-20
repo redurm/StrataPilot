@@ -1742,7 +1742,12 @@ button:disabled {
 /* ---------- strata monitor ---------- */
 .monitor-view {
   display: grid;
-  grid-template-rows: auto 1fr;
+  /* three in-flow children: .mon-head, .mon-servers (D6) and .mon-scroll. The template still read
+   * `auto 1fr` after the switcher row was added, so .mon-servers landed on the 1fr track, absorbed
+   * every leftover pixel of height, and its buttons - flex items, `align-items: stretch` by default -
+   * were pulled into tall capsules (#25). test/monitor-layout.test.js pins the track count to the
+   * number of children, because inserting an element here used to be silently wrong. */
+  grid-template-rows: auto auto 1fr;
   background: var(--bg);
   border-left: 1px solid var(--border);
   container-type: inline-size;
@@ -2427,6 +2432,7 @@ button:disabled {
 /* D6: the Monitor's server switcher */
 .mon-servers {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 6px;
   padding: 6px 10px 0;
