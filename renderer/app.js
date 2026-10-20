@@ -75,11 +75,15 @@ function rerenderChrome() {
   refreshSessions().catch(() => {});
   refreshStorage().catch(() => {});
   refreshUsageSummary().catch(() => {});
+  // #30: the card titles, the state badges and the Decode/Prefill subs are baked in with tr() when the
+  // cards are built, and buildMonitorCards() returns early once built. Invalidating that flag only
+  // while the panel happens to be open meant a language change taken from Settings (panel closed) left
+  // the monitor showing the language it was FIRST built in, forever. Invalidate unconditionally: open
+  // panel rebuilds now, closed panel rebuilds on the next openMonitor().
+  monitor.built = false;
   if (!els.monitorView.classList.contains('hidden')) {
     renderMonitorServers();
-    // the card titles are built once, so rebuild them to pick up the new language, then repaint from
-    // the last metrics payload (only fetch again if we never had one)
-    monitor.built = false;
+    // repaint from the last metrics payload (only fetch again if we never had one)
     buildMonitorCards();
     if (monitor.lastData) renderMonitor(monitor.lastData);
     else pollMonitor().catch(() => {});
@@ -8253,19 +8257,41 @@ async function smokeI18nScenario() {
     return options;
   };
 
+  // #30: the path this scenario has to cover is a language change taken while the monitor is CLOSED.
+  // The card titles are baked in with tr() when the cards are built, and a closed panel used to never
+  // have that build invalidated - so the labels stayed in whatever language the monitor happened to be
+  // first opened in. Close it before switching, reopen it before reading.
+  const monitorWasOpen = !els.monitorView.classList.contains('hidden');
+  if (monitorWasOpen) closeMonitor();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const reopenMonitor = async () => {
+    if (els.monitorView.classList.contains('hidden')) openMonitor();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  };
+
   const options = await pick('zh-TW');
+  await reopenMonitor();
   const tw = read();
   await api.smokeShot('i18n-zh-TW');
   await pick('zh-CN');
+  await reopenMonitor();
   const cn = read();
   await api.smokeShot('i18n-zh-CN');
   await pick('en'); // and back, so switching is not a one-way door
+  await reopenMonitor();
   const back = read();
+  if (!monitorWasOpen) closeMonitor();
   const saved = await api.settingsGet();
 
   const cjk = /[\u3400-\u9fff]/;
+  // the scenario used to only RECORD this: a monitor stuck in the wrong language was visible in the
+  // log line and nothing failed on it (#30)
+  const monitorTranslated = cjk.test(tw.monitor) && cjk.test(cn.monitor);
+  if (!monitorTranslated) {
+    console.log(`[smoke-i18n] FAIL the monitor kept its old labels after a language change taken while the panel was closed: tw=${JSON.stringify(tw.monitor.slice(0, 60))} cn=${JSON.stringify(cn.monitor.slice(0, 60))} (#30)`);
+  }
   console.log(
-    `[smoke-i18n] start_lang=${before.lang} options=${options.join(',')} tw_lang=${tw.lang} tw_newSession=${JSON.stringify(tw.newSession)} tw_settings=${JSON.stringify(tw.settings)} tw_storage=${JSON.stringify(tw.storage)} tw_foot=${JSON.stringify(tw.foot)} tw_sendTitle=${JSON.stringify(tw.sendTitle)} tw_placeholder=${JSON.stringify(tw.placeholder.slice(0, 40))} tw_monitor=${JSON.stringify(tw.monitor.slice(0, 60))} cn_lang=${cn.lang} cn_newSession=${JSON.stringify(cn.newSession)} cn_foot=${JSON.stringify(cn.foot)} cn_monitor=${JSON.stringify(cn.monitor.slice(0, 60))} switched=${tw.lang === 'zh-TW' && cn.lang === 'zh-CN'} cjk=${cjk.test(tw.newSession) && cjk.test(tw.settings) && cjk.test(tw.placeholder) && cjk.test(cn.newSession)} monitor_translated=${cjk.test(tw.monitor) && cjk.test(cn.monitor)} restored=${back.lang === 'en' && back.newSession === before.newSession && back.sendTitle === before.sendTitle && back.monitor === before.monitor} saved_pref=${saved && saved.language} entries=${i18nInfo.entries} pref=${i18nInfo.pref} system=${i18nInfo.systemLocale}`,
+    `[smoke-i18n] start_lang=${before.lang} options=${options.join(',')} tw_lang=${tw.lang} tw_newSession=${JSON.stringify(tw.newSession)} tw_settings=${JSON.stringify(tw.settings)} tw_storage=${JSON.stringify(tw.storage)} tw_foot=${JSON.stringify(tw.foot)} tw_sendTitle=${JSON.stringify(tw.sendTitle)} tw_placeholder=${JSON.stringify(tw.placeholder.slice(0, 40))} tw_monitor=${JSON.stringify(tw.monitor.slice(0, 60))} cn_lang=${cn.lang} cn_newSession=${JSON.stringify(cn.newSession)} cn_foot=${JSON.stringify(cn.foot)} cn_monitor=${JSON.stringify(cn.monitor.slice(0, 60))} switched=${tw.lang === 'zh-TW' && cn.lang === 'zh-CN'} cjk=${cjk.test(tw.newSession) && cjk.test(tw.settings) && cjk.test(tw.placeholder) && cjk.test(cn.newSession)} monitor_translated=${monitorTranslated} restored=${back.lang === 'en' && back.newSession === before.newSession && back.sendTitle === before.sendTitle && back.monitor === before.monitor} saved_pref=${saved && saved.language} entries=${i18nInfo.entries} pref=${i18nInfo.pref} system=${i18nInfo.systemLocale}`,
   );
 }
 
