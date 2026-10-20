@@ -733,3 +733,103 @@ test('a usage entry with CJK text straddling the 256 KB read boundary is scanned
     assert.ok(meta.lastAssistantText.includes(cjk), `cut=${cut}: the scanned text lost the CJK run`);
   }
 });
+
+/* ---- #10: the scan is off the request path; reporting touches no filesystem at all ---- */
+
+const { refreshAsync, FIELDS } = ledger;
+
+/** Count every filesystem entry point a call uses, for the path(s) matching `needle`. */
+function countFsCallsOf(needle, run) {
+  const real = {
+    openSync: fs.openSync,
+    readFileSync: fs.readFileSync,
+    statSync: fs.statSync,
+    readdirSync: fs.readdirSync,
+  };
+  let calls = 0;
+  for (const name of Object.keys(real)) {
+    fs[name] = function patched(...args) {
+      if (String(args[0] || '').includes(needle)) calls += 1;
+      return real[name].apply(fs, args);
+    };
+  }
+  try {
+    const value = run();
+    return { value, calls };
+  } finally {
+    Object.assign(fs, real);
+  }
+}
+
+/** Write `count` throwaway session files so a scan has something to walk. */
+function writeMany(count) {
+  for (let i = 0; i < count; i += 1) writeSession(groupDir, `bulk-${i}.jsonl`, [{ day: today(), in: 1, out: 1 }]);
+}
+
+test('series() and summary() answer from the rollup and touch no session file (#10)', () => {
+  writeSession(groupDir, 'report.jsonl', [{ day: today(), in: 10, out: 5 }]);
+  refresh();
+  const seriesCalls = countFsCallsOf('report.jsonl', () => series({ unit: 'day' }));
+  assert.equal(seriesCalls.calls, 0, `series() opened the session ${seriesCalls.calls} time(s): reporting must be pure in-memory`);
+  assert.equal(seriesCalls.value.totals.total, 15);
+  const summaryCalls = countFsCallsOf('report.jsonl', () => summary());
+  assert.equal(summaryCalls.calls, 0, `summary() touched the session ${summaryCalls.calls} time(s)`);
+  assert.equal(summaryCalls.value.all.total, 15);
+});
+
+test('refreshAsync() yields to the event loop between files, so a long scan cannot freeze the window (#10)', () => {
+  writeMany(ledger.YIELD_EVERY_FILES * 2 + 3);
+  let breathed = false;
+  setImmediate(() => {
+    breathed = true;
+  });
+  return refreshAsync().then((info) => {
+    assert.ok(info.parsed >= ledger.YIELD_EVERY_FILES * 2, `${info.parsed} files scanned: the fixture must be big enough to matter`);
+    assert.equal(breathed, true, 'a macrotask queued before the scan ran only after it: the scan starved the window');
+    assert.equal(series({ unit: 'day' }).totals.total, (ledger.YIELD_EVERY_FILES * 2 + 3) * 2, 'every file is still counted');
+  });
+});
+
+test('concurrent refreshAsync() calls share one scan instead of starting one each (#10)', async () => {
+  writeSession(groupDir, 'shared.jsonl', [{ day: today(), in: 1, out: 1 }]);
+  const first = refreshAsync();
+  // a caller that arrives while a scan is in flight must not walk the files a second time
+  const second = countFsCallsOf('shared.jsonl', () => refreshAsync());
+  assert.equal(second.calls, 0, `the second caller opened the file ${second.calls} time(s): one scan in flight, one flag`);
+  const [a, b] = await Promise.all([first, second.value]);
+  assert.equal(a.entries, b.entries);
+  assert.equal(b.passes, 1, 'no trailing pass was needed: nothing changed while it ran');
+  assert.equal(series({ unit: 'day' }).totals.total, 2, 'and the rollup is counted exactly once');
+});
+
+test('the ledger write is kept off the request path: refreshAsync defers it, flush() still writes it (#10)', async () => {
+  writeSession(groupDir, 'deferred.jsonl', [{ day: today(), in: 7, out: 3 }]);
+  await refreshAsync();
+  assert.ok(!fs.existsSync(ledgerPath), 'the scan must not serialise and write the whole ledger on the request path');
+  assert.equal(ledger.flush(), true, 'flush() writes it on demand (quit, or the deferred timer)');
+  assert.ok(fs.existsSync(ledgerPath));
+  resetLedger();
+  assert.equal(series({ unit: 'day' }).totals.total, 10, 'and the rollup survives the restart');
+});
+
+test('totals carry the "other" bucket: the field list used to be written four times and two copies disagreed (#13)', () => {
+  const file = path.join(groupDir, 'other-kind.jsonl');
+  const lines = [
+    { type: 'session', version: 3, id: 'other-kind', timestamp: `${today()}T08:00:00.000Z`, cwd: 'C:/work/demo' },
+    { type: 'usage', id: 'u1', timestamp: `${today()}T08:00:01.000Z`, usage: usage(5, 5, 0, 0, 0) },
+    { type: 'usage', id: 'u2', timestamp: `${today()}T08:00:02.000Z`, usage: usage(3, 2, 0, 0, 0) },
+  ];
+  fs.writeFileSync(file, lines.map((line) => JSON.stringify(line)).join('\n') + '\n', 'utf8');
+  refresh();
+  const report = series({ unit: 'day' });
+  const fromBuckets = report.buckets.reduce((sum, bucket) => sum + bucket.other, 0);
+  assert.ok(fromBuckets > 0, 'the buckets must carry the catch-all count');
+  assert.equal(report.totals.other, fromBuckets, 'totals.other used to be pinned at 0 while every bucket had a value');
+  for (const field of FIELDS) {
+    const summed = report.buckets.reduce((sum, bucket) => sum + bucket[field], 0);
+    assert.equal(report.totals[field], summed, `totals.${field} must be the sum of the buckets`);
+  }
+  for (const model of report.models) {
+    for (const field of FIELDS) assert.ok(Number.isFinite(model[field]), `models[].${field} missing`);
+  }
+});
