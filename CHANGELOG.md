@@ -17,7 +17,10 @@ append-only); parallel PRs all editing the version would fight over the same lin
 
 - **A tag now publishes a GitHub Release** - the installers built by the `Release build` workflow were only Actions artifacts: behind a GitHub login, buried in the run that built them, and deleted after 30 days, so `v0.2.0` and `v0.2.1` had no Release page at all. A `publish-release` job (tag pushes only) collects the three platforms' artifacts, takes the notes from that version's `CHANGELOG.md` section through `scripts/release-notes.js`, and runs `gh release create --verify-tag` with the job's own `GITHUB_TOKEN` - no new secret, and electron-builder's implicit publish stays off (#38). Re-running the same tag tops the assets up with `gh release upload --clobber` instead of failing. `test/release-notes.test.js` and two more `release-hygiene` assertions pin it: the version in `package.json` must always have a CHANGELOG section, and no version section may carry the Unreleased rule text (that is how the 0.2.1 section ended up with no entries of its own).
 
-Nothing unreleased.
+### Changed
+
+- **The i18n smoke scenario stopped racing the scenario next door** - it opened the Settings dialog unconditionally while other scenarios were opening their own (storage, the cron editor, the setup wizard), and the app allows only one modal at a time. It then found no language dropdown (`options=` empty in its own log line), switched nothing, and printed the #30 failure text - a false alarm that read like the monitor-language regression had come back, twice. It now waits up to 20s for the modal slot, and says `SKIP` when the switch genuinely could not be exercised, so `monitor_translated=false` only appears when something really is broken. Verified against the full 26-scenario run: `options=auto,en,zh-TW,zh-CN`, `switched=true`, `monitor_translated=true`, zero `FAIL` lines (#43).
+
 
 ## [0.2.1] - 2026-10-20
 
