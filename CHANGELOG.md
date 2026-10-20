@@ -307,6 +307,17 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   `test/net-policy.test.js` pins the whole decision table (8 cases: which hosts count as local, the
   protocol rule, origin-vs-prefix allowlisting, the read roots, the denied stat targets).
 
+- **A child that never wrote a newline could grow the stdout buffer without bound** -
+  `PiRpcProcess.onData()` appended every stdout chunk to `lineBuf` and only trimmed it at LF, with no
+  cap on the remainder. `stderrTail` is capped (20 KB) and the renderer's `pi:stderr` payload is capped
+  (4 KB), so stdout was the one unbounded channel in the process pair: a crashed pi, an extension
+  printing binary, or a tool dumping one huge line grew it for as long the child lived (40 MB in 40
+  chunks in the repro). It is capped at 8 MB now; on overflow the buffered bytes are dropped, counted
+  (`droppedBytes` / `droppedRecords`), said out loud in a `log` record that says a record was discarded
+  rather than saved, and the counters ride on the exit event so the `[pi exit tab=…]` line - and
+  therefore the diagnostics report's log tail - mentions them. Framing recovers: the buffer restarts
+  empty, so the next complete record is still parsed. Three cases in `test/pi-process.test.js`.
+
 ### Changed
 
 - **The README now starts from a fresh clone instead of from the feature list.** A first-time user used to

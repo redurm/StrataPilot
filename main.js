@@ -556,9 +556,9 @@ function spawnTab({ tabId, cwd, args = [], env = {} }) {
     // `code=null signal=null` and the reason (ENOENT, EACCES) is nowhere in the log.
     console.error(
       `[pi exit tab=${tabId}] code=${info && info.code} signal=${info && info.signal}` +
-        `${info && info.error ? ` error=${info.error}` : ''} stderrTail=${JSON.stringify(
-          String((info && info.stderr) || '').slice(-500),
-        )}`,
+        `${info && info.error ? ` error=${info.error}` : ''}` +
+        `${info && info.droppedBytes ? ` droppedBytes=${info.droppedBytes} droppedRecords=${info.droppedRecords}` : ''}` +
+        ` stderrTail=${JSON.stringify(String((info && info.stderr) || '').slice(-500))}`,
     );
     processes.delete(tabId);
     send('pi:exit', { tabId, ...info });

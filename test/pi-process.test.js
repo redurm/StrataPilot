@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { once } = require('node:events');
 
-const { PiRpcProcess, splitRecords } = require('../lib/pi-process');
+const { PiRpcProcess, splitRecords, MAX_LINE_BYTES } = require('../lib/pi-process');
 
 const STUB = path.join(__dirname, 'fixtures', 'rpc-stub.js');
 
@@ -222,4 +222,44 @@ test('command() on a process that was never started resolves as not running', as
   const res = await proc.command('get_state');
   assert.equal(res.success, false);
   assert.match(res.error, /pi process is not running/);
+});
+
+/* ---- #11: the stdout line buffer is bounded ---- */
+
+const deadProc = (id) =>
+  new PiRpcProcess({ id, cwd: __dirname, invocation: { nodePath: process.execPath, cliPath: STUB, nodeArgPrefix: [], runAsNode: false } });
+
+test('a child that never writes a newline cannot grow the stdout buffer without bound (#11)', () => {
+  const proc = deadProc('flood');
+  const logs = [];
+  proc.on('log', (text) => logs.push(text));
+  const chunk = Buffer.alloc(1024 * 1024, 0x61); // 1 MB of 'a', no LF anywhere
+  for (let i = 0; i < MAX_LINE_BYTES / chunk.length + 3; i++) proc.onData(chunk);
+  assert.ok(proc.lineBuf.length <= MAX_LINE_BYTES, `lineBuf reached ${proc.lineBuf.length} bytes with no cap`);
+  assert.ok(proc.droppedBytes >= MAX_LINE_BYTES, `droppedBytes=${proc.droppedBytes}: the overflow must be counted`);
+  assert.ok(proc.droppedRecords >= 1, 'the overflow must be counted as a lost record, not just bytes');
+  const loud = logs.filter((text) => /unterminated line/.test(text));
+  assert.ok(loud.length >= 1, `no log line about the drop: ${JSON.stringify(logs.slice(0, 3))}`);
+  assert.match(loud.at(-1), /a record was discarded, not saved/, 'the log has to say a record was lost');
+});
+
+test('framing recovers after an overflow: the next complete record still arrives (#11)', () => {
+  const proc = deadProc('flood2');
+  const seen = [];
+  proc.on('record', (record) => seen.push(record));
+  proc.onData(Buffer.alloc(MAX_LINE_BYTES + 10, 0x62)); // no LF: blows the cap
+  assert.equal(proc.lineBuf.length, 0, 'the buffer must restart empty, not keep the tail');
+  proc.onData(Buffer.from(JSON.stringify({ type: 'extension_message', text: 'after the flood' }) + '\n', 'utf8'));
+  assert.equal(seen.length, 1, 'the record after the flood must still be framed and parsed');
+  assert.equal(seen[0].text, 'after the flood');
+});
+
+test('the exit event carries the drop counters so the log and the report can mention them (#11)', async () => {
+  const proc = startStub();
+  const exited = once(proc, 'exit');
+  proc.onData(Buffer.alloc(MAX_LINE_BYTES + 1, 0x63));
+  proc.dispose();
+  const [info] = await exited;
+  assert.ok(info.droppedBytes > MAX_LINE_BYTES, `droppedBytes=${info.droppedBytes}`);
+  assert.equal(info.droppedRecords, 1);
 });
