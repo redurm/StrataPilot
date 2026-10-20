@@ -1556,10 +1556,14 @@ if (!gotLock) {
   app.on('before-quit', () => {
     cronStop();
     clearTimeout(usageRefreshTimer);
+    // #28: the deferred ledger write from refreshAsync() has to be cancelled here, not merely
+    // flushed. An armed timer would write the rollup again AFTER the final flush - and after
+    // onAllGone's flush - if the quit is aborted or a window reopens during shutdown.
     // #8: this first flush is the "the app is going away right now" guarantee; the one armed by
     // closeAllPiProcesses() is the correct one, after the children have stopped writing. The ledger
     // re-scans changed files on the next start either way, so no token is written off - but the
     // rollup this app writes should be the complete one.
+    usageLedger.cancelScheduledFlush();
     usageLedger.flush();
     closeAllPiProcesses();
   });

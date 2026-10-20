@@ -196,4 +196,6 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { collect, wrappedKeys, staticHtmlKeys, unescapeJs, CATALOGS };
+// #28: wrappedKeys / staticHtmlKeys / unescapeJs are helpers of collect(); test/i18n.test.js needs
+// collect and CATALOGS, and exporting the rest only widens the surface
+module.exports = { collect, CATALOGS };
