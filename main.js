@@ -243,14 +243,18 @@ let usageRefreshTimer = null;
 function scheduleUsageRefresh(delayMs = 5000) {
   clearTimeout(usageRefreshTimer);
   usageRefreshTimer = setTimeout(() => {
-    try {
-      const info = usageLedger.refresh();
-      if (info.parsed || info.failed) {
-        console.log(`[usage-ledger] parsed=${info.parsed} skipped=${info.skipped} entries=${info.entries} gone=${info.gone} failed=${info.failed}`);
-      }
-    } catch (err) {
-      console.error(`[usage-ledger] refresh failed: ${err.stack || err}`);
-    }
+    // #10: refreshAsync, not refresh: this fires after every settled run, every compaction, every
+    // window focus and every cleanup, and a synchronous walk of every session file blocks the window
+    // messages that keep it answering input. refreshAsync yields between files and coalesces callers
+    // into one scan.
+    usageLedger
+      .refreshAsync()
+      .then((info) => {
+        if (info.parsed || info.failed) {
+          console.log(`[usage-ledger] parsed=${info.parsed} skipped=${info.skipped} entries=${info.entries} gone=${info.gone} failed=${info.failed} passes=${info.passes}`);
+        }
+      })
+      .catch((err) => console.error(`[usage-ledger] refresh failed: ${err.stack || err}`));
   }, delayMs);
   if (usageRefreshTimer.unref) usageRefreshTimer.unref();
 }
@@ -1214,9 +1218,11 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
   });
 
   /* D9: token usage rollup - the chart in the Usage dialog reads through these */
-  ipcMain.handle('usage:series', (_event, payload) => {
+  ipcMain.handle('usage:series', async (_event, payload) => {
     try {
-      const scan = usageLedger.refresh(); // incremental: only files that changed since the last scan
+      // incremental: only files that changed since the last scan. Awaited, and the scan yields between
+      // files, so opening the chart on a folder of thousands of sessions cannot freeze the window (#10)
+      const scan = await usageLedger.refreshAsync();
       const report = usageLedger.series(usageQuery(payload));
       return { ok: true, scan, ...report };
     } catch (err) {
@@ -1225,12 +1231,12 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
     }
   });
 
-  ipcMain.handle('usage:summary', () => {
+  ipcMain.handle('usage:summary', async () => {
     try {
       // incremental scan first: the footer chip asks after every settled run and every window focus,
       // and answering from a stale ledger file is exactly what made the number look like it needed an
-      // app restart to update
-      usageLedger.refresh();
+      // app restart to update. Concurrent callers share one scan instead of starting one each (#10)
+      await usageLedger.refreshAsync();
       return { ok: true, ...usageLedger.summary() };
     } catch (err) {
       console.error(`[usage:summary] failed: ${err.stack || err}`);

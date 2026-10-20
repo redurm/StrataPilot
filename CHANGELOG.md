@@ -335,6 +335,24 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   `lastRun` and arms the next occurrence rather than re-firing today, re-arm leaves `lastRun` alone,
   an invalid schedule cannot throw the tick).
 
+- **Opening the Usage chart could look like the app had crashed** - both usage endpoints re-scanned the
+  session files **synchronously on the main process** before answering, and `usage:summary` is called
+  after every settled run, every compaction, every window focus and every cleanup (the “the total
+  follows the ledger live” behaviour from D9), plus on a timer. `refresh()` walked every session file
+  with `fs.openSync` / `fs.readSync` (up to 12 MB each) and then `JSON.stringify`'d and wrote the whole
+  ledger. Anything that blocks the main process blocks window messages, so with a few thousand session
+  files the window stopped answering input and Electron fired `unresponsive` after 30 s - which is
+  exactly the path `createWindow()` turns into the “The interface has stopped responding / Reload
+  interface” dialog. A chart refresh could therefore present itself as a crash. `refreshAsync()` now
+  yields to the event loop every 25 files, coalesces concurrent callers into ONE scan with a
+  “someone asked while it ran” flag (instead of one scan per caller), and keeps the ledger write off
+  the request path (mark dirty, write on a timer; `flush()` still runs on quit). `series()` and
+  `summary()` are asserted to touch no session file at all, which pins the split between “scan” and
+  “report”. While in there: the same field list was written out four times and two copies disagreed -
+  the bucket/model passes included `other`, the totals passes did not - so `totals.other` was pinned at
+  0 (and the chart's bucket objects did not carry it at all) while every day bucket had a value; there
+  is one `FIELDS` constant and one `addFields()` now, and `series()` reports the catch-all (#13).
+
 ### Changed
 
 - **The README now starts from a fresh clone instead of from the feature list.** A first-time user used to
