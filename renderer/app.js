@@ -2394,10 +2394,44 @@ async function ensureAlwaysOn(tab) {
   else toast(retry.error || 'set_auto_retry failed', 'error');
 }
 
+/**
+ * Learn the session file pi created on its own (#35).
+ *
+ * bootstrap() reads the path from get_state right after the spawn, and pi normally has the file by
+ * then - but pi writes it during its own startup, so a slow start can leave bootstrap() with nothing,
+ * and that tab would then answer "this session has no session file yet" for the rest of its life.
+ * Ask at the moment it matters instead of on every turn: get_state carries sessionFile (note that
+ * get_session_stats does NOT, which is why /stats used to print "(ephemeral)" for saved sessions).
+ */
+async function adoptSessionPath(tab) {
+  if (!tab || !tab.alive || tab.sessionPath || tab.ephemeral) return '';
+  const res = await api.cmd(tab.id, 'get_state');
+  const file = res && res.success && res.data ? res.data.sessionFile : '';
+  if (!file) return '';
+  tab.sessionPath = file;
+  api.setSessionPath({ tabId: tab.id, sessionPath: file }); // D7: the cleanup must know what is being written
+  renderTabs(); // the tab chip, the queue badge and the sidebar "current" marker all read sessionPath
+  console.log(`[session] tab=${tab.id} adopted the file pi created: ${file}`);
+  return file;
+}
+
 async function refreshStats(tab) {
   if (!tab || !tab.alive) return;
   const res = await api.cmd(tab.id, 'get_session_stats');
-  if (res.success && res.data) tab.stats = res.data;
+  if (res.success && res.data) {
+    tab.stats = res.data;
+    // A brand-new session has no file when bootstrap() reads get_state: pi creates the file on the
+    // FIRST message. Nothing else hands that path back, so tab.sessionPath stayed null for the whole
+    // life of the tab and everything gated on it kept failing - /export insisted "this session has no
+    // session file yet" forever, renaming had no target, and the sidebar / tree could never mark this
+    // session as current (#35). get_session_stats already returns the path (that is what /stats
+    // prints), so adopting it here costs no extra round trip.
+    if (!tab.sessionPath && res.data.sessionFile) {
+      tab.sessionPath = res.data.sessionFile;
+      api.setSessionPath({ tabId: tab.id, sessionPath: res.data.sessionFile });
+      renderTabs(); // the tab chip and the sidebar "current" marker both read sessionPath
+    }
+  }
   renderStats(tab);
 }
 
@@ -5361,7 +5395,7 @@ async function runSlashCommand(tab, text) {
         `stats — user ${d.userMessages || 0}, assistant ${d.assistantMessages || 0}, tool calls ${d.toolCalls || 0}\n`
           + `tokens ${tokenLabel(t)} · total (in+out+cache) ${fmtTokens(t.total || 0)}\n`
           + `cost $${Number(d.cost || 0).toFixed(4)} · context ${ctx.percent || 0}% (${fmtTokens(ctx.tokens || 0)} / ${fmtTokens(ctx.contextWindow || 0)})\n`
-          + `session: ${d.sessionFile || '(ephemeral)'}`,
+          + `session: ${tab.sessionPath || '(ephemeral)'}`,
       );
       clearComposer();
       return true;
@@ -5936,6 +5970,9 @@ async function runExport(tab, arg) {
     toast(`export already running in ${tabLabel(tab)} (${secs}s) — big sessions take minutes`, 'warning');
     return;
   }
+  // a fresh session's file is created by pi on the first message; ask before refusing, because the
+  // settle handler may not have run yet (#35)
+  if (!tab.sessionPath && !tab.ephemeral) await adoptSessionPath(tab);
   // pi has no session file to export: unsaved (no message yet) or ephemeral (--no-session)
   if (tab.ephemeral || !tab.sessionPath) {
     toast('this session has no session file yet (unsaved or ephemeral) — send a message first, or open a saved session', 'warning', 8000);
@@ -7351,7 +7388,9 @@ async function init() {
     if (reused) console.log(`[restore] ${reused}/${restore.length} tabs re-used a live pi process`);
     activateTab(state.order[state.order.length - 1]);
   } else {
-    await createTab({ cwd: state.cwd, ephemeral: !!state.info.smoke });
+    // smoke runs are ephemeral so they do not litter the sessions folder, unless the run asked for a
+    // real session (STRATAPILOT_SMOKE_PERSIST) to exercise the paths that need one: export, rename (#35)
+    await createTab({ cwd: state.cwd, ephemeral: !!state.info.smoke && !state.info.smokePersist });
   }
 
   if (state.info.smoke) {

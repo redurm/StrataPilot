@@ -934,6 +934,7 @@ function registerIpc() {
       smoke: !!process.env.STRATAPILOT_SMOKE,
       smokePrompt: process.env.STRATAPILOT_SMOKE_PROMPT || '',
       smokeSession: process.env.STRATAPILOT_SMOKE_SESSION || '',
+      smokePersist: !!process.env.STRATAPILOT_SMOKE_PERSIST,
       smokeSteer: !!process.env.STRATAPILOT_SMOKE_STEER,
       smokeQueue: !!process.env.STRATAPILOT_SMOKE_QUEUE,
       smokeMonitor: !!process.env.STRATAPILOT_SMOKE_MONITOR,
