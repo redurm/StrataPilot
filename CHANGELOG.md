@@ -13,6 +13,18 @@ adds its entry under `Unreleased` and never touches `package.json`; cutting a re
 and leaves an empty `Unreleased` behind. Parallel PRs all editing `Unreleased` conflict harmlessly
 (it is append-only); parallel PRs all editing the version would fight over the same line.
 
+## [0.2.1] - 2026-10-20
+
+Bug fixes on top of 0.2.0. The headline is that releases are now downloadable: the 0.2.0 tag built
+nothing, because the Linux packaging config was invalid and electron-builder's implicit GitHub publish
+failed without a token after every artifact had already been built.
+Nothing unreleased. The rule this file follows (and `test/release-hygiene.test.js` enforces): a PR
+adds its entry under `Unreleased` and never touches `package.json`; cutting a release moves the
+`Unreleased` block under a dated version heading, bumps `package.json` / `package-lock.json` to match,
+and leaves an empty `Unreleased` behind. Parallel PRs all editing `Unreleased` conflict harmlessly
+(it is append-only); parallel PRs all editing the version would fight over the same line.
+
+
 ## [0.2.0] - 2026-10-20
 
 The first release with packaging, the Strata monitor, the token ledger, scheduled jobs and the
