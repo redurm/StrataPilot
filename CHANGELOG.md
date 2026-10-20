@@ -9,6 +9,9 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 
 ### Fixed
 
+- **The Strata monitor kept the labels of the language it was first opened in** - the card titles, the state badges and the Decode/Prefill subs are baked in with `tr()` when `buildMonitorCards()` runs, and that function returns early once `monitor.built` is set. The invalidation lived inside `if (!els.monitorView.classList.contains('hidden'))`, so a language change taken from Settings - the normal path, with the panel closed - never invalidated anything, and reopening the monitor later showed the old language forever. The flag is now cleared unconditionally: an open panel rebuilds immediately, a closed one on the next `openMonitor()` (#30).
+### Fixed
+
 - **A deferred ledger write could land after the app had already finished flushing** - `refreshAsync()` schedules the rollup write on a timer and `cancelScheduledFlush()` was exported for the quit path but never called, so `before-quit` flushed, `onAllGone` flushed again, and an armed timer could write a third time if the quit was aborted or a window reopened during shutdown (#28).
 
 ### Changed
