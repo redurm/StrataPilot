@@ -226,17 +226,17 @@ test('an invalid schedule cannot throw the scheduler out of its tick', () => {
 
 /* ---- #13: the jobs list is bounded, and the schedule text can be translated ---- */
 
-const { sanitizeJobs, MAX_JOBS, MAX_PROMPT_CHARS } = require('../lib/cron');
+const { sanitizeJobs, MAX_JOBS, MAX_PROMPT_CHARS, MAX_NAME_CHARS, MAX_CWD_CHARS, MAX_SCHEDULE_CHARS, MAX_TARGET_CHARS } = require('../lib/cron');
 
 test('sanitizeJobs: the shape was validated but nothing was bounded (#13)', () => {
   const base = { schedule: '30 9 * * *', prompt: 'do the thing' };
   assert.equal(sanitizeJobs([base]).length, 1);
   assert.throws(() => sanitizeJobs(new Array(MAX_JOBS + 1).fill(base)), /too many jobs/);
   assert.throws(() => sanitizeJobs([{ ...base, prompt: 'p'.repeat(MAX_PROMPT_CHARS + 1) }]), /prompt is longer than/);
-  assert.throws(() => sanitizeJobs([{ ...base, name: 'n'.repeat(200) }]), /name is longer than/);
-  assert.throws(() => sanitizeJobs([{ ...base, cwd: 'c'.repeat(600) }]), /cwd is longer than/);
-  assert.throws(() => sanitizeJobs([{ ...base, target: `session:${'s'.repeat(600)}` }]), /target is longer than|target must be/);
-  assert.throws(() => sanitizeJobs([{ ...base, schedule: 'x'.repeat(300) }]), /schedule is longer than/);
+  assert.throws(() => sanitizeJobs([{ ...base, name: 'n'.repeat(MAX_NAME_CHARS + 1) }]), /name is longer than/);
+  assert.throws(() => sanitizeJobs([{ ...base, cwd: 'c'.repeat(MAX_CWD_CHARS + 1) }]), /cwd is longer than/);
+  assert.throws(() => sanitizeJobs([{ ...base, target: `session:${'s'.repeat(MAX_TARGET_CHARS + 1)}` }]), /target is longer than/);
+  assert.throws(() => sanitizeJobs([{ ...base, schedule: 'x'.repeat(MAX_SCHEDULE_CHARS + 1) }]), /schedule is longer than/);
   // the message used to interpolate cron.parseCron.name; a function name is not user-facing text
   let message = '';
   try {

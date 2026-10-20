@@ -7,6 +7,13 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A deferred ledger write could land after the app had already finished flushing** - `refreshAsync()` schedules the rollup write on a timer and `cancelScheduledFlush()` was exported for the quit path but never called, so `before-quit` flushed, `onAllGone` flushed again, and an armed timer could write a third time if the quit was aborted or a window reopened during shutdown (#28).
+
+### Changed
+
+- **Fifteen exports nothing imported are gone** - `MONTHS`, `DAYS`, `dayOfWeekValues` (`lib/cron.js`), `SECRET_KEY_RE`, `SECRET_VALUE_RES`, `scrubValue` (`lib/diagnostics.js`), `MAX_BYTES`, `KEEP` (`lib/log.js`), `LEDGER_VERSION`, `UNKNOWN_MODEL`, `scanFile` (`lib/usage-ledger.js`) and `wrappedKeys`, `staticHtmlKeys`, `unescapeJs` (`scripts/i18n-extract.js`). An export is a surface the next reader has to reason about, and the answer was "nobody". The four job-list caps that were exported but never exercised (`MAX_NAME_CHARS`, `MAX_CWD_CHARS`, `MAX_SCHEDULE_CHARS`, `MAX_TARGET_CHARS`) are now asserted by name in `test/cron.test.js` instead of by a hardcoded 200/120/600. A new `test/dead-exports.test.js` fails on any export no other file references, so the surface cannot quietly widen again (#28).
 ### Added
 
 - **Packaging** - `electron-builder` configuration (`npm run dist`, `dist:win`, `dist:mac`, `dist:linux`), an
