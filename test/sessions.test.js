@@ -557,3 +557,53 @@ test('guard: a path that reaches the root THROUGH a link is refused (#13)', (t) 
     fs.rmSync(outside, { recursive: true, force: true });
   }
 });
+
+test('guard: a sessions root that is ITSELF reached through a link still works (#13 regression)', (t) => {
+  // macOS os.tmpdir() is /var/folders/..., a symlink to /private/var/folders/..., so the root and the
+  // realpath of everything under it never match lexically. Windows reproduces the same condition with
+  // a junction, which is why this is not a macOS-only test: the CI that first caught the bug was
+  // macos-latest, but the defect is "a realpath compared against an unresolved root".
+  const real = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-realroot-'));
+  const linkDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-linkbase-')), 'sessions');
+  const savedRoot = process.env.PI_CODING_AGENT_SESSION_DIR;
+  try {
+    fs.copySync(fixture(path.join('g1', 'full.jsonl')), path.join(real, 'g1', 'full.jsonl'));
+  } catch {
+    fs.mkdirSync(path.join(real, 'g1'), { recursive: true });
+    fs.copyFileSync(fixture(path.join('g1', 'full.jsonl')), path.join(real, 'g1', 'full.jsonl'));
+  }
+  try {
+    fs.symlinkSync(real, linkDir, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (err) {
+    t.skip(`cannot create a junction here: ${err.code || err.message}`);
+    return;
+  }
+  try {
+    process.env.PI_CODING_AGENT_SESSION_DIR = linkDir;
+    clearSessionCache();
+    const listed = listSessions({ limit: 10 });
+    assert.ok(listed.total >= 1, `the linked root must list: ${JSON.stringify(listed)}`);
+    const target = path.join(linkDir, 'g1', 'full.jsonl');
+    assert.ok(fs.existsSync(target));
+    // the point: a legitimate file inside a linked root must NOT be refused
+    renameSession(target, 'renamed through a linked root');
+    const back = listSessions({ limit: 10 }).sessions.find((s) => s.fileName === 'full.jsonl');
+    assert.ok(back && String(back.title || '').includes('renamed'), 'the rename must land');
+    assert.equal(deleteSession(target), true, 'a session inside the linked root must be deletable');
+    // the same class of defect, reproduced without a macOS box: whenever the root's REAL name differs
+    // from the name the caller typed, comparing a realpath against the unresolved root rejects every
+    // file in the folder. macOS hits it because os.tmpdir() is a symlink; Windows hits it the moment
+    // the drive letter is typed in a different case, which is exactly what a user does in a shortcut.
+    const oddCase = linkDir.replace(/^([A-Za-z]):/, (whole, drive) => (drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase()) + ':');
+    process.env.PI_CODING_AGENT_SESSION_DIR = oddCase;
+    clearSessionCache();
+    const throughOddCase = path.join(oddCase, 'g1', 'full.jsonl');
+    renameSession(throughOddCase, 'renamed through a differently cased root');
+    assert.ok(fs.existsSync(throughOddCase), 'the file must still be reachable');
+  } finally {
+    process.env.PI_CODING_AGENT_SESSION_DIR = savedRoot;
+    clearSessionCache();
+    fs.rmSync(real, { recursive: true, force: true });
+    fs.rmSync(path.dirname(linkDir), { recursive: true, force: true });
+  }
+});
