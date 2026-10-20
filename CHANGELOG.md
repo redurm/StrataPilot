@@ -195,6 +195,7 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   `STRATAPILOT_SMOKE_I18N=1`, which drives the Settings dialog itself and checks the visible text changes
   in both Chinese catalogs and comes back (`switched=true cjk=true monitor_translated=true restored=true`).
 
+- **The Monitor's server switcher rendered as three tall capsules** - `.monitor-view` is a CSS grid with a hand-written `grid-template-rows: auto 1fr`, which was correct while the panel had two in-flow children. D6 inserted the server switcher between the header and the scroll area, so the switcher landed on the `1fr` track, absorbed every leftover pixel of height, and its buttons - flex items, `align-items: stretch` by default - were pulled into stadium shapes with the label floating in the middle. The template now has one track per child and the switcher pins `align-items: center`. A new `test/monitor-layout.test.js` asserts the track count against the number of in-flow children in `index.html`, because inserting an element into that grid used to be silently wrong (#25).
 ### Fixed
 
 - **Sending a prompt broke the whole interface** (`TypeError: Cannot read properties of undefined
