@@ -121,7 +121,12 @@ jobs:
             npx electron . > smoke.log 2>&1 || true
           fi
           cat smoke.log
-          grep -q "\[smoke\] window" smoke.log && echo "WINDOW_OK"
-          grep -q "\[smoke-env\]" smoke.log && echo "ENVBAR_OK"
-          grep -q "renderer error" smoke.log && { echo "RENDERER_ERROR"; exit 1; }
-          grep -q "WINDOW_OK" smoke.log && grep -q "ENVBAR_OK" smoke.log
+          # the markers have to be read back out of smoke.log: an `echo WINDOW_OK` lands in
+          # this step's stdout, so grepping smoke.log for it could never match and the job
+          # went red even when the app started fine. Report every problem at once.
+          failed=0
+          if grep -q "renderer error" smoke.log; then echo "RENDERER_ERROR"; failed=1; fi
+          grep -q "\[smoke\] window" smoke.log || { echo "NO_WINDOW_LINE"; failed=1; }
+          grep -q "\[smoke-env\]" smoke.log || { echo "NO_ENVBAR_LINE"; failed=1; }
+          [ "$failed" = 0 ] && echo "WINDOW_OK ENVBAR_OK"
+          exit $failed
