@@ -76,10 +76,14 @@ test('readConfig(): missing, empty and directory targets report an error instead
   assert.equal(readConfig(path.join(tmp, 'nope.json')).ok, false);
   assert.equal(readConfig('').ok, false);
   assert.match(readConfig(tmp).error, /directory/);
-  const broken = write('broken.json', '{ not json');
+  const broken = write('broken.json', '{ "model": "gpt-4",\n"api_key": "sk-secretvalue1234567890ab", not json');
   const res = readConfig(broken);
-  assert.equal(res.ok, false);
-  assert.ok(res.error);
+  // a half-written config is exactly what a user is reporting: the report has to carry it, redacted,
+  // instead of answering "Unexpected end of JSON input" and showing nothing (#13)
+  assert.equal(res.ok, true);
+  assert.match(res.parseError, /JSON/);
+  assert.ok(res.text.includes('gpt-4'), 'the readable part of the file survives');
+  assert.ok(!res.text.includes('sk-secretvalue1234567890ab'), 'the key never survives the fallback');
 });
 
 /* -- log tail --------------------------------------------------------- */

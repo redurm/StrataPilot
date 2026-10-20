@@ -900,11 +900,39 @@ async function buildDiagnostics(payload = {}) {
     fs.mkdirSync(dir, { recursive: true });
     savedTo = path.join(dir, `stratapilot_diagnostics_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`);
     fs.writeFileSync(savedTo, text, 'utf8');
+    pruneDiagnosticsReports(dir);
   } catch (err) {
     console.error(`[diagnostics] could not save report: ${err.message}`);
   }
   console.log(`[diagnostics] report built lines=${text.split('\n').length} saved=${savedTo}`);
   return { ok: true, text, path: savedTo };
+}
+
+/**
+ * Every "Copy diagnostics" click wrote a new timestamped report into userData/diagnostics and
+ * nothing ever removed it (#13). The names sort lexicographically = chronologically (ISO timestamp
+ * with the colons replaced), so keeping the newest N is a sort and an unlink.
+ */
+const MAX_DIAGNOSTICS_REPORTS = 20;
+
+function pruneDiagnosticsReports(dir) {
+  let removed = 0;
+  try {
+    const names = fs
+      .readdirSync(dir)
+      .filter((name) => name.startsWith('stratapilot_diagnostics_') && name.endsWith('.txt'))
+      .sort();
+    for (const name of names.slice(0, Math.max(0, names.length - MAX_DIAGNOSTICS_REPORTS))) {
+      try {
+        fs.unlinkSync(path.join(dir, name));
+        removed += 1;
+      } catch {}
+    }
+  } catch (err) {
+    console.error(`[diagnostics] prune failed: ${err.message}`);
+  }
+  if (removed) console.log(`[diagnostics] pruned ${removed} old report(s), keeping ${MAX_DIAGNOSTICS_REPORTS}`);
+  return removed;
 }
 
 function schedulerStateSnapshot(payload) {
