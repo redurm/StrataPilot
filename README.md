@@ -35,6 +35,7 @@ Bash mode (`!`) and slash commands (`/`) ·
 [Session storage](#session-storage-size-and-cleanup) ·
 [Token usage](#token-usage-per-day--week--month--year) ·
 [Theme (dark / light)](#theme-dark--light) ·
+[Language](#language-english--繁體中文--简体中文) ·
 [Scheduled prompts (cron)](#scheduled-prompts-cron) ·
 [Strata Monitor](#strata-monitor-server-monitoring)
 
@@ -357,6 +358,9 @@ about *getting from a clone to a running window*.
 - **Dark and light theme**: pick it in Settings (or let it follow the system); colours are CSS
   variables, so a theme is one variable block, and the last theme is mirrored in `localStorage` so a
   light-theme start does not flash dark first
+- **English, 繁體中文 or 简体中文**: **Settings ▸ Interface ▸ Language** (`/settings`) switches the whole
+  interface while the app runs - no restart. `Auto` follows the OS; the app chrome, the dialogs, the
+  Monitor and the native menu are translated, while pi answers in the language you write to it
 - **Tab strip carries more**: each tab shows which **model** it is on (plus the thinking level when it
   is not the default), its queue position and its outbox count; hovering the model tag shows the full
   `provider/id` and the server address
@@ -714,6 +718,7 @@ the file still works — press `Ctrl+R` to reload, or reopen the Settings dialog
 | `jobs[]` | Scheduled prompts (B5): `{ id, name, schedule, prompt, target, cwd, ephemeral, enabled, lastRun, nextRun }` - edited in the Jobs dialog rather than by hand |
 | `strataUrls` | Extra Strata addresses the Monitor should watch (array, one per line in the Settings dialog) - see [More than one Strata server](#more-than-one-strata-server) |
 | `theme` | `dark` (default), `light` or `system` - see [Theme (dark / light)](#theme-dark--light) |
+| `language` | `auto` (default, follows the OS), `en`, `zh-TW` or `zh-CN` - see [Language](#language-english--繁體中文--简体中文) |
 | `strataConfigPath` | Optional path of the Strata engine config (`C:\Strata\strata-src\strata-<model>.json`): only used to include that file, keys redacted, in the diagnostics report |
 
 The old `pi-gui` / `Pi on Strata` settings files are migrated automatically on first launch (see the
@@ -802,6 +807,29 @@ theme` (keeps following `prefers-color-scheme` while the app runs).
 | Implementation | every colour in `styles.css` goes through a CSS variable, so a theme is only a redefinition of those variables (`[data-theme="light"]`); there is no second stylesheet and no duplicated rule |
 | No flash on start | the last applied theme is mirrored in `localStorage` and read by `renderer/theme-boot.js` before the first paint; the real setting (including `system`) is applied a moment later from the settings file |
 | Screenshots | `STRATAPILOT_SMOKE_THEME=1` switches theme, prints the computed colours and writes both screenshots to the temp folder (see the smoke table) |
+
+## Language (English / 繁體中文 / 简体中文)
+
+Pick it in **Settings ▸ Interface ▸ Language**: `Auto (follow the system language)` (the default),
+`English`, `繁體中文` or `简体中文`. The list shows each language in its own script, so it stays readable
+whatever the interface currently says. Changing it takes effect immediately - no restart, no reload.
+
+| Thing | How |
+|---|---|
+| Storage | the `language` key in the settings file (`auto` / `en` / `zh-TW` / `zh-CN`) |
+| Catalogs | `locales/zh-TW.json` and `locales/zh-CN.json` - a flat `{ english: translation }` map, 444 entries each, kept in step by `npm run i18n` and `test/i18n.test.js` |
+| Keys | the **English source string is the key** (`tr('New session')`), so a missing translation falls back to English instead of showing a blank or a `[[key]]` |
+| `auto` | `zh-Hant` / `zh-HK` / `zh-MO` → `zh-TW`, `zh-Hans` / `zh-CN` / `zh-SG` → `zh-CN`, anything else → `en`; an explicit choice always beats the OS, including choosing English on a Chinese system |
+| Static chrome | `I18N.applyDom()` walks `index.html` once per language change (text nodes, `title`, `placeholder`, `aria-label`) and skips the parts `app.js` renders itself - the transcript, the session and queue lists, the dialogs, the toasts, the footer |
+| Dynamic chrome | the strings are wrapped in `tr()` and the renderers are re-run (`rerenderChrome()`): tabs, composer, stats, bars, Monitor cards and pills, session list, storage, usage, the slash menu, the empty hints |
+| Native menu | rebuilt in main with the same catalog - one shared core (`renderer/i18n.js`, required by `main.js`) so there is no second implementation. Electron 40 has no `app.setLocale`, so the few Electron role items (**Quit**, **Zoom In**…) carry explicit translated labels, and `--lang` is set before ready for Chromium's own locale |
+| Fonts | `--sans` gains CJK fallbacks, and `html[lang="zh-TW"]` / `html[lang="zh-CN"]` pick the Traditional or Simplified face, so a Simplified user does not get Traditional glyph forms (and vice versa) |
+| Deliberately English | pi's own answers, the log file, the diagnostics report, session titles and message text, model / thinking values, device names and units (`NVIDIA GeForce RTX`, `MB/s`, `Gen5`), and the `in` / `out` token labels - they are data or protocol, not interface |
+| Proof | `STRATAPILOT_SMOKE_I18N=1` drives the Settings dialog itself (dropdown + **Save**), checks the visible text really changes in both Chinese catalogs and comes back, and writes two screenshots; `npm test` checks every key the code asks for exists, that no translation changes a `{placeholder}`, and that `locales/**` is packaged |
+
+Adding or fixing a string: wrap it in `tr('English source')` (or `i18nKey('label')` when it lives in a
+table and is translated later at render time), then `npm run i18n:missing` prints exactly what the
+catalogs still need. `npm run i18n:unwrapped` lists English strings that are not wrapped yet.
 
 ## Scheduled prompts (cron)
 
@@ -1250,6 +1278,7 @@ Other smoke switches:
 | `STRATAPILOT_SMOKE_OUTBOX=1` | B4: packs an outbox entry (an oversized image is dropped instead of bloating the settings file), restores it and checks nothing was sent: expect `packed=2 images_dropped=1 restored=2 pending=2 badge=pending 2 outbox=0 auto_sent=false` |
 | `STRATAPILOT_SMOKE_CRON=1` | B5: saves a job through the main process, reads it back with a computed `nextRun`, previews `30 9 * * 1-5`, rejects `nope`, then run-now, and finally opens the dialog to check the builder: expect `saved=true jobs=1 nextRun=set preview="every weekday, at 09:30" has_next=true invalid_rejected=true new_tab=true queued=true outbox_badges=1 list_words="every day, every 5 minutes · next …" builder_default="cron: 30 9 * * 1-5" builder_step="cron: */30 * * * *" weekday_chips=7 weekly_chips_shown=flex shot="…stratapilot-smoke-jobs-editor.png"`. The serial queue is off inside the scenario, so the prompt never reaches the model |
 | `STRATAPILOT_SMOKE_TABTAG=1` | D5/D8: expect `model_tag=qwen3.8-flash-n… tag_title="strata/qwen3.8-flash-next-iq3_s" shown_when_alive=false shown_when_dead=true hidden_when_alive_again=true` |
+| `STRATAPILOT_SMOKE_I18N=1` | D10: drives the Settings dialog the way a user does (open it, set the **Language** dropdown, press **Save**) for `zh-TW`, then `zh-CN`, then back to `en`, reading the visible text each time: expect `switched=true cjk=true monitor_translated=true restored=true` with `tw_newSession="新工作階段"`, `tw_monitor="速度,GPU 負載,VRAM,GPU 溫度,功耗,PCIe,CPU,磁碟讀取"`, `cn_newSession="新建会话"`, `cn_monitor="速度,GPU 负载,…,磁盘读取"`, `options=auto,en,zh-TW,zh-CN` and `saved_pref=en` (the smoke profile is left in English), plus two screenshots (`stratapilot-smoke-i18n-zh-TW.png`, `stratapilot-smoke-i18n-zh-CN.png`). The catalogs themselves - every key present, no `{placeholder}` changed, `locales/**` packaged - are checked by `test/i18n.test.js` instead | 
 | `STRATAPILOT_SMOKE_THEME=1` | D2: expect `changed=true` plus the computed colours of both themes (`dark: body=rgb(15, 17, 21)/rgb(223, 227, 234)`, `light: body=rgb(244, 246, 249)/rgb(27, 35, 48)`) and two screenshots in the temp folder: `stratapilot-smoke-light-theme.png`, `stratapilot-smoke-dark-theme.png` |
 | `STRATAPILOT_SMOKE_SETUP=1` | C5 first run: expect `modal=true steps=3 pi="pi 1.2.0 - the version this GUI was tested against…" strata="http://127.0.0.1:8081/health answered /health with HTTP 200 in 30ms" classes=["setup-status good","setup-status good","setup-status"] closed=true first_run_seen=true` |
 | `STRATAPILOT_SMOKE_A11Y=1` | D3: expect `dialog=true role=dialog aria_modal=true labelled_by_heading=true focus_inside=true tab_wraps=true esc_closes=true focus_restored=true nameless_buttons=0 toasts_live=polite tabs_role=tablist` plus the `aria-label` of an idle queue row and of a working one (`working_row_label="..., running, queue position 1 of 1. ..."` - the working row is the one that carries a position, and it is the row that once threw) |

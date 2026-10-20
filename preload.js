@@ -31,6 +31,12 @@ const api = {
   usageSummary: () => ipcRenderer.invoke('usage:summary'),
   usageRecount: () => ipcRenderer.invoke('usage:recount'),
 
+  /* language (D10) ----------------------------------------------------
+   * main owns the catalog files (the renderer has no fs) and the native menu, so the renderer asks
+   * for the active language + catalog and tells main when the user picks another one. */
+  i18nGet: () => ipcRenderer.invoke('i18n:get'),
+  i18nSet: (language) => ipcRenderer.invoke('i18n:set', { language }),
+
   /* filesystem -------------------------------------------------------- */
   chooseFolder: () => ipcRenderer.invoke('fs:choose-folder'),
   chooseFile: (payload = {}) => ipcRenderer.invoke('fs:choose-file', payload),

@@ -57,6 +57,10 @@ const SOURCE = [
   functionSource('usageSegmentValues'),
 ].join('\n\n');
 
+// i18nKey() only declares a string for the catalogs; in here it is the identity, as it is at runtime
+// before a language is installed.
+global.i18nKey = (text) => text;
+
 const usage = new Function(`${SOURCE}\nreturn { PRICE_FIELDS, PRICE_LABELS, normalizePrice, priceForModel, hasPrices, pruneRateRows, costOf, fieldCost, bucketCostParts, fmtMoney, usageStackTotal, usageSegmentValues };`)();
 
 const round = (value) => Math.round(value * 1e6) / 1e6;

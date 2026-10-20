@@ -13,7 +13,7 @@
   --red: #ef6b6b;
   --amber: #e0b352;
   --mono: "Cascadia Code", "Consolas", "Menlo", monospace;
-  --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --sans: "Segoe UI", system-ui, -apple-system, sans-serif, "Microsoft JhengHei UI", "Microsoft YaHei UI", "Noto Sans TC", "Noto Sans SC", "PingFang TC", "PingFang SC", "Hiragino Sans";
   /* shades that used to be hardcoded in individual rules; a theme only has to redefine these */
   --bg-deep: #11141b;
   --bg-sunken: #141821;
@@ -89,6 +89,21 @@
 
 * {
   box-sizing: border-box;
+}
+
+/*
+ * D10: the CJK fallback order follows the UI language. Traditional and Simplified share code points but
+ * not glyph shapes (直 vs 直, 骨 vs 骨), so zh-TW asks for JhengHei first and zh-CN for YaHei. The
+ * renderer writes <html lang="..."> from the active language, which is what makes these rules apply.
+ * Latin glyphs still come from Segoe UI because it stays first in the list - the browser falls through
+ * per character, not per string.
+ */
+html[lang="zh-TW"] {
+  --sans: "Segoe UI", system-ui, -apple-system, "Microsoft JhengHei UI", "Noto Sans TC", "PingFang TC", sans-serif;
+}
+
+html[lang="zh-CN"] {
+  --sans: "Segoe UI", system-ui, -apple-system, "Microsoft YaHei UI", "Noto Sans SC", "PingFang SC", sans-serif;
 }
 
 html,

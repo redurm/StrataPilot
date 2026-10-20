@@ -174,6 +174,27 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   never sent on their own: the modal offers `queue it` / `queue all` / `drop`. Images are only stored
   while the whole outbox stays under ~400 KB, otherwise they are dropped and the note says so.
 
+- **Interface language - English, 繁體中文, 简体中文** - **Settings ▸ Interface ▸ Language** (`/settings`)
+  switches the whole interface while the app runs, no restart. `Auto (follow the system language)` is the
+  default; `zh-Hant` / `zh-HK` / `zh-MO` resolve to `zh-TW`, `zh-Hans` / `zh-CN` / `zh-SG` to `zh-CN`, and
+  an explicit choice always beats the OS. The English source string is the key (`tr('New session')`), so a
+  missing entry falls back to English rather than printing a blank or a `[[key]]`; the catalogs are flat
+  JSON maps (`locales/zh-TW.json`, `locales/zh-CN.json`, 444 entries each). Static chrome is translated by
+  one DOM walk (`I18N.applyDom()` - text nodes plus `title` / `placeholder` / `aria-label`, skipping the
+  regions `app.js` renders), dynamic chrome by wrapping the strings in `tr()` and re-running the renderers,
+  and the native menu is rebuilt in the main process from the same catalog (`renderer/i18n.js` is required
+  by `main.js`, so there is no second implementation). Electron 40 has no `app.setLocale`, so the handful of
+  Electron role items (**Quit**, **Zoom In**, **Zoom Out**, **Reset Zoom**) carry explicit translated labels
+  and `--lang` is set before ready for Chromium's own locale. `html[lang]` picks the Traditional or
+  Simplified font fallback so a Simplified reader does not get Traditional glyph forms. Deliberately left
+  English: pi's answers, the log file, the diagnostics report, session titles and message text, model and
+  thinking values, device names and units. Helpers: `npm run i18n` (coverage), `npm run i18n:missing`
+  (what the catalogs still need), `npm run i18n:unwrapped` (English strings not wrapped yet). Proven by
+  `test/i18n.test.js` (every key the code asks for exists, no translation changes a `{placeholder}`, no
+  entry is "translated" to itself unless it is on the leave-English list, `locales/**` is packaged) and by
+  `STRATAPILOT_SMOKE_I18N=1`, which drives the Settings dialog itself and checks the visible text changes
+  in both Chinese catalogs and comes back (`switched=true cjk=true monitor_translated=true restored=true`).
+
 ### Fixed
 
 - **Sending a prompt broke the whole interface** (`TypeError: Cannot read properties of undefined

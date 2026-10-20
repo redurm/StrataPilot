@@ -20,6 +20,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+// D10: describeQueueRow now translates; the shared core's English translator is the identity that
+// still fills {placeholders}, which is what these assertions are about
+const { makeT } = require(path.join('..', 'renderer', 'i18n.js'));
+
 const appSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8');
 
 /** Return the text of a top-level `function name(...) { ... }` in the renderer source. */
@@ -37,11 +41,12 @@ function functionSource(name) {
 
 function loadDescribeQueueRow() {
   const body = functionSource('describeQueueRow');
-  // the names the function closes over in the browser become parameters here
-  const factory = new Function('tabLabel', 'scheduler', 'state', `${body}; return describeQueueRow;`);
+  // the names the function closes over in the browser become parameters here; tr() is D10's translate
+  // helper, and the identity translator keeps these assertions in English
+  const factory = new Function('tabLabel', 'scheduler', 'state', 'tr', `${body}; return describeQueueRow;`);
   const state = { order: ['a', 'b', 'c'] }; // three tabs open...
   const scheduler = { runningTabId: 'a' }; // ...only two of them working
-  return factory((tab) => tab.name, scheduler, state);
+  return factory((tab) => tab.name, scheduler, state, makeT(null, 'en').t);
 }
 
 const describeQueueRow = loadDescribeQueueRow();

@@ -115,6 +115,20 @@ parent [`README.md`](../README.md).
 | `/foo` is not in the list but still gets sent | Anything unknown is passed to pi as written, where it reaches the model as plain text |
 | A card shows `bash started by an extension` | An extension ran the command itself; the GUI only sees its output events, not the command line |
 
+## Interface language (English / 繁體中文 / 简体中文)
+
+| Symptom | Cause / fix |
+|---|---|
+| The interface is in English and I want Chinese | **Settings ▸ Interface ▸ Language** (`Ctrl+,` or `/settings`) → `繁體中文` or `简体中文`. It applies immediately - no restart, no `Ctrl+R`. `Auto (follow the system language)` is the default, and it only follows the OS when the choice is `Auto` |
+| I picked `简体中文` but some glyphs look Traditional (or the other way round) | the language is right, the font is not: `html[lang="zh-CN"]` / `html[lang="zh-TW"]` select the Simplified / Traditional fallback face. Check `document.documentElement.lang` in DevTools (`Ctrl+Shift+I`); if it is correct, the machine is missing that font family and Windows substitutes its own |
+| Chinese text renders as empty boxes | the machine has no CJK font installed. On Windows: Settings ▸ Time and language ▸ Language and region ▸ add a Chinese language (or Optional features ▸ the font). The app asks for `Microsoft JhengHei UI` (Traditional) and `Microsoft YaHei UI` (Simplified), which ship with a Chinese Windows install |
+| Some text is still English after switching | partly deliberate: **pi's own answers**, the **log file**, the **diagnostics report**, session titles and message text, model / thinking values, device names (`NVIDIA GeForce RTX`) and units (`MB/s`, `Gen5`) stay English because they are data or protocol, not interface. The `in` / `out` token labels and hardware abbreviations (`CPU`, `PCIe`, `VRAM`) are left alone too. Anything else is a missing string - run `npm run i18n:missing` (what the catalogs still need) and `npm run i18n:unwrapped` (English text that is not wrapped in `tr()` yet) and report the list |
+| A translated label shows `{n}` or `{total}` literally | the translation lost or invented a placeholder. `npm test` fails on exactly this (`every translation keeps exactly the {placeholders} of its key`), so a released build should not show it - report it with the string |
+| pi answers in English even though the interface is Chinese | expected: the interface language does not change what pi writes back - it answers in the language you write to it. Type the prompt in Chinese (or pin the preference in `~/.pi/agent/AGENTS.md` / the project's `AGENTS.md`) |
+| The log file and the diagnostics report are English | deliberate: they are what you paste into a bug report, and the troubleshooting table here is English too |
+| The language did not stick after a restart | it is the `language` key in `%APPDATA%\StrataPilot\stratapilot_settings.json` (`auto` / `en` / `zh-TW` / `zh-CN`). If the file has it and the UI still starts in English, look for `[i18n] pref=… system=… lang=… entries=…` in `%APPDATA%\StrataPilot\logs\stratapilot.log`: `entries=0` means the catalog file was not found (a packaged build needs `locales/**`), and `lang=en` with `pref=zh-TW` means the value was not recognised |
+| The native menu (right-click, `Quit`, `Zoom`) is still English | the menu is rebuilt from the same catalog when the language changes. Electron 40 has no `app.setLocale`, so Chromium's own locale (`--lang`) is only set at startup: restart the app once after switching for the parts Chromium draws itself |
+
 ## Other
 
 | Symptom | Cause / fix |

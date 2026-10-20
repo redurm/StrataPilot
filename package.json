@@ -12,6 +12,9 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test \"test/*.test.js\"",
+    "i18n": "node scripts/i18n-extract.js",
+    "i18n:missing": "node scripts/i18n-extract.js --missing",
+    "i18n:unwrapped": "node scripts/i18n-extract.js --unwrapped",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
@@ -36,6 +39,7 @@
       "preload.js",
       "lib/**",
       "renderer/**",
+      "locales/**",
       "build/icon.*",
       "package.json"
     ],

@@ -12,6 +12,8 @@ const usageLedger = require('./lib/usage-ledger');
 const appLog = require('./lib/log');
 const diagnostics = require('./lib/diagnostics');
 const cron = require('./lib/cron');
+// D10: the i18n core is shared with the renderer (one file, UMD) so both processes translate the same way
+const i18n = require('./renderer/i18n');
 
 const APP_ID = 'com.stratapilot.app';
 const SETTINGS_NAME = 'stratapilot_settings.json';
@@ -83,12 +85,79 @@ function loadSettings() {
 }
 
 function saveSettings(settings) {
+  writeSettings(settings);
+}
+
+function writeSettings(settings) {
   try {
     fs.mkdirSync(path.dirname(SETTINGS_FILE()), { recursive: true });
     fs.writeFileSync(SETTINGS_FILE(), JSON.stringify(settings, null, 2));
   } catch (err) {
     console.error('settings save failed:', err.message);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* D10: language (English / 繁體中文 / 简体中文)                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The English source string is the key, so main works with a translator object that is rebuilt whenever
+ * the language changes. Catalogs are read here (the renderer has no fs) and handed over by IPC.
+ * 'auto' follows the OS locale (app.getLocale()); the setting can pin a language instead.
+ */
+const catalogCache = new Map();
+let trMain = i18n.makeT(null, 'en');
+let i18nCurrent = { pref: 'auto', systemLocale: 'en', lang: 'en' };
+
+function systemLocale() {
+  try {
+    return app.getLocale() || 'en';
+  } catch {
+    return 'en';
+  }
+}
+
+function loadCatalog(lang) {
+  if (catalogCache.has(lang)) return catalogCache.get(lang);
+  let catalog = null;
+  if (lang !== 'en') {
+    const file = path.join(__dirname, 'locales', `${lang}.json`);
+    try {
+      catalog = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (err) {
+      console.error(`[i18n] catalog ${lang} did not load (${file}): ${err.message} - falling back to English`);
+    }
+  }
+  catalogCache.set(lang, catalog);
+  return catalog;
+}
+
+/** Re-resolve the language from the settings, load its catalog and rebuild the native menu. */
+function applyLanguage() {
+  const pref = (loadSettings().language || 'auto');
+  i18nCurrent = { pref, systemLocale: systemLocale(), lang: i18n.resolveLanguage(pref, systemLocale()) };
+  trMain = i18n.makeT(loadCatalog(i18nCurrent.lang), i18nCurrent.lang);
+  // Electron 40 has no app.setLocale (only getLocale / getSystemLocale), so the few menu items that come
+  // from Electron's own roles get an explicit translated label in buildMenu() instead; the --lang switch
+  // set before ready is what moves Chromium's own locale (navigator.language, default date formatting).
+  buildMenu();
+  console.log(`[i18n] pref=${i18nCurrent.pref} system=${i18nCurrent.systemLocale} lang=${i18nCurrent.lang} entries=${trMain.size}`);
+  return i18nCurrent;
+}
+
+/** main-side translate (menu, native dialogs, crash recovery) */
+function tr(text, params) {
+  return trMain.t(text, params);
+}
+
+function i18nPayload() {
+  return {
+    ...i18nCurrent,
+    langs: i18n.LANGS,
+    labels: i18n.LANG_LABELS,
+    catalog: i18nCurrent.lang === 'en' ? {} : loadCatalog(i18nCurrent.lang) || {},
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -226,10 +295,11 @@ function createWindow() {
         title: 'StrataPilot',
         message: cause,
         detail:
-          `${detail || ''}\n\nSessions are not closed: every pi session runs as its own process owned by the background process, `
-          + 'and reloading the interface re-attaches to the ones that are still alive. A generation that was running right now is interrupted.\n\n'
-          + 'The log file (Help \u25b8 Open Log Folder) holds what happened.',
-        buttons: ['Reload interface', 'Keep the window as it is'],
+          `${detail || ''}\n\n`
+          + tr('Sessions are not closed: every pi session runs as its own process owned by the background process, and reloading the interface re-attaches to the ones that are still alive. A generation that was running right now is interrupted.')
+          + `\n\n`
+          + tr('The log file (Help \u25b8 Open Log Folder) holds what happened.'),
+        buttons: [tr('Reload interface'), tr('Keep the window as it is')],
         defaultId: 0,
         cancelId: 1,
         noLink: true,
@@ -252,18 +322,18 @@ function createWindow() {
     console.error(
       `[crash] renderer gone reason=${details.reason} exitCode=${details.exitCode} killed=${details.killed}`,
     );
-    recoverInterface('The interface stopped responding and was closed by Windows', `reason=${details.reason} exitCode=${details.exitCode}`);
+    recoverInterface(tr('The interface stopped responding and was closed by Windows'), `reason=${details.reason} exitCode=${details.exitCode}`);
   });
   win.webContents.on('unresponsive', () => {
     console.error('[crash] renderer unresponsive (>30s of no reply)');
     unresponsiveReported = true;
-    recoverInterface('The interface has stopped responding', 'It has not answered for over 30 seconds \u2014 usually a stuck render, not a lost session.');
+    recoverInterface(tr('The interface has stopped responding'), tr('It has not answered for over 30 seconds \u2014 usually a stuck render, not a lost session.'));
   });
   win.webContents.on('responsive', () => {
     console.error('[crash] renderer responsive again');
     if (unresponsiveReported) {
       unresponsiveReported = false;
-      send('recovery', { kind: 'recovered', cause: 'The interface answered again \u2014 nothing was reloaded.' });
+      send('recovery', { kind: 'recovered', cause: tr('The interface answered again \u2014 nothing was reloaded.') });
     }
   });
   win.webContents.on('preload-error', (_event, preloadPath, error) => {
@@ -272,7 +342,7 @@ function createWindow() {
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl) => {
     if (errorCode === -3) return; // ABORTED: normal during reload/navigation
     console.error(`[nav] did-fail-load code=${errorCode} ${errorDescription} url=${validatedUrl}`);
-    recoverInterface('The interface failed to load', `code=${errorCode} ${errorDescription}`);
+    recoverInterface(tr('The interface failed to load'), `code=${errorCode} ${errorDescription}`);
   });
 
   if (process.env.STRATAPILOT_SMOKE) {
@@ -298,44 +368,44 @@ function buildMenu() {
   const isMac = process.platform === 'darwin';
   const template = [
     {
-      label: 'Session',
+      label: tr('Session'),
       submenu: [
-        { label: 'New Session', accelerator: 'CmdOrCtrl+T', click: () => send('menu', 'new-session') },
+        { label: tr('New Session'), accelerator: 'CmdOrCtrl+T', click: () => send('menu', 'new-session') },
         {
-          label: 'New Session In Current Tab',
+          label: tr('New Session In Current Tab'),
           accelerator: 'CmdOrCtrl+Shift+N',
           click: () => send('menu', 'reset-tab'),
         },
-        { label: 'Open Session…', accelerator: 'CmdOrCtrl+O', click: () => send('menu', 'open-session') },
-        { label: 'Rename Session', accelerator: 'F2', click: () => send('menu', 'rename-tab') },
+        { label: tr('Open Session…'), accelerator: 'CmdOrCtrl+O', click: () => send('menu', 'open-session') },
+        { label: tr('Rename Session'), accelerator: 'F2', click: () => send('menu', 'rename-tab') },
         { type: 'separator' },
-        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'settings') },
+        { label: tr('Settings…'), accelerator: 'CmdOrCtrl+,', click: () => send('menu', 'settings') },
         { type: 'separator' },
-        { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => send('menu', 'close-tab') },
-        { label: 'Next Tab', accelerator: 'CmdOrCtrl+Tab', click: () => send('menu', 'next-tab') },
-        { label: 'Previous Tab', accelerator: 'CmdOrCtrl+Shift+Tab', click: () => send('menu', 'prev-tab') },
+        { label: tr('Close Tab'), accelerator: 'CmdOrCtrl+W', click: () => send('menu', 'close-tab') },
+        { label: tr('Next Tab'), accelerator: 'CmdOrCtrl+Tab', click: () => send('menu', 'next-tab') },
+        { label: tr('Previous Tab'), accelerator: 'CmdOrCtrl+Shift+Tab', click: () => send('menu', 'prev-tab') },
         { type: 'separator' },
-        { role: isMac ? 'close' : 'quit' },
+        { role: isMac ? 'close' : 'quit', label: tr(isMac ? 'Close' : 'Quit') },
       ],
     },
     {
-      label: 'View',
+      label: tr('View'),
       submenu: [
-        { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+B', click: () => send('menu', 'toggle-sidebar') },
-        { label: 'Toggle Strata Monitor', accelerator: 'CmdOrCtrl+M', click: () => send('menu', 'toggle-monitor') },
-        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => win && win.webContents.reload() },
-        { label: 'DevTools', accelerator: 'CmdOrCtrl+Shift+I', click: () => win && win.webContents.toggleDevTools() },
+        { label: tr('Toggle Sidebar'), accelerator: 'CmdOrCtrl+B', click: () => send('menu', 'toggle-sidebar') },
+        { label: tr('Toggle Strata Monitor'), accelerator: 'CmdOrCtrl+M', click: () => send('menu', 'toggle-monitor') },
+        { label: tr('Reload'), accelerator: 'CmdOrCtrl+R', click: () => win && win.webContents.reload() },
+        { label: tr('DevTools'), accelerator: 'CmdOrCtrl+Shift+I', click: () => win && win.webContents.toggleDevTools() },
         { type: 'separator' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { role: 'resetZoom' },
+        { role: 'zoomIn', label: tr('Zoom In') },
+        { role: 'zoomOut', label: tr('Zoom Out') },
+        { role: 'resetZoom', label: tr('Reset Zoom') },
       ],
     },
     {
-      label: 'Help',
+      label: tr('Help'),
       submenu: [
         {
-          label: 'Open Log Folder',
+          label: tr('Open Log Folder'),
           click: () => {
             const dir = appLog.logDir();
             if (dir) shell.openPath(dir);
@@ -343,11 +413,11 @@ function buildMenu() {
           },
         },
         {
-          label: 'First-run check',
+          label: tr('First-run check'),
           click: () => send('first-run', {}),
         },
         {
-          label: 'Copy Diagnostics',
+          label: tr('Copy Diagnostics'),
           click: async () => {
             // same report the composer button produces; the menu path also puts it on the
             // clipboard straight from main, so it works even when the renderer is wedged
@@ -357,7 +427,7 @@ function buildMenu() {
           },
         },
         {
-          label: 'pi RPC docs',
+          label: tr('pi RPC docs'),
           click: () => shell.openExternal('https://github.com/earendil-works/pi/tree/main/packages/coding-agent/docs'),
         },
       ],
@@ -615,7 +685,7 @@ async function buildDiagnostics(payload = {}) {
   const agentDir = path.join(os.homedir(), '.pi', 'agent');
   const baseUrl = String(payload.baseUrl || settings.strataUrl || '').replace(/\/v1\/?$/i, '').replace(/\/+$/, '');
 
-  const strata = { baseUrl: baseUrl || '(none: no tab with a model, and no strataUrl setting)' };
+  const strata = { baseUrl: baseUrl || tr('(none: no tab with a model, and no strataUrl setting)') };
   if (baseUrl) {
     const key = String(payload.apiKey || process.env.STRATAPILOT_KEY || process.env.STRATA_API_KEY || '');
     const health = await fetchText(`${baseUrl}/health`, { apiKey: key });
@@ -730,6 +800,7 @@ function registerIpc() {
       smokeTheme: !!process.env.STRATAPILOT_SMOKE_THEME,
       smokeA11y: !!process.env.STRATAPILOT_SMOKE_A11Y,
       smokeUsage: !!process.env.STRATAPILOT_SMOKE_USAGE,
+      smokeI18n: !!process.env.STRATAPILOT_SMOKE_I18N,
       smokeStorage: !!process.env.STRATAPILOT_SMOKE_STORAGE,
       smokeServers: !!process.env.STRATAPILOT_SMOKE_SERVERS,
       smokePath: !!process.env.STRATAPILOT_SMOKE_PATH,
@@ -812,6 +883,18 @@ if (process.env.STRATAPILOT_SMOKE) {
 ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(payload && typeof payload === 'object' ? payload : {}));
 
   ipcMain.handle('app:settings-get', () => loadSettings());
+
+  // D10: the renderer asks for the active language + its catalog at boot, and after a change from the
+  // Settings dialog. The catalog is a plain { english: translation } object; 'en' sends an empty one
+  // because English is the key and needs no lookup.
+  ipcMain.handle('i18n:get', () => i18nPayload());
+  ipcMain.handle('i18n:set', (_event, { language } = {}) => {
+    const next = loadSettings();
+    next.language = language || 'auto';
+    saveSettings(next);
+    applyLanguage();
+    return i18nPayload();
+  });
   ipcMain.handle('app:settings-set', (_event, patch) => {
     const merged = { ...loadSettings(), ...(patch && typeof patch === 'object' ? patch : {}) };
     saveSettings(merged);
@@ -1012,7 +1095,7 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
   ipcMain.handle('fs:choose-folder', async () => {
     if (!win) return { ok: false };
     const result = await dialog.showOpenDialog(win, {
-      title: 'Choose a working folder',
+      title: tr('Choose a working folder'),
       properties: ['openDirectory', 'createDirectory'],
     });
     if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
@@ -1053,7 +1136,7 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
   ipcMain.handle('fs:choose-file', async (_event, { title = 'Choose a file', filters = null } = {}) => {
     if (!win) return { ok: false };
     const result = await dialog.showOpenDialog(win, {
-      title,
+      title: tr(title),
       properties: ['openFile'],
       ...(Array.isArray(filters) && filters.length ? { filters } : {}),
     });
@@ -1066,7 +1149,7 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
   ipcMain.handle('fs:save-file', async (_event, { defaultPath = '', title = 'Save file' } = {}) => {
     if (!win) return { ok: false };
     const result = await dialog.showSaveDialog(win, {
-      title,
+      title: tr(title),
       defaultPath,
       filters: [{ name: 'HTML', extensions: ['html'] }],
     });
@@ -1199,6 +1282,25 @@ if (SMOKE) {
 appLog.init(path.join(app.getPath('userData'), 'logs', 'stratapilot.log'));
 appLog.teeConsole();
 
+/*
+ * D10: Chromium's locale has to be set before ready - it decides navigator.language and the default
+ * date / number formatting inside the window. Electron 40 has no app.setLocale, so this switch is the
+ * only lever; the menu we build ourselves is rebuilt by applyLanguage() with the same language, and the
+ * handful of Electron role items carry explicit translated labels (see buildMenu).
+ */
+try {
+  let earlyPref = 'auto';
+  try {
+    earlyPref = JSON.parse(fs.readFileSync(SETTINGS_FILE(), 'utf8')).language || 'auto';
+  } catch {
+    earlyPref = 'auto';
+  }
+  const earlyLang = i18n.resolveLanguage(earlyPref, systemLocale());
+  if (earlyLang !== 'en') app.commandLine.appendSwitch('lang', earlyLang);
+} catch (err) {
+  console.error(`[i18n] early --lang failed: ${err.message}`);
+}
+
 process.on('uncaughtException', (error, origin) => {
   console.error(`[fatal] uncaughtException (${origin}): ${(error && error.stack) || error}`);
   app.quit();
@@ -1235,7 +1337,7 @@ if (!gotLock) {
     migrateSettings();
     usageLedger.setLedgerFile(USAGE_LEDGER_FILE());
     if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
-    buildMenu();
+    applyLanguage();          // resolves the language, loads the catalog and builds the menu in that language
     registerIpc();
     createWindow();
     cronStart();

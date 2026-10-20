@@ -7,6 +7,111 @@
 const api = window.piGui;
 const $ = (id) => document.getElementById(id);
 
+/* ------------------------------------------------------------------ */
+/* D10: language (English / 繁體中文 / 简体中文)                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The English source string is the key (see renderer/i18n.js), so this file stays readable in English
+ * and tr() is a lookup: tr('New session') -> '新增工作階段'. main owns the catalog files (the renderer
+ * has no fs) and the native menu; the renderer pulls the active catalog once at boot and again after a
+ * change from Settings. A string with no entry stays English, so a missing translation is visible
+ * instead of blank - and test/i18n.test.js is what keeps the catalogs from drifting.
+ *
+ * What is translated: the app's own chrome (menus, buttons, dialogs, chips, toasts). What is not: pi's
+ * output, the log file and the diagnostics report - those are for reading in one language, and a bug
+ * report should not depend on the UI language the reporter happened to pick.
+ */
+const I18N = window.StrataPilotI18n;
+let T = I18N.makeT(null, 'en');
+const i18nInfo = { pref: 'auto', lang: 'en', systemLocale: 'en', entries: 0 };
+
+function tr(text, params) {
+  return T.t(text, params);
+}
+
+/*
+ * Declares a string as translatable without translating it here. Labels that live in a module-level
+ * table (the monitor cards, the usage dropdowns) are stored in English and translated when they are
+ * rendered, so the language can change while the app runs; without this the extractor cannot see the
+ * string and the catalogs would never be asked for it.
+ */
+function i18nKey(text) {
+  return text;
+}
+
+/** Install the catalog main sent and translate the static chrome (index.html). */
+function installI18n(payload) {
+  if (!payload) return;
+  T = I18N.makeT(payload.catalog || null, payload.lang);
+  i18nInfo.pref = payload.pref;
+  i18nInfo.lang = payload.lang;
+  i18nInfo.systemLocale = payload.systemLocale;
+  i18nInfo.entries = T.size;
+  document.documentElement.lang = payload.lang;
+  const changed = I18N.applyDom($('app') || document.body, T);
+  console.log(`[i18n] lang=${payload.lang} pref=${payload.pref} system=${payload.systemLocale} entries=${T.size} static_changed=${changed}`);
+}
+
+/** Re-run the renderers that own chrome text, so a language change lands without a reload. */
+function rerenderChrome() {
+  const tab = activeTab();
+  renderEnvBar();
+  renderTabs();
+  // the notes, the tool labels and the empty hints in the transcript are ours too, so the transcript is
+  // rebuilt as well - pi's own text is untouched by a language change
+  if (tab) renderAll(tab);
+  renderComposerState();
+  renderAttachments();
+  if (tab) {
+    renderSelectors(tab);
+    renderStats(tab);
+    renderPinnedBars(tab);
+    renderNowBar(tab);
+    renderQueueBar(tab);
+    renderWidgets(tab);
+    renderCwdChip(tab);
+  }
+  refreshSessions().catch(() => {});
+  refreshStorage().catch(() => {});
+  refreshUsageSummary().catch(() => {});
+  if (!els.monitorView.classList.contains('hidden')) {
+    renderMonitorServers();
+    // the card titles are built once, so rebuild them to pick up the new language, then repaint from
+    // the last metrics payload (only fetch again if we never had one)
+    monitor.built = false;
+    buildMonitorCards();
+    if (monitor.lastData) renderMonitor(monitor.lastData);
+    else pollMonitor().catch(() => {});
+  }
+}
+
+/**
+ * Pick a language: main saves it and rebuilds its own menu, we re-translate and re-render. Switches are
+ * queued, so a save that fires the change twice (applySettings and the submit handler both do) cannot
+ * interleave two re-renders.
+ */
+let languageSwitch = Promise.resolve();
+
+function setLanguage(pref) {
+  const wanted = pref || 'auto';
+  if (wanted !== i18nInfo.pref) {
+    languageSwitch = languageSwitch
+      .then(() => applyLanguageSwitch(wanted))
+      .catch((err) => console.error('[i18n] language change failed', err));
+  }
+  return languageSwitch;
+}
+
+async function applyLanguageSwitch(pref) {
+  if (pref === i18nInfo.pref) return null; // a queued switch got there first
+  const payload = await api.i18nSet(pref);
+  if (!payload) return null;
+  installI18n(payload);
+  rerenderChrome();
+  return payload;
+}
+
 const els = {
   tabs: $('tabs'),
   transcript: $('transcript'),
@@ -92,13 +197,14 @@ function timeAgo(value) {
   if (!then) return '';
   const diff = Date.now() - then;
   const mins = Math.round(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return tr('just now');
+  if (mins < 60) return tr('{n}m ago', { n: mins });
   const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return tr('{n}h ago', { n: hours });
   const days = Math.round(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return new Date(then).toLocaleDateString();
+  if (days < 30) return tr('{n}d ago', { n: days });
+  // D10: the bare date follows the UI language, so zh-TW gets 2026/10/19 and not Oct 19, 2026
+  return new Date(then).toLocaleDateString(i18nInfo.lang === 'en' ? undefined : i18nInfo.lang);
 }
 
 function fmtTokens(n) {
@@ -120,8 +226,8 @@ function fmtTokens(n) {
 function tokenLabel(u) {
   if (!u) return '';
   const cache = (u.cacheRead || 0) + (u.cacheWrite || 0);
-  const label = `in ${fmtTokens(u.input || 0)} / out ${fmtTokens(u.output || 0)}`;
-  return cache ? `${label} / cache ${fmtTokens(cache)}` : label;
+  const label = tr('in {in} / out {out}', { in: fmtTokens(u.input || 0), out: fmtTokens(u.output || 0) });
+  return cache ? tr('{label} / cache {cache}', { label, cache: fmtTokens(cache) }) : label;
 }
 
 /**
@@ -133,12 +239,12 @@ function usageTooltip(u) {
   const cache = (u.cacheRead || 0) + (u.cacheWrite || 0);
   const total = u.totalTokens != null ? u.totalTokens : u.total || 0;
   const lines = [
-    `in    prompt read, uncached: ${nfmt(u.input || 0)}`,
-    `out   generated: ${nfmt(u.output || 0)}`,
-    `cache context re-read: ${nfmt(cache)} (read ${nfmt(u.cacheRead || 0)} + write ${nfmt(u.cacheWrite || 0)})`,
-    `total in + out + cache: ${nfmt(total)}`,
+    tr('in    prompt read, uncached: {n}', { n: nfmt(u.input || 0) }),
+    tr('out   generated: {n}', { n: nfmt(u.output || 0) }),
+    tr('cache context re-read: {n} (read {read} + write {write})', { n: nfmt(cache), read: nfmt(u.cacheRead || 0), write: nfmt(u.cacheWrite || 0) }),
+    tr('total in + out + cache: {n}', { n: nfmt(total) }),
   ];
-  if (u.reasoning != null) lines.push(`thinking: ${nfmt(u.reasoning)} (included in out)`);
+  if (u.reasoning != null) lines.push(tr('thinking: {n} (included in out)', { n: nfmt(u.reasoning) }));
   return lines.join('\n');
 }
 
@@ -747,7 +853,7 @@ function renderAll(tab, { from = null } = {}) {
     tab.renderFrom = 0;
     const hint = el('div', 'empty-hint');
     hint.innerHTML =
-      'No messages yet.<br />Type a prompt, or drop files anywhere in the window to attach them.<br /><kbd>Ctrl</kbd> + <kbd>T</kbd> new session &nbsp; <kbd>Ctrl</kbd> + <kbd>O</kbd> open session &nbsp; <kbd>Ctrl</kbd> + <kbd>B</kbd> sidebar';
+      `${tr('No messages yet.')}<br />${tr('Type a prompt, or drop files anywhere in the window to attach them.')}<br /><kbd>Ctrl</kbd> + <kbd>T</kbd> ${tr('new session')} &nbsp; <kbd>Ctrl</kbd> + <kbd>O</kbd> ${tr('open session')} &nbsp; <kbd>Ctrl</kbd> + <kbd>B</kbd> ${tr('sidebar')}`;
     els.transcript.appendChild(hint);
     return;
   }
@@ -1177,7 +1283,7 @@ function handleExtensionUi(tab, req) {
 
 let modalOpen = null;
 
-function openSimpleModal({ title, message, kind, options, prefill, placeholder, timeoutMs, okLabel = 'OK', cancelLabel = 'Cancel' }) {
+function openSimpleModal({ title, message, kind, options, prefill, placeholder, timeoutMs, okLabel = null, cancelLabel = null }) {
   return new Promise((resolve) => {
     const backdrop = el('div', 'modal-backdrop');
     const modal = el('div', 'modal');
@@ -1210,9 +1316,10 @@ function openSimpleModal({ title, message, kind, options, prefill, placeholder, 
 
     const actions = el('div', 'modal-actions');
     // a confirm dialog says Yes/No unless the caller named the action, which is clearer for
-    // destructive ones ("Delete for good", "Fork here")
-    const cancel = el('button', 'ghost', kind === 'confirm' ? (cancelLabel === 'Cancel' ? 'No' : cancelLabel) : cancelLabel);
-    const ok = el('button', 'primary', kind === 'confirm' ? (okLabel === 'OK' ? 'Yes' : okLabel) : okLabel);
+    // destructive ones ("Delete for good", "Fork here"); the words come from the catalog so a
+    // Chinese user gets 是 / 否 without every caller having to remember to translate
+    const cancel = el('button', 'ghost', cancelLabel || (kind === 'confirm' ? tr('No') : tr('Cancel')));
+    const ok = el('button', 'primary', okLabel || (kind === 'confirm' ? tr('Yes') : tr('OK')));
     actions.appendChild(cancel);
     actions.appendChild(ok);
     modal.appendChild(actions);
@@ -1321,9 +1428,9 @@ function renderTabs() {
       tag.title = modelTag.title;
       node.appendChild(tag);
     }
-    node.title = `${tabLabel(tab)}\n${tab.cwd}\n${running ? 'running' : tab.outbox.length ? `queued (${tab.outbox.length} pending)` : 'idle'}${modelTag ? `\nmodel: ${modelTag.title}` : ''}`;
+    node.title = `${tabLabel(tab)}\n${tab.cwd}\n${running ? tr('running') : tab.outbox.length ? tr('queued ({n} pending)', { n: tab.outbox.length }) : tr('idle')}${modelTag ? `\n${tr('model')}: ${modelTag.title}` : ''}`;
     const close = el('button', 'tab-close', '×');
-    close.title = 'Close tab';
+    close.title = tr('Close tab');
     close.addEventListener('click', (event) => {
       event.stopPropagation();
       closeTab(tabId);
@@ -1348,7 +1455,7 @@ function renderSelectors(tab) {
   if (!tab.models.length) {
     const opt = document.createElement('option');
     opt.value = '';
-    opt.textContent = 'no models';
+    opt.textContent = tr('no models');
     els.modelSel.appendChild(opt);
   }
 
@@ -1357,7 +1464,7 @@ function renderSelectors(tab) {
   for (const level of levels) {
     const opt = document.createElement('option');
     opt.value = level;
-    opt.textContent = `thinking: ${level}`;
+    opt.textContent = tr('thinking: {level}', { level });
     if (level === tab.thinking) opt.selected = true;
     els.thinkingSel.appendChild(opt);
   }
@@ -1374,31 +1481,31 @@ function renderStats(tab) {
     span.appendChild(document.createTextNode(String(value)));
     els.stats.appendChild(span);
   };
-  if (tab.model) add('model', `${tab.model.provider}/${tab.model.id}`);
+  if (tab.model) add(tr('model'), `${tab.model.provider}/${tab.model.id}`);
   if (tab.stats && tab.stats.contextUsage) {
     const cu = tab.stats.contextUsage;
     const percent = cu.percent == null ? null : Math.round(cu.percent * 10) / 10;
-    add('ctx', `${fmtTokens(cu.tokens)} / ${fmtTokens(cu.contextWindow)}${percent == null ? '' : ` (${percent}%)`}`);
+    add(tr('ctx'), `${fmtTokens(cu.tokens)} / ${fmtTokens(cu.contextWindow)}${percent == null ? '' : ` (${percent}%)`}`);
     // auto-compact is forced on by bootstrap(), so this can only mean that force failed - and then
     // the warning is what stops an overflow from arriving blind
     if (tab.autoCompact === false && percent != null && percent >= 85) {
-      add('auto-compact off', 'compact before it overflows', 'warn');
+      add(tr('auto-compact off'), tr('compact before it overflows'), 'warn');
     }
   }
   if (tab.stats) {
     const t = tab.stats.tokens || {};
     // in / out separately: a single total cannot tell you whether the session is paying
     // for a long prompt read or for a long answer, and those need different fixes.
-    add('tok', tokenLabel(t), '', usageTooltip({
+    add(tr('tok'), tokenLabel(t), '', usageTooltip({
       input: t.input, output: t.output, cacheRead: t.cacheRead, cacheWrite: t.cacheWrite, total: t.total,
     }));
-    if (tab.stats.cost) add('cost', `$${tab.stats.cost.toFixed(3)}`);
+    if (tab.stats.cost) add(tr('cost'), `$${tab.stats.cost.toFixed(3)}`);
   }
   for (const [key, text] of tab.statuses) add(key, text);
   // B1: a way into the tree view. The label counts branch points, which is the number that makes
   // people wish they had seen it earlier.
-  const treeButton = el('button', 'ghost stat-tree', tab.branchPoints ? `tree: ${tab.branchPoints} branch${tab.branchPoints === 1 ? '' : 'es'}` : 'tree');
-  treeButton.title = 'session tree: the branch you are on, the branches pi stopped following, and a fork from any earlier prompt';
+  const treeButton = el('button', 'ghost stat-tree', tab.branchPoints ? tr(tab.branchPoints === 1 ? 'tree: {n} branch' : 'tree: {n} branches', { n: tab.branchPoints }) : tr('tree'));
+  treeButton.title = tr('session tree: the branch you are on, the branches pi stopped following, and a fork from any earlier prompt');
   treeButton.addEventListener('click', () => openSessionTree(tab));
   els.stats.appendChild(treeButton);
 }
@@ -1410,11 +1517,11 @@ function renderStats(tab) {
 /* ------------------------------------------------------------------ */
 
 const REQUEST_SOURCE_LABEL = {
-  prompt: 'prompt',
-  steer: 'steering',
-  follow_up: 'follow-up',
-  bash: 'bash',
-  history: 'earlier',
+  prompt: i18nKey('prompt'),
+  steer: i18nKey('steering'),
+  follow_up: i18nKey('follow-up'),
+  bash: i18nKey('bash'),
+  history: i18nKey('earlier'),
 };
 
 function toMillis(value) {
@@ -1508,12 +1615,12 @@ function renderNowBar(tab) {
   const busy = requestIsBusy(tab);
   bar.classList.toggle('busy', busy);
 
-  const label = busy ? (tab.bashRunning ? 'running bash' : tab.compacting ? 'compacting' : 'working on') : 'last request';
+  const label = busy ? (tab.bashRunning ? tr('running bash') : tab.compacting ? tr('compacting') : tr('working on')) : tr('last request');
   bar.appendChild(el('span', `nb-state ${busy ? 'busy' : 'idle'}`, label));
-  bar.appendChild(el('span', `nb-src ${req.source}`, REQUEST_SOURCE_LABEL[req.source] || req.source));
+  bar.appendChild(el('span', `nb-src ${req.source}`, tr(REQUEST_SOURCE_LABEL[req.source] || req.source)));
 
   const text = el('span', 'nb-text', oneLine(req.text));
-  text.title = `${req.text}\n\n${REQUEST_SOURCE_LABEL[req.source] || req.source} · ${new Date(req.at).toLocaleString()}`;
+  text.title = `${req.text}\n\n${tr(REQUEST_SOURCE_LABEL[req.source] || req.source)} · ${new Date(req.at).toLocaleString(i18nInfo.lang === 'en' ? undefined : i18nInfo.lang)}`;
   bar.appendChild(text);
 
   const time = el('span', 'nb-time');
@@ -1521,8 +1628,8 @@ function renderNowBar(tab) {
   bar.appendChild(time);
 
   if (req.key) {
-    const jump = el('button', 'nb-jump', '↓ jump');
-    jump.title = 'Scroll to this request in the transcript';
+    const jump = el('button', 'nb-jump', tr('↓ jump'));
+    jump.title = tr('Scroll to this request in the transcript');
     jump.addEventListener('click', (event) => {
       event.stopPropagation();
       jumpToItem(tab, req.key);
@@ -1547,17 +1654,17 @@ function renderQueueBar(tab) {
   els.queueBar.textContent = '';
 
   const bits = [];
-  if (steering.length) bits.push(`steering ${steering.length}`);
-  if (followUp.length) bits.push(`follow-up ${followUp.length}`);
-  if (outbox.length) bits.push(`outbox ${outbox.length}`);
+  if (steering.length) bits.push(tr('steering {n}', { n: steering.length }));
+  if (followUp.length) bits.push(tr('follow-up {n}', { n: followUp.length }));
+  if (outbox.length) bits.push(tr('outbox {n}', { n: outbox.length }));
   const head = el('div', 'qb-head');
-  head.appendChild(el('span', 'qb-title', `not processed yet (${steering.length + followUp.length + outbox.length})`));
+  head.appendChild(el('span', 'qb-title', tr('not processed yet ({n})', { n: steering.length + followUp.length + outbox.length })));
   head.appendChild(el('span', 'qb-count', bits.join(' · ')));
   els.queueBar.appendChild(head);
 
   const addRow = (kind, text, note) => {
     const row = el('div', `qb-item ${kind}`);
-    row.appendChild(el('span', 'qb-tag', kind === 'steer' ? 'steering' : kind === 'follow' ? 'follow-up' : 'outbox'));
+    row.appendChild(el('span', 'qb-tag', kind === 'steer' ? tr('steering') : kind === 'follow' ? tr('follow-up') : tr('outbox')));
     const body = el('span', 'qb-text', oneLine(text));
     body.title = String(text);
     row.appendChild(body);
@@ -1565,9 +1672,9 @@ function renderQueueBar(tab) {
     els.queueBar.appendChild(row);
   };
 
-  steering.forEach((text, index) => addRow('steer', text, index === 0 ? 'next turn' : ''));
-  followUp.forEach((text, index) => addRow('follow', text, index === 0 ? 'after this run' : ''));
-  outbox.forEach((item, index) => addRow('outbox', item.text || '(attachment only)', `#${index + 1} in serial queue`));
+  steering.forEach((text, index) => addRow('steer', text, index === 0 ? tr('next turn') : ''));
+  followUp.forEach((text, index) => addRow('follow', text, index === 0 ? tr('after this run') : ''));
+  outbox.forEach((item, index) => addRow('outbox', item.text || tr('(attachment only)'), tr('#{n} in serial queue', { n: index + 1 })));
 }
 
 // keeps the elapsed counter of the pinned request alive without re-rendering the whole bar
@@ -1592,10 +1699,10 @@ function renderComposerState() {
   const tab = activeTab();
   const bashRunning = !!(tab && tab.bashRunning);
   els.btnAbort.classList.toggle('hidden', !(tab && (tab.isStreaming || bashRunning)));
-  els.btnAbort.title = bashRunning ? 'Stop the running bash command (Esc)' : 'Stop the current run (Esc)';
+  els.btnAbort.title = bashRunning ? tr('Stop the running bash command (Esc)') : tr('Stop the current run (Esc)');
   if (els.btnCompact) {
     els.btnCompact.disabled = !tab || !tab.alive || !!tab.compacting;
-    els.btnCompact.title = tab && tab.compacting ? 'Compaction in progress…' : 'Compact the context now';
+    els.btnCompact.title = tab && tab.compacting ? tr('Compaction in progress…') : tr('Compact the context now');
   }
   els.btnSend.disabled = !tab;
   els.input.disabled = !tab;
@@ -1604,22 +1711,22 @@ function renderComposerState() {
   if (els.btnRestart) {
     const dead = !!(tab && !tab.alive && !tab.starting);
     els.btnRestart.classList.toggle('hidden', !dead);
-    if (dead) els.btnRestart.title = `restart the pi process of this tab (cwd: ${tab.cwd})`;
+    if (dead) els.btnRestart.title = tr('restart the pi process of this tab (cwd: {cwd})', { cwd: tab.cwd });
   }
   // a retry wait is the only moment "stop retrying" means anything: pi is sitting in the delay
   if (els.btnStopRetry) {
     const waiting = !!(tab && tab.retrying);
     els.btnStopRetry.classList.toggle('hidden', !waiting);
     if (waiting) {
-      els.btnStopRetry.title = `pi is waiting ${tab.retrying.delayMs}ms before attempt ${tab.retrying.attempt}/${tab.retrying.maxAttempts} (RPC abort_retry)`;
+      els.btnStopRetry.title = tr('pi is waiting {ms}ms before attempt {attempt}/{max} (RPC abort_retry)', { ms: tab.retrying.delayMs, attempt: tab.retrying.attempt, max: tab.retrying.maxAttempts });
     }
   }
   if (!tab) {
-    els.input.placeholder = 'Create a session first (Ctrl+T)';
+    els.input.placeholder = tr('Create a session first (Ctrl+T)');
   } else if (!tab.alive) {
-    els.input.placeholder = 'This session process ended — press Send to restart it in the same folder';
+    els.input.placeholder = tr('This session process ended \u2014 press Send to restart it in the same folder');
   } else {
-    els.input.placeholder = 'Enter = send · Shift+Enter = newline · !cmd = run bash · / = commands · drop or paste files to attach';
+    els.input.placeholder = tr('Enter = send \u00b7 Shift+Enter = newline \u00b7 !cmd = run bash \u00b7 / = commands \u00b7 drop or paste files to attach');
   }
   renderCwdChip(tab);
 }
@@ -1635,9 +1742,9 @@ function renderCwdChip(tab) {
     return;
   }
   chip.classList.remove('hidden');
-  chip.appendChild(el('span', 'cwd-label', 'folder'));
+  chip.appendChild(el('span', 'cwd-label', tr('folder')));
   appendPath(chip, tab.cwd);
-  chip.title = `${tab.cwd}\n${tab.sessionPath || 'unsaved session'}\nclick to open this folder`;
+  chip.title = `${tab.cwd}\n${tab.sessionPath || tr('unsaved session')}\n${tr('click to open this folder')}`;
 }
 
 function renderAttachments() {
@@ -1842,7 +1949,7 @@ function queueRow(tab, position, workingCount) {
     if (moved) moved.focus();
   });
   row.draggable = true;
-  row.title = `${tab.cwd}\n${tab.sessionPath || 'unsaved session'}`;
+  row.title = `${tab.cwd}\n${tab.sessionPath || tr('unsaved session')}`;
   row.appendChild(el('span', 'qdot'));
   row.appendChild(el('span', 'qtitle', tabLabel(tab)));
   const leaf = pathParts(tab.cwd).leaf;
@@ -1853,15 +1960,15 @@ function queueRow(tab, position, workingCount) {
   }
   if (position) row.appendChild(el('span', 'qpos', `#${position}`));
   if (!tab.sessionPath) {
-    const badge = el('span', `qbadge ${tab.ephemeral ? 'ephemeral' : 'unsaved'}`, tab.ephemeral ? 'ephemeral' : 'unsaved');
+    const badge = el('span', `qbadge ${tab.ephemeral ? 'ephemeral' : 'unsaved'}`, tab.ephemeral ? tr('ephemeral') : tr('unsaved'));
     badge.title = tab.ephemeral
-      ? 'Ephemeral tab: never written to disk, so it will never appear in Session files'
-      : 'No session file yet (pi creates it after the first message), so it is not in Session files';
+      ? tr('Ephemeral tab: never written to disk, so it will never appear in Session files')
+      : tr('No session file yet (pi creates it after the first message), so it is not in Session files');
     row.appendChild(badge);
   }
   if (tab.outbox.length) {
-    const badge = el('span', 'qbadge outbox', `outbox ${tab.outbox.length}`);
-    badge.title = 'Messages waiting for this session (click to inspect)';
+    const badge = el('span', 'qbadge outbox', tr('outbox {n}', { n: tab.outbox.length }));
+    badge.title = tr('Messages waiting for this session (click to inspect)');
     badge.addEventListener('click', (event) => {
       event.stopPropagation();
       openOutboxModal(tab);
@@ -1871,8 +1978,8 @@ function queueRow(tab, position, workingCount) {
   if (tab.pendingOutbox.length) {
     // B4: restored from the previous run, deliberately not in the outbox, so the queue will not
     // send it by itself
-    const badge = el('span', 'qbadge pending', `pending ${tab.pendingOutbox.length}`);
-    badge.title = 'Queued when the app closed - never sent on its own (click to queue or drop)';
+    const badge = el('span', 'qbadge pending', tr('pending {n}', { n: tab.pendingOutbox.length }));
+    badge.title = tr('Queued when the app closed - never sent on its own (click to queue or drop)');
     badge.addEventListener('click', (event) => {
       event.stopPropagation();
       openPendingOutboxModal(tab);
@@ -1880,18 +1987,18 @@ function queueRow(tab, position, workingCount) {
     row.appendChild(badge);
   }
   const actions = el('div', 'qactions');
-  const top = el('button', '', 'top');
-  top.title = 'Move to front of the queue';
+  const top = el('button', '', tr('top'));
+  top.title = tr('Move to front of the queue');
   top.addEventListener('click', (event) => {
     event.stopPropagation();
     moveTabTo(tab.id, 0);
   });
-  const drop = el('button', '', 'drop');
-  drop.title = 'Drop queued messages for this session';
+  const drop = el('button', '', tr('drop'));
+  drop.title = tr('Drop queued messages for this session');
   drop.addEventListener('click', (event) => {
     event.stopPropagation();
     if (!tab.outbox.length) {
-      toast('nothing queued for this session');
+      toast(tr('nothing queued for this session'));
       return;
     }
     tab.outbox = [];
@@ -1912,18 +2019,18 @@ function renderOpenSessions() {
   els.queueList.textContent = '';
   const tabs = state.order.map((id) => state.tabs.get(id)).filter(Boolean);
   if (!tabs.length) {
-    els.queueList.appendChild(el('div', 'queue-hint', 'No open sessions.'));
+    els.queueList.appendChild(el('div', 'queue-hint', tr('No open sessions.')));
     return;
   }
   const working = tabs.filter((tab) => isWorking(tab));
   const idle = tabs.filter((tab) => !isWorking(tab));
   if (working.length) {
-    els.queueList.appendChild(el('div', 'qgroup', `Working (${working.length})${scheduler.runningTabId ? ' - running: 1' : ''}`));
+    els.queueList.appendChild(el('div', 'qgroup', scheduler.runningTabId ? tr('Working ({n}) - running: 1', { n: working.length }) : tr('Working ({n})', { n: working.length })));
     // the position is inside the working group, so the total has to be the working count too
     working.forEach((tab, index) => els.queueList.appendChild(queueRow(tab, index + 1, working.length)));
   }
   if (idle.length) {
-    els.queueList.appendChild(el('div', 'qgroup idle', `Idle (${idle.length})`));
+    els.queueList.appendChild(el('div', 'qgroup idle', tr('Idle ({n})', { n: idle.length })));
     idle.forEach((tab) => els.queueList.appendChild(queueRow(tab, 0, working.length)));
   }
   renderPinnedBars(); // the bottom bar mirrors the outbox, so it refreshes with the queue
@@ -2335,27 +2442,27 @@ async function refreshSessions() {
   const res = await api.sessionsList({ query: state.query, limit: 400 });
   if (!res.ok) {
     els.sessionList.textContent = '';
-    els.sessionList.appendChild(el('div', 'note error', res.error || 'failed to list sessions'));
+    els.sessionList.appendChild(el('div', 'note error', res.error || tr('failed to list sessions')));
     return;
   }
   state.sessions = res.sessions;
-  els.sideFoot.textContent = `${res.sessions.length} / ${res.total} sessions`;
+  els.sideFoot.textContent = tr('{shown} / {total} sessions', { shown: res.sessions.length, total: res.total });
   // D7: the footer used to show only the session count; the size of the folder is the number
   // that makes people go looking for a cleanup
-  const storageButton = el('button', 'ghost foot-storage', state.storage ? `Storage: ${formatBytes(state.storage.totalBytes)} in ${state.storage.totalFiles} files` : 'Storage');
-  storageButton.title = 'what the sessions folder costs, and a way to clear old sessions without opening the file manager';
+  const storageButton = el('button', 'ghost foot-storage', state.storage ? tr('Storage: {size} in {n} files', { size: formatBytes(state.storage.totalBytes), n: state.storage.totalFiles }) : tr('Storage'));
+  storageButton.title = tr('what the sessions folder costs, and a way to clear old sessions without opening the file manager');
   storageButton.addEventListener('click', () => openStorageModal());
   els.sideFoot.appendChild(storageButton);
   // D9: the same footer spot also reaches the token ledger - the number there is the whole history,
   // including sessions a cleanup already deleted from disk
   const usageButton = el('button', 'ghost foot-usage', usageFootLabel());
-  usageButton.title = 'tokens used per day / week / month / year (in, out, cache read, cache write), kept in token_usage.json';
+  usageButton.title = tr('tokens used per day / week / month / year (in, out, cache read, cache write), kept in token_usage.json');
   usageButton.addEventListener('click', () => openUsageModal());
   els.sideFoot.appendChild(usageButton);
   els.sessionList.textContent = '';
 
   if (!res.sessions.length) {
-    els.sessionList.appendChild(el('div', 'empty-hint', 'No sessions found.'));
+    els.sessionList.appendChild(el('div', 'empty-hint', tr('No sessions found.')));
     return;
   }
 
@@ -2366,7 +2473,7 @@ async function refreshSessions() {
     item.appendChild(el('div', 'session-title', meta.title || meta.fileName));
     const cwdRow = el('div', 'session-cwd');
     appendPath(cwdRow, meta.cwd);
-    cwdRow.title = meta.cwd ? `${meta.cwd}\nClick to open this folder` : 'no working folder recorded in this session file';
+    cwdRow.title = meta.cwd ? `${meta.cwd}\n${tr('Click to open this folder')}` : tr('no working folder recorded in this session file');
     cwdRow.addEventListener('click', async (event) => {
       event.stopPropagation();
       await openFolder(meta.cwd);
@@ -2376,7 +2483,7 @@ async function refreshSessions() {
     item.appendChild(snippet);
     const metaRow = el('div', 'session-meta');
     metaRow.appendChild(el('span', '', timeAgo(meta.updatedAt)));
-    metaRow.appendChild(el('span', '', `${meta.messageCount} msg`));
+    metaRow.appendChild(el('span', '', tr('{n} msg', { n: meta.messageCount })));
     if (meta.model) metaRow.appendChild(el('span', '', meta.model));
     if (meta.inputTokens || meta.outputTokens || meta.cacheReadTokens || meta.cacheWriteTokens) {
       const chip = el('span', '', tokenLabel({
@@ -2391,7 +2498,7 @@ async function refreshSessions() {
     } else if (meta.totalTokens) {
       metaRow.appendChild(el('span', '', fmtTokens(meta.totalTokens)));
     }
-    if (meta.parentSession) metaRow.appendChild(el('span', '', 'fork'));
+    if (meta.parentSession) metaRow.appendChild(el('span', '', tr('fork')));
     item.appendChild(metaRow);
 
     const actions = el('div', 'session-actions');
@@ -2404,34 +2511,34 @@ async function refreshSessions() {
       });
       actions.appendChild(button);
     };
-    mk('this tab', 'Load into the current session tab', () => switchCurrentTabTo(meta));
-    mk('name', 'Rename session', async () => {
-      const response = await openModal({ title: 'Session name', kind: 'input', prefill: meta.name || meta.title });
+    mk(tr('this tab'), tr('Load into the current session tab'), () => switchCurrentTabTo(meta));
+    mk(tr('name'), tr('Rename session'), async () => {
+      const response = await openModal({ title: tr('Session name'), kind: 'input', prefill: meta.name || meta.title });
       if (response.cancelled) return;
       const name = String(response.value || '').trim();
       if (!name) return;
       const openTab = [...state.tabs.values()].find((t) => t.alive && samePath(t.sessionPath, meta.path));
       if (openTab) {
         const res = await api.cmd(openTab.id, 'set_session_name', { name });
-        if (!res.success) toast(res.error || 'rename failed', 'error');
+        if (!res.success) toast(res.error || tr('rename failed'), 'error');
         else openTab.name = name;
       } else {
         const result = await api.sessionsRename(meta.path, name);
-        if (!result.ok) toast(result.error || 'rename failed', 'error');
+        if (!result.ok) toast(result.error || tr('rename failed'), 'error');
       }
       refreshSessions();
       renderTabs();
     });
-    mk('del', 'Delete session file', async () => {
+    mk(tr('del'), tr('Delete session file'), async () => {
       const open = [...state.tabs.values()].some((t) => samePath(t.sessionPath, meta.path));
       if (open) {
-        toast('session is open in a tab', 'warning');
+        toast(tr('session is open in a tab'), 'warning');
         return;
       }
-      const response = await openModal({ title: 'Delete session?', message: meta.title, kind: 'confirm' });
+      const response = await openModal({ title: tr('Delete session?'), message: meta.title, kind: 'confirm' });
       if (response.cancelled || !response.confirmed) return;
       const result = await api.sessionsDelete(meta.path);
-      if (!result.ok) toast(result.error || 'delete failed', 'error');
+      if (!result.ok) toast(result.error || tr('delete failed'), 'error');
       refreshSessions();
     });
     item.appendChild(actions);
@@ -3154,7 +3261,7 @@ async function refreshStorage() {
 async function openStorageModal() {
   const stats = (await refreshStorage()) || state.storage;
   if (!stats) {
-    toast('could not read the sessions folder', 'error');
+    toast(tr('could not read the sessions folder'), 'error');
     return;
   }
   let plan = null;
@@ -3162,9 +3269,9 @@ async function openStorageModal() {
   return new Promise((resolve) => {
     const backdrop = el('div', 'modal-backdrop storage-backdrop');
     const modal = el('div', 'modal storage-modal');
-    modal.appendChild(el('h3', '', 'Session storage'));
+    modal.appendChild(el('h3', '', tr('Session storage')));
     modal.appendChild(
-      el('div', 'set-hint', `${stats.totalFiles} session files, ${formatBytes(stats.totalBytes)} in ${stats.root}. Deleting here is permanent - sessions do not go to a recycle bin.`),
+      el('div', 'set-hint', tr('{files} session files, {size} in {root}. Deleting here is permanent - sessions do not go to a recycle bin.', { files: stats.totalFiles, size: formatBytes(stats.totalBytes), root: stats.root })),
     );
 
     const groups = el('div', 'job-list');
@@ -3172,24 +3279,24 @@ async function openStorageModal() {
       const row = el('div', 'job-row storage-row');
       const head = el('div', 'job-head');
       head.appendChild(el('span', 'job-name', group.group));
-      head.appendChild(el('span', 'job-schedule', `${formatBytes(group.bytes)} / ${group.files} files`));
+      head.appendChild(el('span', 'job-schedule', tr('{size} / {n} files', { size: formatBytes(group.bytes), n: group.files })));
       row.appendChild(head);
       row.appendChild(
-        el('div', 'job-meta', `newest ${new Date(group.newestMs).toLocaleString()} · oldest ${new Date(group.oldestMs).toLocaleString()}`),
+        el('div', 'job-meta', tr('newest {newest} · oldest {oldest}', { newest: new Date(group.newestMs).toLocaleString(i18nInfo.lang === 'en' ? undefined : i18nInfo.lang), oldest: new Date(group.oldestMs).toLocaleString(i18nInfo.lang === 'en' ? undefined : i18nInfo.lang) })),
       );
       groups.appendChild(row);
     }
-    if (stats.groups.length > 40) groups.appendChild(el('div', 'set-hint', `${stats.groups.length - 40} more folders not shown`));
+    if (stats.groups.length > 40) groups.appendChild(el('div', 'set-hint', tr('{n} more folders not shown', { n: stats.groups.length - 40 })));
     modal.appendChild(groups);
 
     const rules = el('div', 'field-row');
     const olderSel = document.createElement('select');
     for (const option of [
-      { value: '', label: 'any age' },
-      { value: '30', label: 'older than 30 days' },
-      { value: '90', label: 'older than 90 days' },
-      { value: '180', label: 'older than 180 days' },
-      { value: '365', label: 'older than a year' },
+      { value: '', label: tr('any age') },
+      { value: '30', label: tr('older than 30 days') },
+      { value: '90', label: tr('older than 90 days') },
+      { value: '180', label: tr('older than 180 days') },
+      { value: '365', label: tr('older than a year') },
     ]) {
       const opt = document.createElement('option');
       opt.value = option.value;
@@ -3198,31 +3305,31 @@ async function openStorageModal() {
     }
     const keepSel = document.createElement('select');
     for (const option of [
-      { value: '', label: 'keep every session per folder' },
-      { value: '5', label: 'keep the 5 newest per folder' },
-      { value: '10', label: 'keep the 10 newest per folder' },
-      { value: '20', label: 'keep the 20 newest per folder' },
-      { value: '50', label: 'keep the 50 newest per folder' },
+      { value: '', label: tr('keep every session per folder') },
+      { value: '5', label: tr('keep the 5 newest per folder') },
+      { value: '10', label: tr('keep the 10 newest per folder') },
+      { value: '20', label: tr('keep the 20 newest per folder') },
+      { value: '50', label: tr('keep the 50 newest per folder') },
     ]) {
       const opt = document.createElement('option');
       opt.value = option.value;
       opt.textContent = option.label;
       keepSel.appendChild(opt);
     }
-    olderSel.setAttribute('aria-label', 'Age rule');
-    keepSel.setAttribute('aria-label', 'Per folder cap');
+    olderSel.setAttribute('aria-label', tr('Age rule'));
+    keepSel.setAttribute('aria-label', tr('Per folder cap'));
     rules.appendChild(olderSel);
     rules.appendChild(keepSel);
     modal.appendChild(rules);
 
-    const previewBox = el('div', 'storage-preview', 'Pick a rule and preview - nothing is deleted until you say so.');
+    const previewBox = el('div', 'storage-preview', tr('Pick a rule and preview - nothing is deleted until you say so.'));
     modal.appendChild(previewBox);
 
     const actions = el('div', 'modal-actions');
-    const previewButton = el('button', '', 'Preview');
-    const del = el('button', 'danger', 'Delete');
+    const previewButton = el('button', '', tr('Preview'));
+    const del = el('button', 'danger', tr('Delete'));
     del.disabled = true;
-    const close = el('button', 'ghost', 'Close');
+    const close = el('button', 'ghost', tr('Close'));
     actions.appendChild(previewButton);
     actions.appendChild(del);
     actions.appendChild(close);
@@ -3248,29 +3355,29 @@ async function openStorageModal() {
       const olderThanDays = olderSel.value ? Number(olderSel.value) : null;
       const keepNewestPerGroup = keepSel.value ? Number(keepSel.value) : null;
       if (olderThanDays == null && keepNewestPerGroup == null) {
-        previewBox.textContent = 'Choose at least one rule first - otherwise nothing would be deleted.';
+        previewBox.textContent = tr('Choose at least one rule first - otherwise nothing would be deleted.');
         del.disabled = true;
         return;
       }
       const res = await api.sessionsCleanupPlan({ olderThanDays, keepNewestPerGroup });
       if (!res.ok) {
-        previewBox.textContent = `preview failed: ${res.error}`;
+        previewBox.textContent = tr('preview failed: {error}', { error: res.error });
         del.disabled = true;
         return;
       }
       plan = res;
       if (!res.candidates.length) {
-        previewBox.textContent = `Nothing matches: ${res.scannedFiles} files scanned, 0 to delete.`;
+        previewBox.textContent = tr('Nothing matches: {n} files scanned, 0 to delete.', { n: res.scannedFiles });
         del.disabled = true;
         return;
       }
       const sample = res.candidates
         .slice(0, 12)
-        .map((entry) => `${pathParts(entry.path).leaf || entry.group} - ${formatBytes(entry.bytes)}, ${entry.reason}`)
+        .map((entry) => `${pathParts(entry.path).leaf || entry.group} - ${formatBytes(entry.bytes)}, ${tr(entry.reason)}`)
         .join(' · ');
-      previewBox.textContent = `${res.candidates.length} files, ${formatBytes(res.bytes)} to free: ${sample}${res.candidates.length > 12 ? ` (+${res.candidates.length - 12} more)` : ''}`;
+      previewBox.textContent = tr('{n} files, {size} to free: {sample}', { n: res.candidates.length, size: formatBytes(res.bytes), sample: `${sample}${res.candidates.length > 12 ? tr(' (+{n} more)', { n: res.candidates.length - 12 }) : ''}` });
       del.disabled = false;
-      del.textContent = `Delete ${res.candidates.length} files (${formatBytes(res.bytes)})`;
+      del.textContent = tr('Delete {n} files ({size})', { n: res.candidates.length, size: formatBytes(res.bytes) });
     });
 
     del.addEventListener('click', async () => {
@@ -3278,25 +3385,30 @@ async function openStorageModal() {
       const paths = plan.candidates.map((entry) => entry.path);
       const answer = await openModal({
         kind: 'confirm',
-        title: `Delete ${paths.length} session files?`,
-        message: `${formatBytes(plan.bytes)} will be removed from ${stats.root}. This is permanent. Sessions open in a tab are never included.`,
-        okLabel: 'Delete for good',
+        title: tr('Delete {n} session files?', { n: paths.length }),
+        message: tr('{size} will be removed from {root}. This is permanent. Sessions open in a tab are never included.', { size: formatBytes(plan.bytes), root: stats.root }),
+        okLabel: tr('Delete for good'),
       });
       if (!answer || !answer.confirmed) return;
       const res = await api.sessionsCleanupRun({ paths });
       if (!res.ok) {
-        toast(`cleanup failed: ${res.error}`, 'error', 9000);
+        toast(tr('cleanup failed: {error}', { error: res.error }), 'error', 9000);
         return;
       }
       toast(
-        `deleted ${res.deleted} session files (${formatBytes(res.bytes)})${res.skipped.length ? `, ${res.skipped.length} skipped: open in a tab` : ''}${res.failed.length ? `, ${res.failed.length} failed` : ''}`,
+        tr('deleted {n} session files ({size}){skipped}{failed}', {
+          n: res.deleted,
+          size: formatBytes(res.bytes),
+          skipped: res.skipped.length ? tr(', {n} skipped: open in a tab', { n: res.skipped.length }) : '',
+          failed: res.failed.length ? tr(', {n} failed', { n: res.failed.length }) : '',
+        }),
         'info',
         9000,
       );
       plan = null;
       del.disabled = true;
-      del.textContent = 'Delete';
-      previewBox.textContent = 'Done. The totals above are refreshed.';
+      del.textContent = tr('Delete');
+      previewBox.textContent = tr('Done. The totals above are refreshed.');
       await refreshStorage();
       await refreshSessions();
       scheduleUsageSummary(0); // the ledger marks those entries as gone; the chip must follow at once
@@ -3320,18 +3432,18 @@ async function openStorageModal() {
  */
 
 const USAGE_UNITS = [
-  { value: 'day', label: 'per day' },
-  { value: 'week', label: 'per week' },
-  { value: 'month', label: 'per month' },
-  { value: 'year', label: 'per year' },
+  { value: 'day', label: i18nKey('per day') },
+  { value: 'week', label: i18nKey('per week') },
+  { value: 'month', label: i18nKey('per month') },
+  { value: 'year', label: i18nKey('per year') },
 ];
 
 const USAGE_RANGES = [
-  { value: '0', label: 'everything' },
-  { value: '7', label: 'last 7 days' },
-  { value: '30', label: 'last 30 days' },
-  { value: '90', label: 'last 90 days' },
-  { value: '365', label: 'last year' },
+  { value: '0', label: i18nKey('everything') },
+  { value: '7', label: i18nKey('last 7 days') },
+  { value: '30', label: i18nKey('last 30 days') },
+  { value: '90', label: i18nKey('last 90 days') },
+  { value: '365', label: i18nKey('last year') },
 ];
 
 /** bottom -> top */
@@ -3353,7 +3465,7 @@ function usageStackTotal(bucket) {
  * prices change over time, and re-pricing old days must not need a re-scan.
  */
 const PRICE_FIELDS = ['in', 'out', 'cacheRead', 'cacheWrite'];
-const PRICE_LABELS = { in: 'in', out: 'out', cacheRead: 'cache read', cacheWrite: 'cache write' };
+const PRICE_LABELS = { in: i18nKey('in'), out: i18nKey('out'), cacheRead: i18nKey('cache read'), cacheWrite: i18nKey('cache write') };
 const TOKENS_PER_MILLION = 1000000;
 
 function priceNumber(value) {
@@ -3482,11 +3594,11 @@ function usageCostOfSummary(usage, usagePrices) {
 
 function usageFootLabel() {
   const usage = state.usage;
-  if (!usage || !usage.all || !usage.all.total) return 'Usage';
+  if (!usage || !usage.all || !usage.all.total) return tr('Usage');
   const prices = state.settings && state.settings.usagePrices;
   const cost = hasPrices(prices) ? usageCostOfSummary(usage, prices) : 0;
   const money = cost ? ` \u00b7 ${fmtMoney(cost)}` : usage.all.cost ? ` \u00b7 ${fmtMoney(usage.all.cost)}` : '';
-  return `Usage: ${fmtTokens(usage.all.total)} tok${money}`;
+  return tr('Usage: {tok} tok', { tok: fmtTokens(usage.all.total) }) + money;
 }
 
 function updateUsageFoot() {
@@ -3535,25 +3647,31 @@ function usageRangeFrom(rangeValue) {
 }
 
 function usageTotalsLine(totals, extra, costParts) {
-  if (!totals) return 'no usage recorded';
+  if (!totals) return tr('no usage recorded');
   const parts = [
-    `in ${fmtTokens(totals.in || 0)}`,
-    `out ${fmtTokens(totals.out || 0)}`,
-    `cache read ${fmtTokens(totals.cacheRead || 0)}`,
-    `cache write ${fmtTokens(totals.cacheWrite || 0)}`,
-    `total ${fmtTokens(totals.total || 0)}`,
-    `${totals.msgs || 0} model calls`,
+    tr('in {n}', { n: fmtTokens(totals.in || 0) }),
+    tr('out {n}', { n: fmtTokens(totals.out || 0) }),
+    tr('cache read {n}', { n: fmtTokens(totals.cacheRead || 0) }),
+    tr('cache write {n}', { n: fmtTokens(totals.cacheWrite || 0) }),
+    tr('total {n}', { n: fmtTokens(totals.total || 0) }),
+    tr('{n} model calls', { n: totals.msgs || 0 }),
   ];
   // compact and branch-switch summaries are model calls too - saying so is what makes it obvious
   // that their tokens were not written off
   const extraCalls = [];
-  if (totals.compactions) extraCalls.push(`${totals.compactions} compact`);
-  if (totals.branches) extraCalls.push(`${totals.branches} branch summary`);
-  if (extraCalls.length) parts.push(`(${extraCalls.join(', ')})`);
+  if (totals.compactions) extraCalls.push(tr('{n} compact', { n: totals.compactions }));
+  if (totals.branches) extraCalls.push(tr('{n} branch summary', { n: totals.branches }));
+  if (extraCalls.length) parts.push(tr('({list})', { list: extraCalls.join(', ') }));
   if (costParts && costParts.total) {
-    parts.push(`${fmtMoney(costParts.total)} = ${fmtMoney(costParts.in)} in + ${fmtMoney(costParts.out)} out + ${fmtMoney(costParts.cacheRead)} cache read + ${fmtMoney(costParts.cacheWrite)} cache write`);
+    parts.push(tr('{total} = {in} in + {out} out + {cacheRead} cache read + {cacheWrite} cache write', {
+      total: fmtMoney(costParts.total),
+      in: fmtMoney(costParts.in),
+      out: fmtMoney(costParts.out),
+      cacheRead: fmtMoney(costParts.cacheRead),
+      cacheWrite: fmtMoney(costParts.cacheWrite),
+    }));
   } else if (totals.cost) {
-    parts.push(`reported $${Number(totals.cost).toFixed(4)}`);
+    parts.push(tr('reported {cost}', { cost: `$${Number(totals.cost).toFixed(4)}` }));
   }
   if (extra) parts.push(extra);
   return parts.join(' \u00b7 ');
@@ -3565,8 +3683,8 @@ function usageBucketLine(bucket, mode, usagePrices) {
   return [
     bucket.full || bucket.key,
     usageTotalsLine(bucket, '', money),
-    `${bucket.sessions || 0} session${bucket.sessions === 1 ? '' : 's'}`,
-    models ? `models: ${models}` : '',
+    tr(bucket.sessions === 1 ? '{n} session' : '{n} sessions', { n: bucket.sessions || 0 }),
+    models ? tr('models: {list}', { list: models }) : '',
   ].filter(Boolean).join(' \u00b7 ');
 }
 
@@ -3593,7 +3711,7 @@ function buildUsageChart(container, report, onSelect, showCache = true, mode = '
   container.textContent = '';
   const buckets = (report && report.buckets) || [];
   if (!buckets.length) {
-    container.appendChild(el('div', 'empty-hint', 'No usage recorded in this range yet. The ledger fills in as sessions run.'));
+    container.appendChild(el('div', 'empty-hint', tr('No usage recorded in this range yet. The ledger fills in as sessions run.')));
     return 0;
   }
   const NS = 'http://www.w3.org/2000/svg';
@@ -3618,7 +3736,7 @@ function buildUsageChart(container, report, onSelect, showCache = true, mode = '
   svg.setAttribute('height', height);
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', `token usage per ${report.unit}: ${buckets.length} columns`);
+  svg.setAttribute('aria-label', tr('token usage per {unit}: {n} columns', { unit: tr(report.unit), n: buckets.length }));
 
   const mk = (tag, attrs, text) => {
     const node = document.createElementNS(NS, tag);
@@ -3688,33 +3806,33 @@ async function openUsageModal() {
 
   const backdrop = el('div', 'modal-backdrop usage-backdrop');
   const modal = el('div', 'modal usage-modal');
-  modal.appendChild(el('h3', '', 'Token usage'));
+  modal.appendChild(el('h3', '', tr('Token usage')));
 
-  const hint = el('div', 'set-hint', 'reading the usage ledger\u2026');
+  const hint = el('div', 'set-hint', tr('reading the usage ledger\u2026'));
   modal.appendChild(hint);
 
   const controls = el('div', 'field-row usage-controls');
   const unitSel = document.createElement('select');
-  unitSel.setAttribute('aria-label', 'Column size');
+  unitSel.setAttribute('aria-label', tr('Column size'));
   for (const option of USAGE_UNITS) {
     const opt = document.createElement('option');
     opt.value = option.value;
-    opt.textContent = option.label;
+    opt.textContent = tr(option.label);
     unitSel.appendChild(opt);
   }
   const rangeSel = document.createElement('select');
-  rangeSel.setAttribute('aria-label', 'Time range');
+  rangeSel.setAttribute('aria-label', tr('Time range'));
   for (const option of USAGE_RANGES) {
     const opt = document.createElement('option');
     opt.value = option.value;
-    opt.textContent = option.label;
+    opt.textContent = tr(option.label);
     rangeSel.appendChild(opt);
   }
   const metricSel = document.createElement('select');
-  metricSel.setAttribute('aria-label', 'What the columns measure');
+  metricSel.setAttribute('aria-label', tr('What the columns measure'));
   for (const option of [
-    { value: 'tokens', label: 'tokens' },
-    { value: 'cost', label: 'cost (USD)' },
+    { value: 'tokens', label: tr('tokens') },
+    { value: 'cost', label: tr('cost (USD)') },
   ]) {
     const opt = document.createElement('option');
     opt.value = option.value;
@@ -3730,7 +3848,7 @@ async function openUsageModal() {
   for (const segment of [...USAGE_STACK].reverse()) {
     const chip = el('span', 'usage-legend-item');
     chip.appendChild(el('span', `usage-swatch ${segment.cls}`));
-    chip.appendChild(el('span', '', segment.label));
+    chip.appendChild(el('span', '', tr(segment.label)));
     legend.appendChild(chip);
   }
   modal.appendChild(legend);
@@ -3744,15 +3862,15 @@ async function openUsageModal() {
   const cacheBox = document.createElement('input');
   cacheBox.type = 'checkbox';
   cacheBox.checked = true;
-  cacheBox.setAttribute('aria-label', 'Include cache read and cache write in the stack');
+  cacheBox.setAttribute('aria-label', tr('Include cache read and cache write in the stack'));
   cacheRow.appendChild(cacheBox);
-  cacheRow.appendChild(el('span', '', 'stack cache read / write (off: the columns show only in and out)'));
+  cacheRow.appendChild(el('span', '', tr('stack cache read / write (off: the columns show only in and out)')));
   modal.appendChild(cacheRow);
 
   const chartWrap = el('div', 'usage-chart-wrap');
   modal.appendChild(chartWrap);
 
-  const detail = el('div', 'usage-detail', 'Hover or click a column for the breakdown.');
+  const detail = el('div', 'usage-detail', tr('Hover or click a column for the breakdown.'));
   modal.appendChild(detail);
 
   const totalsLine = el('div', 'usage-totals', '');
@@ -3768,17 +3886,17 @@ async function openUsageModal() {
    * day must not need a re-scan, and a rate change must not rewrite history.
    */
   const rates = el('div', 'usage-rates');
-  rates.appendChild(el('div', 'set-hint', 'rates (USD per 1,000,000 tokens) - Strata reports no prices, so these numbers are what the money side uses. Saved as soon as you leave a box. A model row only overrides the fields you fill in, the rest come from the default rate (its placeholder shows them); to make one model free, set the default row to 0 and give the others their own rows.'));
+  rates.appendChild(el('div', 'set-hint', tr('rates (USD per 1,000,000 tokens) - Strata reports no prices, so these numbers are what the money side uses. Saved as soon as you leave a box. A model row only overrides the fields you fill in, the rest come from the default rate (its placeholder shows them); to make one model free, set the default row to 0 and give the others their own rows.')));
   const ratesGrid = el('div', 'usage-rates-grid');
   rates.appendChild(ratesGrid);
   modal.appendChild(rates);
 
   const actions = el('div', 'modal-actions');
-  const recountButton = el('button', '', 'Recount from files');
-  recountButton.title = 'rebuild the ledger from the session files that exist right now - the only action that can lower the totals (sessions a cleanup deleted leave with their files)';
-  const openButton = el('button', 'ghost', 'Open ledger folder');
-  openButton.title = 'reveal token_usage.json in the file manager';
-  const closeButton = el('button', 'ghost', 'Close');
+  const recountButton = el('button', '', tr('Recount from files'));
+  recountButton.title = tr('rebuild the ledger from the session files that exist right now - the only action that can lower the totals (sessions a cleanup deleted leave with their files)');
+  const openButton = el('button', 'ghost', tr('Open ledger folder'));
+  openButton.title = tr('reveal token_usage.json in the file manager');
+  const closeButton = el('button', 'ghost', tr('Close'));
   actions.appendChild(recountButton);
   actions.appendChild(openButton);
   actions.appendChild(closeButton);
@@ -3813,11 +3931,11 @@ async function openUsageModal() {
     ratesGrid.textContent = '';
     const prices = currentPrices() || {};
     const head = el('div', 'usage-rate-row usage-rate-head');
-    head.appendChild(el('span', 'usage-rate-model', 'model'));
-    for (const field of PRICE_FIELDS) head.appendChild(el('span', 'usage-rate-cell', PRICE_LABELS[field]));
+    head.appendChild(el('span', 'usage-rate-model', tr('model')));
+    for (const field of PRICE_FIELDS) head.appendChild(el('span', 'usage-rate-cell', tr(PRICE_LABELS[field])));
     ratesGrid.appendChild(head);
 
-    const rows = [{ key: 'default', label: 'default rate' }];
+    const rows = [{ key: 'default', label: tr('default rate') }];
     for (const model of (report && report.models) || []) {
       if (!rows.some((row) => row.key === model.model)) rows.push({ key: model.model, label: model.model });
     }
@@ -3825,7 +3943,7 @@ async function openUsageModal() {
     for (const row of rows) {
       const line = el('div', 'usage-rate-row');
       const name = el('span', 'usage-rate-model', row.label);
-      name.title = row.key === 'default' ? 'used for any model that has no row of its own' : `rate for ${row.key}`;
+      name.title = row.key === 'default' ? tr('used for any model that has no row of its own') : tr('rate for {model}', { model: row.key });
       line.appendChild(name);
       const source = row.key === 'default' ? prices.default : (prices.byModel || {})[row.key];
       for (const field of PRICE_FIELDS) {
@@ -3838,7 +3956,7 @@ async function openUsageModal() {
         input.placeholder = row.key === 'default' ? '0' : String(fallback[field] || 0);
         input.dataset.field = field;
         input.dataset.model = row.key;
-        input.setAttribute('aria-label', `${row.label} ${PRICE_LABELS[field]} in USD per million tokens`);
+        input.setAttribute('aria-label', tr('{label} {field} in USD per million tokens', { label: row.label, field: tr(PRICE_LABELS[field]) }));
         input.addEventListener('change', () => saveRates());
         line.appendChild(input);
       }
@@ -3868,7 +3986,7 @@ async function openUsageModal() {
     state.settings = merged || { ...state.settings, usagePrices: next };
     updateUsageFoot();
     await draw();
-    toast(hasPrices(next) ? `rates saved - ${fmtMoney(bucketCostParts({ models: (report && report.models) || [] }, next).total)} for this range` : 'rates cleared - the money side reads $0', 'info', 6000);
+    toast(hasPrices(next) ? tr('rates saved - {money} for this range', { money: fmtMoney(bucketCostParts({ models: (report && report.models) || [] }, next).total) }) : tr('rates cleared - the money side reads $0'), 'info', 6000);
   }
 
   function renderModels() {
@@ -3877,7 +3995,7 @@ async function openUsageModal() {
     if (!list.length) return;
     const prices = currentPrices();
     const priced = hasPrices(prices);
-    models.appendChild(el('div', 'set-hint', priced ? 'models in this range (priced at the rates below)' : 'models in this range'));
+    models.appendChild(el('div', 'set-hint', priced ? tr('models in this range (priced at the rates below)') : tr('models in this range')));
     for (const model of list.slice(0, 8)) {
       const row = el('div', 'usage-model-row');
       row.appendChild(el('span', 'usage-model-name', model.model));
@@ -3886,21 +4004,26 @@ async function openUsageModal() {
         el(
           'span',
           'usage-model-totals',
-          `in ${fmtTokens(model.in)} \u00b7 out ${fmtTokens(model.out)} \u00b7 cache ${fmtTokens((model.cacheRead || 0) + (model.cacheWrite || 0))} \u00b7 total ${fmtTokens(model.total)}${money ? ` \u00b7 ${fmtMoney(money)}` : ''}`,
+          tr('in {in} \u00b7 out {out} \u00b7 cache {cache} \u00b7 total {total}', {
+            in: fmtTokens(model.in),
+            out: fmtTokens(model.out),
+            cache: fmtTokens((model.cacheRead || 0) + (model.cacheWrite || 0)),
+            total: fmtTokens(model.total),
+          }) + (money ? ` \u00b7 ${fmtMoney(money)}` : ''),
         ),
       );
-      row.appendChild(el('span', 'usage-model-msgs', `${model.msgs} ans`));
+      row.appendChild(el('span', 'usage-model-msgs', tr('{n} ans', { n: model.msgs })));
       models.appendChild(row);
     }
-    if (list.length > 8) models.appendChild(el('div', 'set-hint', `${list.length - 8} more models not shown`));
+    if (list.length > 8) models.appendChild(el('div', 'set-hint', tr('{n} more models not shown', { n: list.length - 8 })));
   }
 
   async function draw() {
     const res = await api.usageSeries({ unit, fromMs: usageRangeFrom(range), limit: 0 });
     if (!res || !res.ok) {
-      hint.textContent = `usage ledger failed: ${(res && res.error) || 'unknown error'}`;
+      hint.textContent = tr('usage ledger failed: {error}', { error: (res && res.error) || tr('unknown error') });
       chartWrap.textContent = '';
-      chartWrap.appendChild(el('div', 'note error', 'could not read the usage ledger'));
+      chartWrap.appendChild(el('div', 'note error', tr('could not read the usage ledger')));
       return;
     }
     report = res;
@@ -3920,16 +4043,16 @@ async function openUsageModal() {
     };
     updateUsageFoot();
     const notes = [];
-    if (res.entries) notes.push(`${res.entries} session${res.entries === 1 ? '' : 's'} in the ledger`);
-    if (res.gone) notes.push(`${res.gone} of them no longer exist on disk \u2014 their history is kept`);
-    if (res.truncated) notes.push(`${res.truncated} session(s) were bigger than the 12 MB scan cap, so those are counted only up to that point`);
-    if (res.dedupeMissed) notes.push(`${res.dedupeMissed} fork(s) could not be deduplicated because their parent session file is gone, so their copied tokens may be counted twice`);
-    if (!priced) notes.push('no rates entered below, so the money side is $0');
-    hint.textContent = `${usageTotalsLine(res.totals, '', costParts)} \u00b7 ${notes.join(' \u00b7 ') || 'nothing recorded yet'} \u00b7 ledger: ${res.ledgerFile || 'not set'}`;
-    totalsLine.textContent = `${USAGE_UNITS.find((entry) => entry.value === unit).label} \u00b7 ${res.buckets.length} columns \u00b7 ${USAGE_RANGES.find((entry) => entry.value === range).label} \u00b7 ${mode === 'cost' ? 'columns in USD' : 'columns in tokens'}`;
+    if (res.entries) notes.push(tr('{n} session in the ledger', { n: res.entries }));
+    if (res.gone) notes.push(tr('{n} of them no longer exist on disk \u2014 their history is kept', { n: res.gone }));
+    if (res.truncated) notes.push(tr('{n} session(s) were bigger than the 12 MB scan cap, so those are counted only up to that point', { n: res.truncated }));
+    if (res.dedupeMissed) notes.push(tr('{n} fork(s) could not be deduplicated because their parent session file is gone, so their copied tokens may be counted twice', { n: res.dedupeMissed }));
+    if (!priced) notes.push(tr('no rates entered below, so the money side is $0'));
+    hint.textContent = `${usageTotalsLine(res.totals, '', costParts)} \u00b7 ${notes.join(' \u00b7 ') || tr('nothing recorded yet')} \u00b7 ${tr('ledger: {path}', { path: res.ledgerFile || tr('not set') })}`;
+    totalsLine.textContent = [tr(USAGE_UNITS.find((entry) => entry.value === unit).label), tr('{n} columns', { n: res.buckets.length }), tr(USAGE_RANGES.find((entry) => entry.value === range).label), mode === 'cost' ? tr('columns in USD') : tr('columns in tokens')].join(' \u00b7 ');
     if (mode === 'cost' && !priced) {
       chartWrap.textContent = '';
-      chartWrap.appendChild(el('div', 'empty-hint', 'Enter the rates below (USD per 1,000,000 tokens) and the columns will show what each period cost.'));
+      chartWrap.appendChild(el('div', 'empty-hint', tr('Enter the rates below (USD per 1,000,000 tokens) and the columns will show what each period cost.')));
     } else {
       buildUsageChart(chartWrap, res, selectBucket, cacheBox.checked, mode, prices);
     }
@@ -3958,25 +4081,29 @@ async function openUsageModal() {
     // cleanup already deleted leave the chart with it. Asking first is deliberate.
     const answer = await openModal({
       kind: 'confirm',
-      title: 'Recount the usage ledger from the files on disk?',
-      message: 'Everything currently banked stays unless it comes from a session file that no longer exists. Sessions a cleanup already deleted leave the chart with their files - that is the point of this button, and it cannot be undone.',
-      okLabel: 'Recount',
+      title: tr('Recount the usage ledger from the files on disk?'),
+      message: tr('Everything currently banked stays unless it comes from a session file that no longer exists. Sessions a cleanup already deleted leave the chart with their files - that is the point of this button, and it cannot be undone.'),
+      okLabel: tr('Recount'),
     });
     if (!answer || !answer.confirmed) return;
     recountButton.disabled = true;
     const res = await api.usageRecount();
     recountButton.disabled = false;
     if (!res || !res.ok) {
-      toast(`recount failed: ${(res && res.error) || 'unknown'}`, 'error', 8000);
+      toast(tr('recount failed: {error}', { error: (res && res.error) || tr('unknown') }), 'error', 8000);
       return;
     }
-    toast(`recounted: ${res.parsed} session files read, ${res.droppedGone || 0} entries of deleted sessions dropped${res.deduped ? `, ${res.deduped} copied records recognised as forks` : ''}`, 'info', 9000);
+    toast(tr('recounted: {parsed} session files read, {dropped} entries of deleted sessions dropped{deduped}', {
+      parsed: res.parsed,
+      dropped: res.droppedGone || 0,
+      deduped: res.deduped ? tr(', {n} copied records recognised as forks', { n: res.deduped }) : '',
+    }), 'info', 9000);
     await draw();
   });
   openButton.addEventListener('click', async () => {
     const file = report && report.ledgerFile;
     if (!file) {
-      toast('the ledger file is not set', 'warning');
+      toast(tr('the ledger file is not set'), 'warning');
       return;
     }
     await api.openPath(file, true);
@@ -4119,9 +4246,9 @@ function observeControlNames() {
  */
 function describeQueueRow(tab, position, workingCount) {
   const running = !!tab.isStreaming || scheduler.runningTabId === tab.id;
-  const status = running ? 'running' : tab.outbox.length ? `queued, ${tab.outbox.length} pending` : 'idle';
-  const order = position ? `queue position ${position} of ${workingCount}` : 'not in the queue';
-  return `${tabLabel(tab)}, ${status}, ${order}. Alt+Up or Alt+Down reorders it.`;
+  const status = running ? tr('running') : tab.outbox.length ? tr('queued, {n} pending', { n: tab.outbox.length }) : tr('idle');
+  const order = position ? tr('queue position {n} of {total}', { n: position, total: workingCount }) : tr('not in the queue');
+  return `${tabLabel(tab)}, ${status}, ${order}. ${tr('Alt+Up or Alt+Down reorders it.')}`;
 }
 
 
@@ -4161,7 +4288,7 @@ function openSettingsModal() {
     const s = state.settings || {};
     const backdrop = el('div', 'modal-backdrop settings-backdrop');
     const modal = el('div', 'modal settings-modal');
-    modal.appendChild(el('h3', '', 'Settings'));
+    modal.appendChild(el('h3', '', tr('Settings')));
 
     const controls = [];
     const group = (title) => modal.appendChild(el('div', 'set-group', title));
@@ -4181,7 +4308,7 @@ function openSettingsModal() {
       box.dataset.setting = key;
       row.appendChild(box);
       if (options.folderPicker) {
-        const browse = el('button', '', 'Browse…');
+        const browse = el('button', '', tr('Browse…'));
         browse.addEventListener('click', async () => {
           const picked = await api.chooseFolder();
           if (picked.ok) box.value = picked.path;
@@ -4189,7 +4316,7 @@ function openSettingsModal() {
         row.appendChild(browse);
       }
       if (options.filePicker) {
-        const browse = el('button', '', 'Browse…');
+        const browse = el('button', '', tr('Browse…'));
         browse.addEventListener('click', async () => {
           const picked = await api.chooseFile({ title: options.fileTitle || 'Choose a file', filters: options.filters });
           if (picked.ok) box.value = picked.path;
@@ -4197,8 +4324,8 @@ function openSettingsModal() {
         row.appendChild(browse);
       }
       if (options.clear) {
-        const clear = el('button', 'ghost', 'clear');
-        clear.title = 'remove this key from the settings file';
+        const clear = el('button', 'ghost', tr('clear'));
+        clear.title = tr('remove this key from the settings file');
         clear.addEventListener('click', () => {
           box.value = '';
         });
@@ -4256,66 +4383,74 @@ function openSettingsModal() {
       controls.push({ key, box, kind: 'list' });
     };
 
-    group('Sessions and queue');
-    textRow('cwd', 'Default working folder for new tabs', 'used when a session file records a folder that no longer exists, and for every new tab', { folderPicker: true });
-    checkRow('serialQueue', 'Serial queue: run one session at a time (Strata is single-flight)', 'off = all tabs may call the model at the same time', { defaultTrue: true });
-    checkRow('restoreTabs', 'Reopen the tabs from the previous run (up to 4)', 'off = always start with a single new tab', { defaultTrue: true });
+    group(tr('Sessions and queue'));
+    textRow('cwd', tr('Default working folder for new tabs'), tr('used when a session file records a folder that no longer exists, and for every new tab'), { folderPicker: true });
+    checkRow('serialQueue', tr('Serial queue: run one session at a time (Strata is single-flight)'), tr('off = all tabs may call the model at the same time'), { defaultTrue: true });
+    checkRow('restoreTabs', tr('Reopen the tabs from the previous run (up to 4)'), tr('off = always start with a single new tab'), { defaultTrue: true });
 
-    group('Scheduled prompts');
+    group(tr('Scheduled prompts'));
     const jobsRow = el('div', 'field-row');
-    const jobsButton = el('button', '', 'Manage scheduled jobs\u2026');
+    const jobsButton = el('button', '', tr('Manage scheduled jobs\u2026'));
     jobsButton.addEventListener('click', async () => {
       finish(false);
       await openJobsModal();
     });
     jobsRow.appendChild(jobsButton);
-    jobsRow.appendChild(el('span', 'set-hint', 'cron runs in the background process; a due prompt is queued into a session, never sent behind the queue\u2019s back'));
+    jobsRow.appendChild(el('span', 'set-hint', tr('cron runs in the background process; a due prompt is queued into a session, never sent behind the queue\u2019s back')));
     modal.appendChild(jobsRow);
 
-    group('Strata server');
-    textRow('strataUrl', 'Fixed Strata address (Monitor and diagnostics)', 'leave empty to derive it from the active tab model baseUrl, e.g. http://127.0.0.1:8081/v1', { placeholder: 'http://127.0.0.1:8081/v1', clear: true });
-    textRow('strataConfigPath', 'Strata engine config (only for the diagnostics report)', 'e.g. C:\\Strata\\strata-src\\strata-<model>.json \u2014 copied into the report with keys redacted', { filePicker: true, fileTitle: 'Strata engine config', filters: [{ name: 'JSON', extensions: ['json'] }], clear: true });
-    listRow('strataUrls', 'Other Strata servers to watch (one address per line)', 'D6: the Monitor gets a button per address, so two servers on two ports can be compared; the first entry is still the one the cards show unless you pick another)', { placeholder: 'http://127.0.0.1:8082/v1' });
+    group(tr('Strata server'));
+    textRow('strataUrl', tr('Fixed Strata address (Monitor and diagnostics)'), tr('leave empty to derive it from the active tab model baseUrl, e.g. http://127.0.0.1:8081/v1'), { placeholder: 'http://127.0.0.1:8081/v1', clear: true });
+    textRow('strataConfigPath', tr('Strata engine config (only for the diagnostics report)'), tr('e.g. C:\\Strata\\strata-src\\strata-<model>.json \u2014 copied into the report with keys redacted'), { filePicker: true, fileTitle: tr('Strata engine config'), filters: [{ name: 'JSON', extensions: ['json'] }], clear: true });
+    listRow('strataUrls', tr('Other Strata servers to watch (one address per line)'), tr('D6: the Monitor gets a button per address, so two servers on two ports can be compared; the first entry is still the one the cards show unless you pick another)'), { placeholder: 'http://127.0.0.1:8082/v1' });
 
-    group('Interface')
+    group(tr('Interface'))
     ;
-    checkRow('monitorOpen', 'Open the Strata Monitor at startup', '', { defaultTrue: true });
-    textRow('monitorWidth', 'Monitor panel width (px)', '340 \u2013 900; you can also drag the divider in the Monitor', { number: true, min: 340, max: 900 });
-    checkRow('sidebarHidden', 'Start with the sidebar hidden', '');
-    selectRow('theme', 'Theme', [
-      { value: 'dark', label: 'Dark (default)' },
-      { value: 'light', label: 'Light' },
-      { value: 'system', label: 'Follow the system theme' },
-    ], 'applies as soon as you save; only the colours change, nothing is written anywhere else', { theme: 'dark' });
+    checkRow('monitorOpen', tr('Open the Strata Monitor at startup'), '', { defaultTrue: true });
+    textRow('monitorWidth', tr('Monitor panel width (px)'), tr('340 \u2013 900; you can also drag the divider in the Monitor'), { number: true, min: 340, max: 900 });
+    checkRow('sidebarHidden', tr('Start with the sidebar hidden'), '');
+    selectRow('theme', tr('Theme'), [
+      { value: 'dark', label: tr('Dark (default)') },
+      { value: 'light', label: tr('Light') },
+      { value: 'system', label: tr('Follow the system theme') },
+    ], tr('applies as soon as you save; only the colours change, nothing is written anywhere else'), { theme: 'dark' });
+    // D10: the language names are written in their own script on purpose - that is the one row that
+    // works even when the rest of the dialog is in a language the user cannot read
+    selectRow('language', tr('Language'), [
+      { value: 'auto', label: `${tr('Auto (follow the system)')} (${i18nInfo.systemLocale})` },
+      { value: 'en', label: 'English' },
+      { value: 'zh-TW', label: '繁體中文' },
+      { value: 'zh-CN', label: '简体中文' },
+    ], tr('the app\u2019s own words (menus, buttons, dialogs, chips) follow this right away; pi answers in the language you prompt it in, and the log file and the diagnostics report stay English'), { language: 'auto' });
 
-    group('Files')
+    group(tr('Files'))
     ;
     const paths = el('div', 'set-paths');
     const pathRow = (label, target) => {
       const row = el('div', 'set-path-row');
       row.appendChild(el('span', 'set-path-label', label));
-      const value = el('button', 'ghost set-path-value', target || '(not available)');
+      const value = el('button', 'ghost set-path-value', target || tr('(not available)'));
       value.disabled = !target;
-      value.title = target ? `open ${target}` : '';
+      value.title = target ? tr('open {path}', { path: target }) : '';
       value.addEventListener('click', () => api.openPath(target, false));
       row.appendChild(value);
       paths.appendChild(row);
     };
-    pathRow('settings file', state.info && state.info.settingsPath);
-    pathRow('log file', state.info && state.info.logPath);
-    pathRow('sessions folder', state.info && state.info.sessionsRoot);
+    pathRow(tr('settings file'), state.info && state.info.settingsPath);
+    pathRow(tr('log file'), state.info && state.info.logPath);
+    pathRow(tr('sessions folder'), state.info && state.info.sessionsRoot);
     modal.appendChild(paths);
     modal.appendChild(
       el(
         'div',
         'set-hint',
-        'Deleting the settings file resets everything (open tabs, window size, Monitor state). pi model settings live in ~/.pi/agent/settings.json and are not touched here.',
+        tr('Deleting the settings file resets everything (open tabs, window size, Monitor state). pi model settings live in ~/.pi/agent/settings.json and are not touched here.'),
       ),
     );
 
     const actions = el('div', 'modal-actions');
-    const cancel = el('button', 'ghost', 'Cancel');
-    const ok = el('button', 'primary', 'Save');
+    const cancel = el('button', 'ghost', tr('Cancel'));
+    const ok = el('button', 'primary', tr('Save'));
     actions.appendChild(cancel);
     actions.appendChild(ok);
     modal.appendChild(actions);
@@ -4359,7 +4494,10 @@ function openSettingsModal() {
       const merged = await api.settingsSet(patch);
       state.settings = merged || patch;
       applySettings(state.settings);
-      toast('settings saved', 'info', 3000);
+      // D10: the language is switched before the confirmation, so the toast the user reads after
+      // pressing Save is already in the language they just picked
+      await setLanguage(merged.language || 'auto');
+      toast(tr('settings saved'), 'info', 3000);
       finish(true);
     };
 
@@ -4403,6 +4541,10 @@ function applySettings(settings) {
   if (els.monitorView.classList.contains('hidden') && s.monitorOpen !== false) openMonitor();
   if (s.monitorOpen === false && !els.monitorView.classList.contains('hidden')) closeMonitor();
   if (scheduler.enabled) scheduler.pumpSoon(0);
+  // D10: the Settings dialog saves through here, so a language change arrives this way too - including
+  // when the file was edited by hand and the app was reloaded
+  const pref = s.language || 'auto';
+  if (pref !== i18nInfo.pref) setLanguage(pref).catch((err) => console.error('[i18n] language change failed', err));
   renderOpenSessions();
 }
 
@@ -4411,16 +4553,24 @@ function applySettings(settings) {
 /* ------------------------------------------------------------------ */
 
 const MON_CARDS = [
-  { key: 'speed', label: 'Speed' },
-  { key: 'gpu', label: 'GPU load' },
-  { key: 'vram', label: 'VRAM' },
-  { key: 'temp', label: 'GPU temp', tone: 'amber' },
-  { key: 'power', label: 'Power', tone: 'amber' },
-  { key: 'pcie', label: 'PCIe', tone: 'blue' },
-  { key: 'cpu', label: 'CPU', tone: 'blue' },
-  { key: 'disk', label: 'Disk read', tone: 'blue' },
+  { key: 'speed', label: i18nKey('Speed') },
+  { key: 'gpu', label: i18nKey('GPU load') },
+  { key: 'vram', label: i18nKey('VRAM') },
+  { key: 'temp', label: i18nKey('GPU temp'), tone: 'amber' },
+  { key: 'power', label: i18nKey('Power'), tone: 'amber' },
+  { key: 'pcie', label: i18nKey('PCIe'), tone: 'blue' },
+  { key: 'cpu', label: i18nKey('CPU'), tone: 'blue' },
+  { key: 'disk', label: i18nKey('Disk read'), tone: 'blue' },
 ];
 const MON_STATES = ['idle', 'reading', 'generating', 'queued', 'error'];
+// the badges are built from MON_STATES, so the words have to be spelled out for the catalogs
+const MON_STATE_BADGE_LABELS = {
+  idle: i18nKey('Idle'),
+  reading: i18nKey('Reading'),
+  generating: i18nKey('Generating'),
+  queued: i18nKey('Queued'),
+  error: i18nKey('Error'),
+};
 const RING_R = 37.5;
 const RING_C = 2 * Math.PI * RING_R;
 
@@ -4491,8 +4641,8 @@ function renderMonitorServers() {
   monitor.serversSignature = signature;
   els.monServers.textContent = '';
 
-  const follow = el('button', `mon-server${monitor.baseUrl ? '' : ' active'}`, 'active tab');
-  follow.title = `follow the active tab's server (${strataBaseUrl()})`;
+  const follow = el('button', `mon-server${monitor.baseUrl ? '' : ' active'}`, tr('active tab'));
+  follow.title = tr("follow the active tab's server ({url})", { url: strataBaseUrl() });
   follow.dataset.url = '';
   follow.addEventListener('click', () => {
     monitor.baseUrl = '';
@@ -4507,7 +4657,7 @@ function renderMonitorServers() {
     pill.title = url;
     pill.dataset.url = url;
     const dot = el('span', 'mon-dot unknown');
-    dot.title = 'health unknown';
+    dot.title = tr('health unknown');
     pill.appendChild(dot);
     pill.addEventListener('click', () => {
       monitor.baseUrl = url;
@@ -4517,7 +4667,7 @@ function renderMonitorServers() {
     });
     if (serverKey(url) !== serverKey(strataBaseUrl())) {
       const remove = el('span', 'mon-server-x', '×');
-      remove.title = `stop watching ${url} (removes it from Settings)`;
+      remove.title = tr('stop watching {url} (removes it from Settings)', { url });
       remove.addEventListener('click', async (event) => {
         event.stopPropagation();
         const kept = (Array.isArray(state.settings.strataUrls) ? state.settings.strataUrls : []).filter((entry) => serverKey(entry) !== serverKey(url));
@@ -4534,10 +4684,10 @@ function renderMonitorServers() {
     applyHealthDot(pill, url);
   }
 
-  const add = el('button', 'mon-server mon-server-add', '+ add server');
-  add.title = 'watch another Strata address (saved in Settings)';
+  const add = el('button', 'mon-server mon-server-add', tr('+ add server'));
+  add.title = tr('watch another Strata address (saved in Settings)');
   add.addEventListener('click', async () => {
-    const answer = await openModal({ kind: 'input', title: 'Add a Strata server', message: 'Base address, e.g. http://127.0.0.1:8082/v1', placeholder: 'http://127.0.0.1:8082/v1', okLabel: 'Watch it' });
+    const answer = await openModal({ kind: 'input', title: tr('Add a Strata server'), message: tr('Base address, e.g. http://127.0.0.1:8082/v1'), placeholder: 'http://127.0.0.1:8082/v1', okLabel: tr('Watch it') });
     if (!answer || answer.cancelled || !String(answer.value || '').trim()) return;
     const url = String(answer.value).trim();
     const current = Array.isArray(state.settings.strataUrls) ? state.settings.strataUrls : [];
@@ -4547,7 +4697,7 @@ function renderMonitorServers() {
     monitor.serversSignature = null;
     renderMonitorServers();
     pollMonitor();
-    toast(`watching ${url}`, 'info', 3000);
+    toast(tr('watching {url}', { url }), 'info', 3000);
   });
   els.monServers.appendChild(add);
 }
@@ -4564,15 +4714,15 @@ function applyHealthDot(pill, url) {
   const health = monitor.health.get(serverKey(url));
   if (!health) {
     dot.className = 'mon-dot unknown';
-    dot.title = 'health not checked yet';
+    dot.title = tr('health not checked yet');
     return;
   }
   if (health.ok) {
     dot.className = 'mon-dot ok';
-    dot.title = `reachable in ${health.ms}ms`;
+    dot.title = tr('reachable in {ms}ms', { ms: health.ms });
   } else {
     dot.className = 'mon-dot bad';
-    dot.title = health.error || 'not reachable';
+    dot.title = health.error ? tr(health.error) : tr('not reachable');
   }
 }
 
@@ -4592,19 +4742,19 @@ function buildMonitorCards() {
   if (monitor.built) return;
   els.monBadges.textContent = '';
   for (const s of MON_STATES) {
-    const badge = el('span', 'st-badge', s[0].toUpperCase() + s.slice(1));
+    const badge = el('span', 'st-badge', tr(MON_STATE_BADGE_LABELS[s] || s));
     badge.dataset.s = s;
     els.monBadges.appendChild(badge);
   }
   els.monCards.textContent = '';
   for (const card of MON_CARDS) {
     const node = el('div', 'mcard');
-    node.appendChild(el('div', 'mcard-head', card.label));
+    node.appendChild(el('div', 'mcard-head', tr(card.label)));
     node.innerHTML +=
       card.key === 'speed'
         ? `<div class="m-pair">
-             <div><span class="m-value" id="mv-speed">&ndash;</span><span class="m-sub" id="ms-speed">Decode</span></div>
-             <div><span class="m-value" id="mv-prefill">&ndash;</span><span class="m-sub" id="ms-prefill">Prefill</span></div>
+             <div><span class="m-value" id="mv-speed">&ndash;</span><span class="m-sub" id="ms-speed">${tr('Decode')}</span></div>
+             <div><span class="m-value" id="mv-prefill">&ndash;</span><span class="m-sub" id="ms-prefill">${tr('Prefill')}</span></div>
            </div>
            <svg class="spark" viewBox="0 0 100 32" preserveAspectRatio="none">
              <g id="sp-prefill" class="pair2"><path class="area" fill="currentColor" opacity=".12"/><path class="line" fill="none" stroke="currentColor" stroke-width="1.4"/></g>
@@ -4650,11 +4800,19 @@ function drawSpark(id, values, max) {
 
 function monitorTotalsLine(totals) {
   if (!totals || !totals.requests) return '';
-  const since = new Date(totals.since * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  const since = new Date(totals.since * 1000).toLocaleString(i18nInfo.lang === 'en' ? [] : i18nInfo.lang, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
   const read = totals.prompt_tokens - totals.reused;
-  const prefill = totals.prompt_ms > 0 && read > 0 ? ` at ${nfmt(read / (totals.prompt_ms / 1000))} tok/s` : '';
-  const decode = totals.decode_ms > 0 && totals.output_tokens > 0 ? ` at ${nfmt(totals.output_tokens / (totals.decode_ms / 1000), 1)} tok/s` : '';
-  return `Since ${since}: ${nfmt(totals.requests)} requests · ${nfmt(read)} prompt tokens read${prefill} (${nfmt(totals.reused)} reused) · ${nfmt(totals.output_tokens)} written${decode}`;
+  const prefill = totals.prompt_ms > 0 && read > 0 ? tr(' at {n} tok/s', { n: nfmt(read / (totals.prompt_ms / 1000)) }) : '';
+  const decode = totals.decode_ms > 0 && totals.output_tokens > 0 ? tr(' at {n} tok/s', { n: nfmt(totals.output_tokens / (totals.decode_ms / 1000), 1) }) : '';
+  return tr('Since {since}: {requests} requests · {read} prompt tokens read{prefill} ({reused} reused) · {written} written{decode}', {
+    since,
+    requests: nfmt(totals.requests),
+    read: nfmt(read),
+    prefill,
+    reused: nfmt(totals.reused),
+    written: nfmt(totals.output_tokens),
+    decode,
+  });
 }
 
 function renderMonitor(data) {
@@ -4671,53 +4829,53 @@ function renderMonitor(data) {
   for (const badge of els.monBadges.children) {
     badge.classList.toggle('on', badge.dataset.s === on || badge.dataset.s === live.state);
   }
-  let label = 'Waiting for a request';
+  let label = tr('Waiting for a request');
   let detail = '';
   let pct = 0;
   if (live.state === 'reading') {
-    label = 'Reading prompt';
+    label = tr('Reading prompt');
     if (live.prompt_total) {
       pct = (100 * live.prompt_read) / live.prompt_total;
-      detail = `${nfmt(live.prompt_read)} / ${nfmt(live.prompt_total)} tokens · ${nfmt(pct)}%`;
+      detail = tr('{read} / {total} tokens · {pct}%', { read: nfmt(live.prompt_read), total: nfmt(live.prompt_total), pct: nfmt(pct) });
     } else {
-      detail = `${nfmt(live.prompt_tokens)} tokens`;
+      detail = tr('{n} tokens', { n: nfmt(live.prompt_tokens) });
     }
   } else if (live.state === 'generating') {
-    label = live.phase ? live.phase[0].toUpperCase() + live.phase.slice(1) : 'Generating';
+    label = live.phase ? tr(live.phase[0].toUpperCase() + live.phase.slice(1)) : tr('Generating');
     pct = live.max_tokens ? Math.min(100, (100 * live.generated) / live.max_tokens) : 0;
-    detail = `${nfmt(live.generated)} tokens · ${nfmt(live.tok_s, 1)} tok/s`;
+    detail = tr('{n} tokens · {rate} tok/s', { n: nfmt(live.generated), rate: nfmt(live.tok_s, 1) });
   } else if (last) {
-    detail = `last: ${nfmt(last.output_tokens)} tokens${last.decode_tok_s ? ` at ${nfmt(last.decode_tok_s, 1)} tok/s` : ''}`;
+    detail = tr('last: {n} tokens{at}', { n: nfmt(last.output_tokens), at: last.decode_tok_s ? tr(' at {rate} tok/s', { rate: nfmt(last.decode_tok_s, 1) }) : '' });
   }
-  els.monStateLabel.textContent = live.queued > 0 ? `${label} · ${live.queued} queued` : label;
+  els.monStateLabel.textContent = live.queued > 0 ? tr('{label} · {n} queued', { label, n: live.queued }) : label;
   els.monStateDetail.textContent = detail;
   els.monStateBar.style.width = `${pct}%`;
   els.monStateBar.classList.toggle('info', live.state === 'reading');
 
   // metric cards
   const speed = live.state === 'generating' ? live.tok_s : last ? last.decode_tok_s : null;
-  setMetric('speed', speed == null ? null : nfmt(speed, 1), 't/s', live.state === 'generating' ? 'Decode now' : last ? 'Decode last request' : 'Decode');
+  setMetric('speed', speed == null ? null : nfmt(speed, 1), 't/s', live.state === 'generating' ? tr('Decode now') : last ? tr('Decode last request') : tr('Decode'));
   const prefill =
     live.state !== 'idle' ? live.prefill_tok_s_mean : last && last.prompt_ms > 0 ? Math.max(0, last.prompt_tokens - (last.reused || 0)) / (last.prompt_ms / 1000) : null;
-  setMetric('prefill', prefill == null ? null : nfmt(prefill), 't/s', live.state === 'reading' ? 'Prefill now' : live.state === 'generating' ? 'Prefill this request' : last ? 'Prefill last request' : 'Prefill');
+  setMetric('prefill', prefill == null ? null : nfmt(prefill), 't/s', live.state === 'reading' ? tr('Prefill now') : live.state === 'generating' ? tr('Prefill this request') : last ? tr('Prefill last request') : tr('Prefill'));
   drawSpark('sp-speed', history.tok_s);
   drawSpark('sp-prefill', history.prefill_tok_s_mean);
 
   const gpus = hw.gpus || [];
   const multi = gpus.length > 1;
-  const perGpu = (fn) => gpus.map((g) => `GPU ${g.index} ${fn(g)}`).join(' · ');
-  setMetric('gpu', hw.gpu_util == null ? null : nfmt(hw.gpu_util), '%', multi ? perGpu((g) => (g.util == null ? '–' : `${nfmt(g.util)}%`)) : st.gpu_name || (st.gpu_note ? 'not available' : ''));
+  const perGpu = (fn) => gpus.map((g) => `${tr('GPU')} ${g.index} ${fn(g)}`).join(' · ');
+  setMetric('gpu', hw.gpu_util == null ? null : nfmt(hw.gpu_util), '%', multi ? perGpu((g) => (g.util == null ? '–' : `${nfmt(g.util)}%`)) : st.gpu_name || (st.gpu_note ? tr('not available') : ''));
   drawSpark('sp-gpu', history.gpu_util, 100);
   setMetric(
     'vram',
     hw.gpu_mem_used == null ? null : gb(hw.gpu_mem_used),
     hw.gpu_mem_total ? `/ ${gb(hw.gpu_mem_total, 0)} GB` : 'GB',
-    multi ? perGpu((g) => (g.mem_used == null ? '–' : `${gb(g.mem_used)} GB`)) : eng.expert_slots ? `${nfmt(eng.expert_slots)} experts cached` : st.gpu_note ? 'not available on Windows AMD yet' : '',
+    multi ? perGpu((g) => (g.mem_used == null ? '–' : `${gb(g.mem_used)} GB`)) : eng.expert_slots ? tr('{n} experts cached', { n: nfmt(eng.expert_slots) }) : st.gpu_note ? tr('not available on Windows AMD yet') : '',
   );
   drawSpark('sp-vram', history.gpu_mem_used, hw.gpu_mem_total);
   setMetric('temp', hw.gpu_temp == null ? null : nfmt(hw.gpu_temp), '°C', multi ? perGpu((g) => (g.temp == null ? '–' : `${nfmt(g.temp)}°`)) : '');
   drawSpark('sp-temp', history.gpu_temp, 90);
-  setMetric('power', hw.gpu_power == null ? null : nfmt(hw.gpu_power), 'W', hw.gpu_power_limit ? `of ${nfmt(hw.gpu_power_limit)} W limit` : '');
+  setMetric('power', hw.gpu_power == null ? null : nfmt(hw.gpu_power), 'W', hw.gpu_power_limit ? tr('of {n} W limit', { n: nfmt(hw.gpu_power_limit) }) : '');
   drawSpark('sp-power', history.gpu_power, hw.gpu_power_limit);
   const gen = hw.gpu_pcie_gen_max || hw.gpu_pcie_gen;
   setMetric(
@@ -4726,20 +4884,20 @@ function renderMonitor(data) {
     hw.gpu_pcie_width ? `x${hw.gpu_pcie_width}` : '',
     hw.gpu_pcie_rx_mb == null
       ? ''
-      : `to GPU ${nfmt(hw.gpu_pcie_rx_mb, hw.gpu_pcie_rx_mb < 10 ? 1 : 0)} MB/s` + (hw.gpu_pcie_gen && gen && hw.gpu_pcie_gen < gen ? ` · idle Gen${hw.gpu_pcie_gen}` : ''),
+      : `${tr('to GPU')} ${nfmt(hw.gpu_pcie_rx_mb, hw.gpu_pcie_rx_mb < 10 ? 1 : 0)} MB/s` + (hw.gpu_pcie_gen && gen && hw.gpu_pcie_gen < gen ? ` · ${tr('idle')} Gen${hw.gpu_pcie_gen}` : ''),
   );
   drawSpark('sp-pcie', history.gpu_pcie_rx_mb);
-  setMetric('cpu', hw.cpu == null ? null : nfmt(hw.cpu), '%', st.threads ? `${st.cores ? `${st.cores} cores · ` : ''}${st.threads} threads` : '');
+  setMetric('cpu', hw.cpu == null ? null : nfmt(hw.cpu), '%', st.threads ? `${st.cores ? `${st.cores} ${tr('cores')} · ` : ''}${st.threads} ${tr('threads')}` : '');
   drawSpark('sp-cpu', history.cpu, 100);
   if (hw.disk_read_mb == null) {
-    setMetric('disk', null, '', st.psutil ? '' : 'needs psutil');
+    setMetric('disk', null, '', st.psutil ? '' : tr('needs psutil'));
   } else {
     const big = hw.disk_read_mb >= 1000;
     setMetric(
       'disk',
       big ? nfmt(hw.disk_read_mb / 1024, 2) : nfmt(hw.disk_read_mb, hw.disk_read_mb < 10 ? 1 : 0),
       big ? 'GB/s' : 'MB/s',
-      hw.disk_write_mb == null ? '' : `write ${nfmt(hw.disk_write_mb, 1)} MB/s`,
+      hw.disk_write_mb == null ? '' : `${tr('write')} ${nfmt(hw.disk_write_mb, 1)} MB/s`,
     );
   }
   drawSpark('sp-disk', history.disk_read_mb);
@@ -4772,27 +4930,27 @@ function renderMonitor(data) {
 
   // recent requests
   if (!requests.length) {
-    els.monReqBody.innerHTML = '<tr><td colspan="9" class="muted">No requests yet</td></tr>';
+    els.monReqBody.innerHTML = `<tr><td colspan="9" class="muted">${tr('No requests yet')}</td></tr>`;
   } else {
     const badge = {
-      stop: ['ok', 'Done'],
-      length: ['warn', 'Max tokens'],
-      cancel: ['warn', 'Stopped'],
-      disconnect: ['warn', 'Closed'],
-      error: ['error', 'Error'],
+      stop: ['ok', tr('Done')],
+      length: ['warn', tr('Max tokens')],
+      cancel: ['warn', tr('Stopped')],
+      disconnect: ['warn', tr('Closed')],
+      error: ['error', tr('Error')],
     };
     const MON_MAX_ROWS = 150;
     const shown = monitor.showAll ? requests.slice(0, MON_MAX_ROWS) : requests.slice(0, 12);
     els.monReqBody.innerHTML = shown
       .map((r) => {
         const [cls, text] = badge[r.finish] || ['', r.finish || '–'];
-        const time = new Date(r.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const time = new Date(r.time * 1000).toLocaleTimeString(i18nInfo.lang === 'en' ? [] : i18nInfo.lang, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const hit =
           r.hit_rate == null
             ? '–'
             : `${(r.hit_rate * 100).toFixed(1)}%` +
               (r.pcie_share
-                ? ` <span class="muted" title="routed experts the GPU read over PCIe (--pcie-frac) or another GPU computed">+${(r.pcie_share * 100).toFixed(1)}%P</span>`
+                ? ` <span class="muted" title="${tr('routed experts the GPU read over PCIe (--pcie-frac) or another GPU computed')}">+${(r.pcie_share * 100).toFixed(1)}%P</span>`
                 : '');
         const fresh = r.prompt_tokens == null ? null : Math.max(0, r.prompt_tokens - (r.reused || 0));
         const prefillRate = fresh > 0 && r.prompt_ms > 0 ? fresh / (r.prompt_ms / 1000) : null;
@@ -4802,13 +4960,13 @@ function renderMonitor(data) {
     if (monitor.showAll && requests.length > shown.length) {
       els.monReqBody.insertAdjacentHTML(
         'beforeend',
-        `<tr><td colspan="9" class="muted">newest ${shown.length} of ${requests.length} shown (the rest are hidden to keep the UI light)</td></tr>`,
+        `<tr><td colspan="9" class="muted">${tr('newest {shown} of {total} shown (the rest are hidden to keep the UI light)', { shown: shown.length, total: requests.length })}</td></tr>`,
       );
     }
   }
   const kept = data.requests_kept == null ? requests.length : data.requests_kept;
   els.monReqAll.hidden = kept <= 12;
-  els.monReqAll.textContent = monitor.showAll ? 'Show fewer' : `Show all (${kept})`;
+  els.monReqAll.textContent = monitor.showAll ? tr('Show fewer') : tr('Show all ({n})', { n: kept });
   els.monReqBody.closest('.req-wrap').classList.toggle('all', monitor.showAll);
   els.monTotals.textContent = monitorTotalsLine(data.totals);
 }
@@ -5864,7 +6022,7 @@ async function copyDiagnostics() {
   if (diagnosticsBusy) return;
   diagnosticsBusy = true;
   els.btnDiag.disabled = true;
-  els.btnDiag.textContent = 'Building\u2026';
+  els.btnDiag.textContent = tr('Building\u2026');
   try {
     const res = await api.diagnostics(diagnosticsSnapshot());
     if (!res || !res.ok) {
@@ -5886,7 +6044,7 @@ async function copyDiagnostics() {
   } finally {
     diagnosticsBusy = false;
     els.btnDiag.disabled = false;
-    els.btnDiag.textContent = 'Diagnostics';
+    els.btnDiag.textContent = tr('Diagnostics');
   }
 }
 
@@ -7070,24 +7228,27 @@ function renderEnvBar() {
   const piNode = el('span', `env-pi${level === 'ok' ? '' : ` ${level}`}`, `pi ${info.piVersion || '?'}${level === 'ok' ? '' : ' \u26a0'}`);
   if (level === 'warn') {
     piNode.title =
-      `pi ${info.piVersion} is not the version this GUI was tested against (${info.testedPiVersion}).\n` +
-      'A minor pi upgrade normally only adds RPC commands, but if prompts, streaming or compaction start misbehaving,\n' +
-      `pin pi back to ${info.testedPiVersion} (or update TESTED_PI_VERSION in lib/pi-launch.js after testing).`;
+      tr('pi {pi} is not the version this GUI was tested against ({tested}).\nA minor pi upgrade normally only adds RPC commands, but if prompts, streaming or compaction start misbehaving,\npin pi back to {tested} (or update TESTED_PI_VERSION in lib/pi-launch.js after testing).', { pi: info.piVersion, tested: info.testedPiVersion });
   } else if (level === 'differ') {
-    piNode.title =
-      `pi ${info.piVersion || '(not found)'} differs from the tested ${info.testedPiVersion} in its major version, or pi could not be resolved.\n` +
-      'The RPC framing and the event names may have changed: expect parts of the GUI to be wrong until this repo is updated.';
+    piNode.title = tr('pi {pi} differs from the tested {tested} in its major version, or pi could not be resolved.\nThe RPC framing and the event names may have changed: expect parts of the GUI to be wrong until this repo is updated.', { pi: info.piVersion || tr('(not found)'), tested: info.testedPiVersion });
   } else {
-    piNode.title = `pi ${info.piVersion} \u2014 the version this GUI is tested against`;
+    piNode.title = tr('pi {pi} \u2014 the version this GUI is tested against', { pi: info.piVersion });
   }
   els.envInfo.appendChild(piNode);
   els.envInfo.appendChild(el('span', '', ` \u00b7 electron ${info.electronVersion} \u00b7 ${info.sessionsRoot}`));
-  if (level !== 'ok') toast(`pi ${info.piVersion || '?'} differs from the tested ${info.testedPiVersion} \u2014 hover the env bar`, 'warning', 10000);
+  if (level !== 'ok') toast(tr('pi {pi} differs from the tested {tested} \u2014 hover the env bar', { pi: info.piVersion || '?', tested: info.testedPiVersion }), 'warning', 10000);
 }
 
 async function init() {
   state.info = await api.info();
   state.settings = (await api.settingsGet()) || {};
+  // D10: the catalog has to be in place before anything renders, or the first paint is English
+  // whatever the setting says
+  try {
+    installI18n(await api.i18nGet());
+  } catch (err) {
+    console.error('[i18n] catalog load failed, staying in English:', err);
+  }
   state.cwd = state.settings.cwd && state.settings.cwd !== '' ? state.settings.cwd : state.info.defaultCwd;
   applyTheme(state.settings.theme);
   try {
@@ -7268,6 +7429,10 @@ async function init() {
 
   if (state.info.smoke && state.info.smokeUsage) {
     setTimeout(() => smokeUsageScenario().catch((err) => console.error('[smoke] usage scenario failed', err)), 1500);
+  }
+
+  if (state.info.smoke && state.info.smokeI18n) {
+    setTimeout(() => smokeI18nScenario().catch((err) => console.error('[smoke] i18n scenario failed', err)), 1500);
   }
 
   if (state.info.smoke && state.info.smokeA11y) {
@@ -7479,7 +7644,7 @@ async function smokeBarsScenario() {
     if (ticks === 5) {
       clearInterval(interval);
       const jump = els.nowBar.querySelector('.nb-jump');
-      const node = tab.nodes.get(tab.currentRequest.key);
+      const node = tab.currentRequest ? tab.nodes.get(tab.currentRequest.key) : null;
       els.transcript.scrollTop = els.transcript.scrollHeight;
       if (jump) jump.click();
       setTimeout(() => {
@@ -7533,8 +7698,14 @@ async function smokeCopyScenario() {
     await send();
     activateTab(tab.id);
 
-    const userKey = tab.items.find((it) => it.kind === 'message' && it.message.role === 'user').key;
-    const asstKey = [...tab.items].reverse().find((it) => it.kind === 'message' && it.message.role === 'assistant').key;
+    const userItem = tab.items.find((it) => it.kind === 'message' && it.message.role === 'user');
+    const asstItem = [...tab.items].reverse().find((it) => it.kind === 'message' && it.message.role === 'assistant');
+    if (!userItem || !asstItem) {
+      console.log(`[smoke-copy] skipped: another smoke scenario took this tab over, so the copy targets are gone (user=${!!userItem} assistant=${!!asstItem})`);
+      return;
+    }
+    const userKey = userItem.key;
+    const asstKey = asstItem.key;
 
     const copyBtn = button(userKey, 'copy');
     if (copyBtn) copyBtn.click();
@@ -7662,7 +7833,7 @@ async function smokeSettingsScenario() {
   if (widthBox) widthBox.value = '520';
   const urlBox = document.querySelector('[data-setting="strataUrl"]');
   if (urlBox) urlBox.value = 'http://127.0.0.1:8081/v1';
-  const save = [...document.querySelectorAll('.settings-modal .modal-actions button')].find((b) => b.textContent === 'Save');
+  const save = [...document.querySelectorAll('.settings-modal .modal-actions button')].find((b) => b.textContent === tr('Save'));
   if (save) save.click();
   await opening;
   const merged = await api.settingsGet();
@@ -7768,10 +7939,10 @@ async function smokeCronScenario() {
       await api.smokeShot('jobs-editor-weekly');
     }
     const chips = editor ? editor.querySelectorAll('.job-chip').length : 0;
-    const cancel = editor ? [...editor.querySelectorAll('.modal-actions button')].find((button) => button.textContent === 'Cancel') : null;
+    const cancel = editor ? [...editor.querySelectorAll('.modal-actions button')].find((button) => button.textContent === tr('Cancel')) : null;
     if (cancel) cancel.click();
     await new Promise((resolve) => setTimeout(resolve, 150));
-    const close = [...document.querySelectorAll('.jobs-modal .modal-actions button')].find((button) => button.textContent === 'Close');
+    const close = [...document.querySelectorAll('.jobs-modal .modal-actions button')].find((button) => button.textContent === tr('Close'));
     if (close) close.click();
     await dialog;
 
@@ -8027,6 +8198,57 @@ async function smokeUsageScenario() {
   await opened;
   console.log(
     `[smoke-usage] ok=${day.ok && month.ok && sums.ok} ipc_day=${day.buckets.length} ipc_month=${month.buckets.length} chart_columns=${columns} after_unit=${monthColumns} entries=${day.entries} chip_before=${JSON.stringify(chipBefore)} chip_after=${JSON.stringify(chipAfter)} chip_follows_ledger=${chipFollowsLedger} gone=${day.gone} dedupe_missed=${day.dedupeMissed} ledger=${JSON.stringify(String(day.ledgerFile || '').split(/[\\/]/).pop())} total=${sums.all ? sums.all.total : 0} cache_read=${sums.all ? sums.all.cacheRead : 0} answers=${sums.all ? sums.all.answers : 0} compactions=${sums.all ? sums.all.compactions : 0} branches=${sums.all ? sums.all.branches : 0} axis_with_cache=${JSON.stringify(axisWithCache)} axis_without_cache=${JSON.stringify(axisWithoutCache)} rescaled=${axisWithCache !== axisWithoutCache} cost_axis=${JSON.stringify(costAxis)} cost_is_money=${costAxis.includes('$')} rate_rows=${rateRows} rate_inputs=${rateInputs} money_in_header=${moneyShown} money_before=${JSON.stringify(moneyBefore)} typed_model_rate=${JSON.stringify(modelKey)} saved_by_model=${JSON.stringify(savedByModel)} money_after=${JSON.stringify(moneyAfter)} money_changed=${moneyBefore !== moneyAfter && !!moneyAfter} money_up=${parseFloat(moneyAfter) > parseFloat(moneyBefore)} refilled_boxes=${refilled} detail=${JSON.stringify(detail.slice(0, 70))} footer=${JSON.stringify(footer.slice(-46))} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
+  );
+}
+
+/**
+ * STRATAPILOT_SMOKE_I18N=1: D10. The language switch must work through the same path the Settings dialog
+ * uses (open the dialog, pick the dropdown, press Save) and must not need a restart: the static chrome is
+ * translated by walking index.html, the dynamic parts by re-running the renderers. So the check is "does
+ * the visible text change to Chinese, and does it come back to English". The catalogs themselves - every
+ * key present, every {placeholder} intact - are covered by test/i18n.test.js.
+ */
+async function smokeI18nScenario() {
+  const sideNew = $('btnNewSide');
+  const read = () => ({
+    lang: document.documentElement.lang,
+    newSession: sideNew ? sideNew.textContent : '',
+    settings: els.btnSettings ? els.btnSettings.textContent : '',
+    foot: (els.sideFoot.querySelector('.foot-usage') || {}).textContent || '',
+    sendTitle: els.btnSend.title,
+    placeholder: els.input.placeholder,
+    storage: (els.sideFoot.querySelector('.foot-storage') || {}).textContent || '',
+    monitor: [...document.querySelectorAll('.mcard .mcard-head')].map((head) => head.textContent).join(','),
+  });
+  const before = read();
+
+  // the same path the user takes: open Settings, pick the dropdown, press Save
+  const pick = async (value) => {
+    const opening = openSettingsModal();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const sel = document.querySelector('[data-setting="language"]');
+    const options = sel ? [...sel.options].map((option) => option.value) : [];
+    if (sel) sel.value = value;
+    const save = [...document.querySelectorAll('.settings-modal .modal-actions button')].find((button) => button.textContent === tr('Save'));
+    if (save) save.click();
+    await opening;
+    await new Promise((resolve) => setTimeout(resolve, 1200)); // applySettings -> setLanguage is async
+    return options;
+  };
+
+  const options = await pick('zh-TW');
+  const tw = read();
+  await api.smokeShot('i18n-zh-TW');
+  await pick('zh-CN');
+  const cn = read();
+  await api.smokeShot('i18n-zh-CN');
+  await pick('en'); // and back, so switching is not a one-way door
+  const back = read();
+  const saved = await api.settingsGet();
+
+  const cjk = /[\u3400-\u9fff]/;
+  console.log(
+    `[smoke-i18n] start_lang=${before.lang} options=${options.join(',')} tw_lang=${tw.lang} tw_newSession=${JSON.stringify(tw.newSession)} tw_settings=${JSON.stringify(tw.settings)} tw_storage=${JSON.stringify(tw.storage)} tw_foot=${JSON.stringify(tw.foot)} tw_sendTitle=${JSON.stringify(tw.sendTitle)} tw_placeholder=${JSON.stringify(tw.placeholder.slice(0, 40))} tw_monitor=${JSON.stringify(tw.monitor.slice(0, 60))} cn_lang=${cn.lang} cn_newSession=${JSON.stringify(cn.newSession)} cn_foot=${JSON.stringify(cn.foot)} cn_monitor=${JSON.stringify(cn.monitor.slice(0, 60))} switched=${tw.lang === 'zh-TW' && cn.lang === 'zh-CN'} cjk=${cjk.test(tw.newSession) && cjk.test(tw.settings) && cjk.test(tw.placeholder) && cjk.test(cn.newSession)} monitor_translated=${cjk.test(tw.monitor) && cjk.test(cn.monitor)} restored=${back.lang === 'en' && back.newSession === before.newSession && back.sendTitle === before.sendTitle && back.monitor === before.monitor} saved_pref=${saved && saved.language} entries=${i18nInfo.entries} pref=${i18nInfo.pref} system=${i18nInfo.systemLocale}`,
   );
 }
 
