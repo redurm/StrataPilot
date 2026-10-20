@@ -237,6 +237,30 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   valid JSON, and the tokens were banked. The new `test/usage-ledger.test.js` case pins both halves
   anyway (tokens banked, text undamaged) because the two scanners share this one helper.
 
+- **A tab whose pi never started looked alive, and the UI said `unknown error` when pi died** - two
+  separate holes in `lib/pi-process.js`, both about what happens when the child is gone.
+  - A spawn failure (`ENOENT`, `EACCES`) fires `'error'` and **not** `'exit'`, and the old handler only
+    logged. `exited` stayed false, so `alive` kept answering `true` for a process that never started:
+    `spawnTab()` returned `{ ok: true }`, the renderer believed the tab was live, and every `pi:cmd`
+    then waited the **full 120 s default timeout** - the interface looked frozen rather than broken. The
+    zombie also stayed in the `processes` map, so `pi:alive` reported it and a storage cleanup refused
+    to delete a session file nothing was writing to, and the **Restart** button never appeared because
+    it only shows while the tab's process is known to be dead. The handler now marks the process
+    exited, settles every in-flight command, and emits `exit` (once - `emitExit()`), so `main.js`
+    removes the tab and the renderer can offer Restart.
+  - Pending commands were stored with `reject` aliased to `resolve`, so the exit path "rejected" by
+    resolving with an **`Error` instance** - a value with `message` and no `success`, no `error`, no
+    `command`. `main.js` forwards it verbatim, and all 34 `res.error || '...'` call sites in the
+    renderer therefore printed `unknown error` for the single most common real failure, the pi process
+    dying mid-session, while the log line right above said exactly why. There is now one
+    `settlePending()` producing the same envelope every other failure in the file uses
+    (`{ success:false, error, exited:true }`), and the `reject` alias is gone.
+  The exit note in the transcript distinguishes the two cases (`pi process failed to start: …` vs
+  `pi process exited (code=… signal=…)`), the `[pi exit tab=…]` log line carries the spawn error, and
+  `stdout`/`stderr` got `'error'` listeners - they had none, so a stream error was an uncaught
+  exception. Covered by four cases in `test/pi-process.test.js`, including one that asserts a command
+  on a dead process answers in well under the timeout instead of waiting it out.
+
 ### Changed
 
 - **The README now starts from a fresh clone instead of from the feature list.** A first-time user used to

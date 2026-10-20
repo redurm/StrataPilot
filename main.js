@@ -479,11 +479,14 @@ function spawnTab({ tabId, cwd, args = [], env = {} }) {
     send('pi:log', { tabId, text });
   });
   proc.on('exit', (info) => {
-    // A tab's pi dying is often what the user perceives as "the UI crashed".
+    // A tab's pi dying is often what the user perceives as "the UI crashed". A spawn failure
+    // arrives here too, with code/signal null and `error` set - without that the line reads
+    // `code=null signal=null` and the reason (ENOENT, EACCES) is nowhere in the log.
     console.error(
-      `[pi exit tab=${tabId}] code=${info && info.code} signal=${info && info.signal} stderrTail=${JSON.stringify(
-        String((info && info.stderr) || '').slice(-500),
-      )}`,
+      `[pi exit tab=${tabId}] code=${info && info.code} signal=${info && info.signal}` +
+        `${info && info.error ? ` error=${info.error}` : ''} stderrTail=${JSON.stringify(
+          String((info && info.stderr) || '').slice(-500),
+        )}`,
     );
     processes.delete(tabId);
     send('pi:exit', { tabId, ...info });

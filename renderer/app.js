@@ -7183,7 +7183,7 @@ function wireUi() {
     handleRecord(tab, record);
   });
 
-  api.on('pi:exit', ({ tabId, code, signal, stderr }) => {
+  api.on('pi:exit', ({ tabId, code, signal, stderr, error }) => {
     const tab = state.tabs.get(tabId);
     if (!tab) return;
     tab.alive = false;
@@ -7192,7 +7192,13 @@ function wireUi() {
     tab.compacting = false; // a dead process must not stall the serial queue
     tab.retrying = null;
     tab.compactStartedAt = 0;
-    pushNote(tab, `pi process exited (code=${code} signal=${signal})${stderr ? `\n${stderr.slice(-1500)}` : ''}`, 'error');
+    pushNote(
+      tab,
+      error
+        ? `pi process failed to start: ${error}`
+        : `pi process exited (code=${code} signal=${signal})${stderr ? `\n${stderr.slice(-1500)}` : ''}`,
+      'error',
+    );
     renderTabs();
     renderComposerState();
     renderOpenSessions();
