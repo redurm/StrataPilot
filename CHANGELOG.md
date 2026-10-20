@@ -7,6 +7,16 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
 
 ## [Unreleased]
 
+Nothing unreleased. The rule this file follows (and `test/release-hygiene.test.js` enforces): a PR
+adds its entry under `Unreleased` and never touches `package.json`; cutting a release moves the
+`Unreleased` block under a dated version heading, bumps `package.json` / `package-lock.json` to match,
+and leaves an empty `Unreleased` behind. Parallel PRs all editing `Unreleased` conflict harmlessly
+(it is append-only); parallel PRs all editing the version would fight over the same line.
+
+## [0.2.0] - 2026-10-20
+
+The first release with packaging, the Strata monitor, the token ledger, scheduled jobs and the
+interface language. Everything below is relative to 0.1.0.
 ### Fixed
 
 - **The Strata monitor kept the labels of the language it was first opened in** - the card titles, the state badges and the Decode/Prefill subs are baked in with `tr()` when `buildMonitorCards()` runs, and that function returns early once `monitor.built` is set. The invalidation lived inside `if (!els.monitorView.classList.contains('hidden'))`, so a language change taken from Settings - the normal path, with the panel closed - never invalidated anything, and reopening the monitor later showed the old language forever. The flag is now cleared unconditionally: an open panel rebuilds immediately, a closed one on the next `openMonitor()` (#30).
