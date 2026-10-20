@@ -190,7 +190,11 @@ function fmtBytes(n) {
 function toast(message, kind = 'info', timeoutMs = 6000) {
   const node = document.createElement('div');
   node.className = `toast ${kind === 'info' ? '' : kind}`.trim();
-  node.textContent = message;
+  // #32: translated here, once, instead of at every call site. tr() falls back to the key, so a call
+  // that already wraps in tr() is unaffected, and a bare toast('saved') stops being English-only for
+  // zh users as soon as the catalog has the entry. test/toast-i18n.test.js then requires every literal
+  // toast message to have an entry, so the surface cannot quietly widen again.
+  node.textContent = tr(message);
   els.toasts.appendChild(node);
   setTimeout(() => node.remove(), timeoutMs);
 }
