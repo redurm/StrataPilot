@@ -13,6 +13,10 @@ name: Release build
 # one platform does not hide the others.
 #
 # Run it by hand from the Actions tab (Run workflow), or push a tag like v0.2.0.
+#
+# --publish never is not decoration: on a tag push electron-builder v26 starts an implicit GitHub
+# Release publish, and without GH_TOKEN that fails AFTER every artifact has been built - the step then
+# exits 1, upload-artifact never runs, and the release ends up with nothing to download (#38).
 
 on:
   workflow_dispatch:
@@ -44,13 +48,13 @@ jobs:
         run: npm test
       - name: build (Windows)
         if: matrix.os == 'windows-latest'
-        run: npx electron-builder --win --x64
+        run: npx electron-builder --win --x64 --publish never
       - name: build (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: npx electron-builder --linux --x64
+        run: npx electron-builder --linux --x64 --publish never
       - name: build (macOS)
         if: matrix.os == 'macos-latest'
-        run: npx electron-builder --mac --x64 --arm64
+        run: npx electron-builder --mac --x64 --arm64 --publish never
       - name: what came out
         shell: bash
         run: ls -la dist
