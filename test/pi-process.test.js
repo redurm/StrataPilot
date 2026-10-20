@@ -144,16 +144,73 @@ test('command() times out when no matching response arrives', async () => {
   await exited;
 });
 
-test('pending commands settle with "pi process exited" when the child dies', async () => {
+test('pending commands settle with the failure envelope when the child dies (#4)', async () => {
   const proc = startStub();
   const exited = once(proc, 'exit');
   const res = await proc.command('boom');
-  // pending entries store { resolve, reject: resolve }: the exit settles the
-  // promise with an Error value (callers check .success / .message)
-  assert.ok(res instanceof Error, `expected an Error value, got ${JSON.stringify(res)}`);
-  assert.match(res.message, /pi process exited/);
+  // every other failure in this file resolves with { success:false, error }; the renderer reads
+  // `.error` at 30+ call sites, so the exit path must use the same shape and not an Error value
+  assert.ok(!(res instanceof Error), `expected a plain response envelope, got an Error: ${res && res.message}`);
+  assert.equal(res.type, 'response');
+  assert.equal(res.command, 'boom');
+  assert.equal(res.success, false);
+  assert.equal(res.exited, true);
+  assert.match(res.error, /pi process exited \(code=3 signal=null\)/);
   const [info] = await exited;
   assert.equal(info.code, 3);
+});
+
+test('a spawn error marks the process dead and settles pending commands at once (#3)', async () => {
+  const proc = new PiRpcProcess({
+    id: 'enoent',
+    cwd: __dirname,
+    invocation: { nodePath: 'definitely-not-a-real-binary', cliPath: STUB, nodeArgPrefix: [], runAsNode: false },
+  });
+  const logs = [];
+  proc.on('log', (text) => logs.push(text));
+  const exited = once(proc, 'exit');
+  proc.start();
+
+  const [info] = await exited;
+  assert.equal(info.code, null);
+  assert.match(info.error, /ENOENT/);
+  assert.ok(logs.some((text) => /spawn error:.*ENOENT/.test(text)), `expected a spawn error log, got ${JSON.stringify(logs)}`);
+  assert.equal(proc.alive, false, 'a process that never started must not report itself alive');
+
+  // the point of the fix: the next command answers now, not after the full 120 s default timeout
+  const startedAt = Date.now();
+  const res = await proc.command('get_state', {}, 30000);
+  assert.ok(Date.now() - startedAt < 500, `command() waited ${Date.now() - startedAt}ms on a dead process`);
+  assert.equal(res.success, false);
+  assert.equal(res.command, 'get_state');
+  assert.match(res.error, /not running/);
+});
+
+test('a command already in flight is settled by the spawn error, not left to time out (#3)', async () => {
+  const proc = new PiRpcProcess({
+    id: 'enoent2',
+    cwd: __dirname,
+    invocation: { nodePath: 'definitely-not-a-real-binary', cliPath: STUB, nodeArgPrefix: [], runAsNode: false },
+  });
+  proc.start();
+  const startedAt = Date.now();
+  const res = await proc.command('get_state', {}, 30000);
+  assert.ok(Date.now() - startedAt < 5000, `command() waited ${Date.now() - startedAt}ms`);
+  assert.equal(res.success, false);
+  assert.match(res.error, /failed to start|exited/);
+  assert.equal(proc.pending.size, 0, 'nothing may stay pending once the process is gone');
+});
+
+test('exit is emitted once even when a spawn failure is followed by an exit event (#3)', async () => {
+  const proc = startStub();
+  let exits = 0;
+  proc.on('exit', () => exits++);
+  const exited = once(proc, 'exit');
+  proc.dispose();
+  await exited;
+  proc.emitExit({ code: 0, signal: null });
+  proc.emitExit({ code: 0, signal: null });
+  assert.equal(exits, 1, `expected exactly one exit event, got ${exits}`);
 });
 
 test('command() on a process that was never started resolves as not running', async () => {
