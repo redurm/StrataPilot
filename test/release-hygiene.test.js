@@ -57,3 +57,21 @@ test('Unreleased exists and holds no version heading of its own', () => {
   const block = changelog.slice(start, next === -1 ? changelog.length : next);
   assert.ok(!/^\d+\.\d+\.\d+/.test(block.replace('## [Unreleased]', '').trim()) || block.includes('The rule this file follows'), 'a version heading leaked into the Unreleased block');
 });
+
+test('the packaging config can actually produce artifacts (#38)', () => {
+  // electron-builder needs a maintainer email for the .deb control file; a bare string author is legal
+  // JSON and fails only on Linux, which is how this shipped broken
+  const author = pkg.author;
+  assert.equal(typeof author, 'object', 'package.json author must be { name, email }, not a bare string');
+  assert.ok(author && author.email && /@/.test(author.email), 'package.json author has no email: the .deb build fails');
+  assert.ok(author && author.name, 'package.json author has no name');
+  // a tag push makes electron-builder v26 publish to GitHub Releases by default; without GH_TOKEN that
+  // error lands after every artifact is built, so the job fails and nothing gets uploaded
+  assert.strictEqual(pkg.build.publish, null, 'build.publish must be null: the workflow uploads artifacts itself');
+  const yml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const calls = yml.match(/npx electron-builder.*/g) || [];
+  assert.ok(calls.length >= 3, `expected three electron-builder invocations, found ${calls.length}`);
+  for (const call of calls) {
+    assert.ok(/--publish\s+never/.test(call), `release.yml is missing --publish never: ${call.trim()}`);
+  }
+});
