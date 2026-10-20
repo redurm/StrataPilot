@@ -60,6 +60,8 @@ const api = {
   cronSave: (jobs) => ipcRenderer.invoke('cron:save', { jobs }),
   cronPreview: (schedule) => ipcRenderer.invoke('cron:preview', { schedule }),
   cronRunNow: (id) => ipcRenderer.invoke('cron:run-now', { id }),
+  // #9: main waits for this before it writes lastRun - a fire the renderer never took is not a run
+  cronAck: (key) => ipcRenderer.send('cron:ack', { key }),
 
   /* diagnostics -------------------------------------------------------- */
   /** Build the report asked for by docs/TROUBLESHOOTING.md (queue snapshot comes from us). */

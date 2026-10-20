@@ -187,3 +187,39 @@ test('schedulePreset: round-trips - the expression the builder builds reads back
     assert.ok(isValidCron(expression), expression);
   }
 });
+
+/* ---- #9: a fire is not a run until the renderer acks it ---- */
+
+const { fireKey, commitFire, rearmAfterUnackedFire, CRON_ACK_MS } = require('../lib/cron');
+
+test('fireKey identifies one fire attempt, and two attempts are two keys', () => {
+  const a = fireKey('job-1', '2026-10-20T01:30:00.000Z');
+  assert.equal(a, fireKey('job-1', '2026-10-20T01:30:00.000Z'));
+  assert.notEqual(a, fireKey('job-1', '2026-10-20T01:31:00.000Z'));
+  assert.notEqual(a, fireKey('job-2', '2026-10-20T01:30:00.000Z'));
+  assert.ok(CRON_ACK_MS > 0 && CRON_ACK_MS < 60000, `ack window must be short but not silly: ${CRON_ACK_MS}`);
+});
+
+test('commitFire moves lastRun and re-arms nextRun from the ack time, not from the fire time', () => {
+  const job = { id: 'job-1', schedule: '30 9 * * *', name: 'morning', lastRun: '2026-10-19T01:30:00.000Z', nextRun: '2026-10-20T01:30:00.000Z' };
+  const firedAt = '2026-10-20T01:30:00.000Z';
+  const ackedAt = at(2026, 10, 20, 9, 31); // the renderer took 11 s (a reload was in flight)
+  const next = commitFire(job, firedAt, ackedAt);
+  assert.equal(next.lastRun, firedAt, 'the run is recorded with the time it was fired');
+  assert.equal(next.nextRun, at(2026, 10, 21, 9, 30).toISOString(), 'the next run is tomorrow 09:30, not a re-fire of today');
+  assert.notEqual(next, job, 'the helper returns a new object; it does not mutate the caller job');
+  assert.equal(job.lastRun, '2026-10-19T01:30:00.000Z', 'the original is untouched');
+});
+
+test('rearmAfterUnackedFire leaves lastRun alone, so the missed run stays visible (#9)', () => {
+  const job = { id: 'job-1', schedule: '30 9 * * *', name: 'morning', lastRun: '2026-10-19T01:30:00.000Z', nextRun: '2026-10-20T01:30:00.000Z' };
+  const next = rearmAfterUnackedFire(job, at(2026, 10, 20, 9, 31));
+  assert.equal(next.lastRun, '2026-10-19T01:30:00.000Z', 'an unacked fire must NOT count as a run');
+  assert.equal(next.nextRun, at(2026, 10, 21, 9, 30).toISOString(), 're-armed so the 30s tick cannot fire the same prompt four times');
+});
+
+test('an invalid schedule cannot throw the scheduler out of its tick', () => {
+  const job = { id: 'bad', schedule: 'not a cron', lastRun: null, nextRun: '2026-10-20T01:30:00.000Z' };
+  assert.equal(commitFire(job, '2026-10-20T01:30:00.000Z', at(2026, 10, 20, 9, 30)).nextRun, null);
+  assert.equal(rearmAfterUnackedFire(job, at(2026, 10, 20, 9, 30)).nextRun, null);
+});
