@@ -475,6 +475,29 @@ async function smokeExportScenario() {
     console.log('[smoke-export] no export output path (smokeExportOut empty)');
     return;
   }
+  if (tab.ephemeral) {
+    // the default smoke tab runs pi with --no-session, so there is no file to export; run with
+    // STRATAPILOT_SMOKE_PERSIST=1 to exercise this path for real
+    console.log('[smoke-export] SKIP ephemeral tab, no session file to export (use STRATAPILOT_SMOKE_PERSIST=1)');
+    return;
+  }
+  // runExport refuses to export while the tab runs or compacts (pi is still writing the session file,
+  // and a mid-write export is racy) - and the prompt scenario keeps this tab busy for seconds. Waiting
+  // for idle is what makes this scenario exercise the export path at all; before that it logged
+  // ok=false error="no export result recorded", which reads like a product failure but was a refusal,
+  // and the export feature went untested in every run.
+  const idle = Date.now() + 90000;
+  while (Date.now() < idle && (tab.compacting || isWorking(tab) || !tab.sessionPath)) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  if (!tab.sessionPath) {
+    console.log('[smoke-export] FAIL no session file after 90s, so there is nothing to export');
+    return;
+  }
+  if (tab.compacting || isWorking(tab)) {
+    console.log('[smoke-export] FAIL still busy after 90s, so the export path was never exercised');
+    return;
+  }
   els.input.value = `/export ${out}`;
   await send(); // send() awaits runSlashCommand, so the RPC is done when it returns
   const result = tab.lastExport || { ok: false, error: 'no export result recorded' };
@@ -485,8 +508,9 @@ async function smokeExportScenario() {
     exists = !!(stat && !stat.error && !stat.isDirectory);
     bytes = exists ? stat.size : 0;
   }
+  const fail = !result.ok || !exists || bytes < 1024;
   console.log(
-    `[smoke-export] ok=${result.ok} path=${result.path || ''} exists=${exists} bytes=${bytes}${result.error ? ` error=${JSON.stringify(result.error)}` : ''}`,
+    `[smoke-export] ok=${result.ok} path=${result.path || ''} exists=${exists} bytes=${bytes}${result.error ? ` error=${JSON.stringify(result.error)}` : ''}${fail ? ' FAIL the exported HTML is missing or empty' : ''}`,
   );
 }
 
