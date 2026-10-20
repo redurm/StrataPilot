@@ -17,6 +17,9 @@ and leaves an empty `Unreleased` behind. Parallel PRs all editing `Unreleased` c
 
 The first release with packaging, the Strata monitor, the token ledger, scheduled jobs and the
 interface language. Everything below is relative to 0.1.0.
+### Changed
+
+- **The smoke scenarios left `renderer/app.js`** - the 25 `smoke*Scenario()` functions (~1 200 lines, 15% of the file) are now `renderer/smoke.js`, and `app.js` fetches that file only when the app was started with `STRATAPILOT_SMOKE=1`. A normal launch no longer parses test scaffolding, and the file that holds the real UI code went from 8 545 to 7 371 lines. `test/smoke-split.test.js` pins the arrangement: no scenario may be defined in `app.js`, `index.html` may not reference `smoke.js` (a `<script src>` would put the scaffolding back into every launch), `smoke.js` must stay a classic script because it reads `app.js` globals from the shared scope, and `app.js` may not mention `smoke` on more than 20 lines (#12).
 ### Fixed
 
 - **The Strata monitor kept the labels of the language it was first opened in** - the card titles, the state badges and the Decode/Prefill subs are baked in with `tr()` when `buildMonitorCards()` runs, and that function returns early once `monitor.built` is set. The invalidation lived inside `if (!els.monitorView.classList.contains('hidden'))`, so a language change taken from Settings - the normal path, with the panel closed - never invalidated anything, and reopening the monitor later showed the old language forever. The flag is now cleared unconditionally: an open panel rebuilds immediately, a closed one on the next `openMonitor()` (#30).
