@@ -12,6 +12,7 @@ const { section } = require('../scripts/release-notes.js');
 const ROOT = path.join(__dirname, '..');
 const CHANGELOG = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+const NL = String.fromCharCode(10);
 
 test('a version section is returned whole and stops at the next heading', () => {
   const notes = section(CHANGELOG, '0.2.1');
@@ -29,9 +30,36 @@ test('an unknown version returns nothing instead of an empty release', () => {
   assert.equal(section(CHANGELOG, ''), '');
 });
 
-test('the Unreleased placeholder text is never published as release notes', () => {
-  // the rule text lives under Unreleased; publishing it would put "Nothing unreleased" on a real release
-  assert.equal(section(CHANGELOG, 'Unreleased'), '');
+test('a version section that still carries the placeholder is refused, not published', () => {
+  // what actually goes wrong at release time: folding moves the Unreleased block under a version
+  // heading and the "Nothing unreleased." line comes with it, so the release would say that
+  const synthetic = [
+    '## [Unreleased]',
+    '',
+    '### Fixed',
+    '',
+    '- **something real** - details (#9).',
+    '',
+    '## [9.9.9] - 2026-01-01',
+    '',
+    'Nothing unreleased. The rule this file follows.',
+    '',
+  ].join(NL);
+  assert.equal(section(synthetic, '9.9.9'), '');
+
+  // the same file folded the right way does produce notes
+  const folded = [
+    '## [Unreleased]',
+    '',
+    'Nothing unreleased.',
+    '',
+    '## [9.9.9] - 2026-01-01',
+    '',
+    '### Fixed',
+    '',
+    '- **something real** - details (#9).',
+  ].join(NL);
+  assert.match(section(folded, '9.9.9'), /something real/);
 });
 
 test('the version in package.json always has release notes ready', () => {

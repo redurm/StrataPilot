@@ -953,12 +953,38 @@ async function smokeI18nScenario() {
   const before = read();
 
   // the same path the user takes: open Settings, pick the dropdown, press Save
+  //
+  // Other scenarios run at the same time and open their own dialogs (settings, storage, the cron
+  // editor, the setup wizard), and only one modal can be open at a time. This scenario used to open
+  // Settings regardless: the dialog next door had already torn it down, the language dropdown was not
+  // in the document, `options` came back empty, the switch silently did nothing, and the scenario
+  // printed a FAIL about the monitor keeping old labels - a false alarm that read like a regression of
+  // #30 and cost two debugging passes. Wait for the modal slot, and say SKIP when it never frees up.
+  const free = (limitMs) => {
+    const until = Date.now() + limitMs;
+    return new Promise((resolve) => {
+      const check = () => resolve(!modalOpen || Date.now() >= until);
+      if (!modalOpen) return check();
+      const timer = setInterval(() => {
+        if (!modalOpen || Date.now() >= until) {
+          clearInterval(timer);
+          check();
+        }
+      }, 250);
+    });
+  };
+
   const pick = async (value) => {
+    if (!(await free(20000))) return null; // another scenario still holds a dialog
     const opening = openSettingsModal();
     await new Promise((resolve) => setTimeout(resolve, 250));
     const sel = document.querySelector('[data-setting="language"]');
-    const options = sel ? [...sel.options].map((option) => option.value) : [];
-    if (sel) sel.value = value;
+    if (!sel) {
+      await opening.catch(() => {});
+      return null;
+    }
+    const options = [...sel.options].map((option) => option.value);
+    sel.value = value;
     const save = [...document.querySelectorAll('.settings-modal .modal-actions button')].find((button) => button.textContent === tr('Save'));
     if (save) save.click();
     await opening;
@@ -979,6 +1005,11 @@ async function smokeI18nScenario() {
   };
 
   const options = await pick('zh-TW');
+  if (options === null) {
+    console.log('[smoke-i18n] SKIP another scenario held a dialog open for 20s, so the language switch could not be exercised (run with fewer scenarios, or fix the dialog race)');
+    if (!monitorWasOpen) closeMonitor();
+    return;
+  }
   await reopenMonitor();
   const tw = read();
   await api.smokeShot('i18n-zh-TW');
