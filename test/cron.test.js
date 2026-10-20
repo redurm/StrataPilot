@@ -223,3 +223,44 @@ test('an invalid schedule cannot throw the scheduler out of its tick', () => {
   assert.equal(commitFire(job, '2026-10-20T01:30:00.000Z', at(2026, 10, 20, 9, 30)).nextRun, null);
   assert.equal(rearmAfterUnackedFire(job, at(2026, 10, 20, 9, 30)).nextRun, null);
 });
+
+/* ---- #13: the jobs list is bounded, and the schedule text can be translated ---- */
+
+const { sanitizeJobs, MAX_JOBS, MAX_PROMPT_CHARS } = require('../lib/cron');
+
+test('sanitizeJobs: the shape was validated but nothing was bounded (#13)', () => {
+  const base = { schedule: '30 9 * * *', prompt: 'do the thing' };
+  assert.equal(sanitizeJobs([base]).length, 1);
+  assert.throws(() => sanitizeJobs(new Array(MAX_JOBS + 1).fill(base)), /too many jobs/);
+  assert.throws(() => sanitizeJobs([{ ...base, prompt: 'p'.repeat(MAX_PROMPT_CHARS + 1) }]), /prompt is longer than/);
+  assert.throws(() => sanitizeJobs([{ ...base, name: 'n'.repeat(200) }]), /name is longer than/);
+  assert.throws(() => sanitizeJobs([{ ...base, cwd: 'c'.repeat(600) }]), /cwd is longer than/);
+  assert.throws(() => sanitizeJobs([{ ...base, target: `session:${'s'.repeat(600)}` }]), /target is longer than|target must be/);
+  assert.throws(() => sanitizeJobs([{ ...base, schedule: 'x'.repeat(300) }]), /schedule is longer than/);
+  // the message used to interpolate cron.parseCron.name; a function name is not user-facing text
+  let message = '';
+  try {
+    sanitizeJobs([{ schedule: 'nope', prompt: 'x' }]);
+  } catch (err) {
+    message = err.message;
+  }
+  assert.match(message, /5-field cron expression \(minute hour day month weekday\)/);
+  assert.ok(!message.includes('parseCron'), `the message must not leak an internal name: ${message}`);
+});
+
+test('describeCron: a caller can translate every phrase, and the fallback still fills the holes (#13)', () => {
+  const seen = [];
+  const tr = (text, params) => {
+    seen.push(text);
+    let out = text === 'every weekday' ? '每個工作日' : text;
+    for (const [name, value] of Object.entries(params || {})) out = out.split(`{${name}}`).join(String(value));
+    return out;
+  };
+  assert.equal(describeCron('30 9 * * 1-5', tr), '每個工作日, at 09:30');
+  assert.ok(seen.includes('every weekday'), 'the phrase must reach the translator');
+  assert.ok(seen.includes('at {time}'), 'the time is a phrase too, not string concatenation');
+  // without a translator the English source is returned, with the {tokens} still filled
+  assert.equal(describeCron('30 9 * * 1-5'), 'every weekday, at 09:30');
+  assert.equal(describeCron('*/15 * * * *'), 'every day, every 15 minutes');
+  assert.match(describeCron('bogus'), /^invalid schedule: /);
+});

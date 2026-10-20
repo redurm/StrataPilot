@@ -737,40 +737,6 @@ function cronStop() {
   cronTimer = null;
 }
 
-/** Validate what the Jobs dialog sends; returns the sanitised list or throws with a clear message. */
-function sanitizeJobs(input) {
-  if (!Array.isArray(input)) throw new Error('jobs must be a list');
-  const out = [];
-  input.forEach((job, index) => {
-    const source = job && typeof job === 'object' ? job : {};
-    const schedule = String(source.schedule || '').trim();
-    const prompt = String(source.prompt || '').trim();
-    if (!schedule) throw new Error(`job ${index + 1}: schedule is empty`);
-    if (!cron.isValidCron(schedule)) {
-      throw new Error(`job ${index + 1}: "${schedule}" is not a 5-field cron expression (${cron.parseCron.name}: minute hour day month weekday)`);
-    }
-    if (!prompt) throw new Error(`job ${index + 1}: prompt is empty`);
-    const target = String(source.target || 'new-tab').trim();
-    if (!['new-tab', 'tab:', 'session:'].some((prefix) => target === 'new-tab' || target.startsWith(prefix))) {
-      throw new Error(`job ${index + 1}: target must be new-tab, tab:<id> or session:<path>`);
-    }
-    out.push({
-      id: String(source.id || `job-${Date.now().toString(36)}-${index}`),
-      name: String(source.name || '').trim() || schedule,
-      schedule,
-      prompt,
-      target,
-      cwd: String(source.cwd || '').trim(),
-      ephemeral: !!source.ephemeral,
-      enabled: source.enabled !== false,
-      createdAt: source.createdAt || new Date().toISOString(),
-      lastRun: source.lastRun || null,
-      nextRun: null,
-    });
-  });
-  return out;
-}
-
 /**
  * `http://host/v1` + `/metrics` -> `http://host/metrics`, the way the Monitor has always built it.
  * Returning null is what the handlers report as "invalid base url".
@@ -1005,7 +971,7 @@ function registerIpc() {
     // "every weekday, at 09:30" instead of making the user decode "30 9 * * 1-5"
     jobs: jobList().map((job) => {
       try {
-        return { ...job, description: cron.describeCron(job.schedule) };
+        return { ...job, description: cron.describeCron(job.schedule, tr) };
       } catch {
         return { ...job, description: '' };
       }
@@ -1015,7 +981,7 @@ function registerIpc() {
 
   ipcMain.handle('cron:save', (_event, { jobs } = {}) => {
     try {
-      const clean = sanitizeJobs(jobs);
+      const clean = cron.sanitizeJobs(jobs);
       saveJobs(clean);
       cronRecompute('saved');
       console.log(`[cron] saved ${clean.length} job(s) from the dialog`);
@@ -1032,7 +998,7 @@ function registerIpc() {
       return {
         ok: true,
         valid: true,
-        description: cron.describeCron(schedule),
+        description: cron.describeCron(schedule, tr),
         preset: cron.schedulePreset(schedule),
         nextRun: next ? next.toISOString() : null,
       };

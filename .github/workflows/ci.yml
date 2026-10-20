@@ -58,6 +58,11 @@ jobs:
           for f in main.js preload.js lib/*.js renderer/*.js test/*.js scripts/*.js; do
             [ -f "$f" ] && node --check "$f"
           done
+      # no third-party linter (the app has zero runtime deps and the dev surface is deliberately
+      # small), but the one bug class a linter would have caught - a block dedented to column 0 while
+      # still inside another scope, which is what broke the smoke screenshot in #5 - is checked here
+      - name: structural lint (dedented block starts)
+        run: npm run lint
 
   pi-install:
     name: pi install smoke (${{ matrix.os }}, no model needed)
