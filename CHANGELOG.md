@@ -260,6 +260,23 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   `stdout`/`stderr` got `'error'` listeners - they had none, so a stream error was an uncaught
   exception. Covered by four cases in `test/pi-process.test.js`, including one that asserts a command
   on a dead process answers in well under the timeout instead of waiting it out.
+- **The diagnostics report could paste a credential into a public issue** - `lib/diagnostics.js` is the
+  module whose whole job is "this text is about to be pasted into a public GitHub issue", and two of its
+  rules did not hold. `isSecretKey()` tested the metadata exception **first**, and that list ended in
+  `(…|name|…|header|headers)$`, so a secret key that merely *ended* in one of those words was treated as
+  metadata: `authorization_header`, `api_key_name` and `password_name` all went through verbatim (the
+  first of those reaches the report through `jsonBlock(data.strata.engineConfig)` and
+  `jsonBlock(data.pi.modelsJson)`). The order is now secret-first, and `name`/`names`/`header`/`headers`
+  are out of the exception list - `token_type: "Bearer"` stays, `authorization_header: "Bearer sk-…"`
+  does not, which is the module's own "a false positive costs nothing, a leaked key costs a credential
+  rotation" rule applied to itself. Second: `scrubInline()` only knew the `Bearer …` and `key = value`
+  shapes, so a bare token in free text (`model loaded with key sk-…`, `jwt eyJ…`) was untouched. There is
+  now a shared `scrubValue()` over the credential shapes (`sk-…`, `gh[pousr]_…`, `xox[baprs]-…`,
+  `AIza…`, `AKIA…`, JWTs), used by `scrubInline()`, by the `redactText()` line fallback, and by `redact()`
+  for every string leaf - so a credential under a harmless-looking key (`{"note":"sk-…"}`) is scrubbed
+  too. Six cases in `test/diagnostics.test.js`, including one that runs a payload carrying an `sk-…`, a
+  JWT, a `ghp_…` and an `authorization_header` through `format()` and asserts none of them appear in the
+  text.
 
 ### Changed
 

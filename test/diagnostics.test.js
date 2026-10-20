@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { redact, redactText, scrubInline, readConfig, tail, format, REDACTED } = require('../lib/diagnostics');
+const { redact, redactText, scrubInline, isSecretKey, readConfig, tail, format, REDACTED } = require('../lib/diagnostics');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-diag-'));
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -205,6 +205,86 @@ test('scrubInline(): bearer headers, JSON keys and key: value pairs are all mask
   assert.equal(scrubInline('{"apiKey":"k1","model":"qwen"}'), '{"apiKey":"***","model":"qwen"}');
   assert.equal(scrubInline('--api-key topsecret --port 8081'), '--api-key *** --port 8081');
   assert.equal(scrubInline('nothing sensitive here'), 'nothing sensitive here');
+});
+
+test('isSecretKey(): a key that merely ENDS in a metadata word is still a secret (#7)', () => {
+  // the old order let METADATA_KEY_RE win first, and its list ended in `…|name|…|header|headers|$`,
+  // so every one of these was treated as metadata and pasted into the report verbatim
+  for (const key of ['authorization', 'authorization_header', 'api_key_name', 'token', 'access_token', 'x-api-key', 'cookie', 'password_name', 'secret_key']) {
+    assert.equal(isSecretKey(key), true, `isSecretKey(${JSON.stringify(key)}) must be true`);
+  }
+  // metadata ABOUT such a field stays, or the report stops being usable
+  for (const key of ['token_type', 'key_type', 'auth_kind', 'api_key_count', 'secret_supported', 'password_enabled']) {
+    assert.equal(isSecretKey(key), false, `isSecretKey(${JSON.stringify(key)}) must stay false`);
+  }
+  // and an ordinary name is untouched
+  for (const key of ['model_name', 'baseUrl', 'max_context', 'name']) {
+    assert.equal(isSecretKey(key), false, `isSecretKey(${JSON.stringify(key)}) must stay false`);
+  }
+});
+
+test('redact(): authorization_header and friends no longer survive as a literal credential (#7)', () => {
+  const out = redact({ headers: { authorization_header: `Bearer sk-${'b'.repeat(24)}` }, token_type: 'Bearer' });
+  assert.equal(out.headers.authorization_header, REDACTED);
+  assert.equal(out.token_type, 'Bearer', 'metadata about the field is not the credential');
+  assert.ok(!JSON.stringify(out).includes(`sk-${'b'.repeat(24)}`));
+});
+
+test('redact(): a credential-shaped value under a harmless-looking key is scrubbed too (#7)', () => {
+  const sk = `sk-${'b'.repeat(24)}`;
+  const out = redact({ note: `loaded with key ${sk}`, model: 'qwen' });
+  assert.ok(!JSON.stringify(out).includes(sk));
+  assert.equal(out.model, 'qwen', 'ordinary values are kept verbatim');
+});
+
+test('scrubInline(): bare tokens in free text are scrubbed, not just "Bearer …" and "key = value" (#7)', () => {
+  // built from parts on purpose: a literal token in the source trips GitHub's push protection, and
+  // these are shapes, not credentials
+  const shapes = [
+    [`model loaded with key sk-${'b'.repeat(24)}`, `sk-${'b'.repeat(24)}`],
+    [`jwt eyJ${'c'.repeat(20)}.eyJ${'d'.repeat(12)}.eee`, `eyJ${'c'.repeat(20)}.eyJ${'d'.repeat(12)}.eee`],
+    [`pushed with ghp_${'a'.repeat(24)}`, `ghp_${'a'.repeat(24)}`],
+    [`slack xoxb-${'1'.repeat(12)}-${'2'.repeat(12)}-${'f'.repeat(16)}`, `xoxb-${'1'.repeat(12)}-${'2'.repeat(12)}-${'f'.repeat(16)}`],
+    [`google AIza${'e'.repeat(35)}`, `AIza${'e'.repeat(35)}`],
+    [`aws AKIA${'F'.repeat(16)}`, `AKIA${'F'.repeat(16)}`],
+  ];
+  for (const [input, secret] of shapes) {
+    const out = scrubInline(input);
+    assert.ok(!out.includes(secret), `not scrubbed: ${input} -> ${out}`);
+    assert.ok(out.includes(REDACTED), `no marker left in: ${out}`);
+  }
+});
+
+test('format(): no credential shape survives the whole report (#7)', () => {
+  const jwt = `eyJ${'c'.repeat(20)}.eyJ${'d'.repeat(12)}.eee`;
+  const sk = `sk-${'b'.repeat(24)}`;
+  const ghp = `ghp_${'a'.repeat(24)}`;
+  const leaky = {
+    ...SAMPLE,
+    strata: {
+      ...SAMPLE.strata,
+      healthText: `{"max_context":262144,"auth":"${jwt}"}`,
+      modelsText: `default key ${sk}`,
+      engineConfig: { path: 'E', ok: true, data: { headers: { authorization_header: `Bearer ${sk}` } } },
+    },
+    pi: { ...SAMPLE.pi, modelsJson: { path: 'M', ok: true, data: { providers: { strata: { note: ghp } } } } },
+    log: { path: 'L:/log', lines: [`[pi stderr] using ${sk} for the run`], note: '' },
+  };
+  const text = format(leaky);
+  for (const secret of [jwt, sk, ghp]) {
+    assert.ok(!text.includes(secret), `leaked into the report: ${secret}`);
+  }
+  // the report still says what it needs to say
+  assert.ok(text.includes('max_context'));
+  assert.ok(text.includes('[pi stderr] using'));
+});
+
+test('redactText(): a bare token on a line that names no key still goes (#7)', () => {
+  const sk = `sk-${'b'.repeat(24)}`;
+  const out = redactText(`port 8081\nusing ${sk} now\nmodel_name qwen`);
+  assert.ok(out.includes('port 8081'));
+  assert.ok(out.includes('model_name qwen'));
+  assert.ok(!out.includes(sk));
 });
 
 test('format(): empty data still produces a usable report', () => {
