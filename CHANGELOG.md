@@ -277,6 +277,35 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   too. Six cases in `test/diagnostics.test.js`, including one that runs a payload carrying an `sk-…`, a
   JWT, a `ghp_…` and an `authorization_header` through `format()` and asserts none of them appear in the
   text.
+- **The API key went to any address the renderer named, and the renderer could read any file on disk** -
+  `strata:metrics`, `strata:health` and the diagnostics `/health` + `/v1/models` fetches all took a base
+  URL from the renderer and attached `Authorization: Bearer $STRATAPILOT_KEY` to it. The only check was
+  the protocol, and `http:` passed, so one injection point could point the app at a host of an
+  attacker's choosing, read the key off the wire in clear text, and persist that host in `strataUrls` so
+  the key kept going there on every later poll. `fs:read-text` read **any** absolute path with a
+  caller-supplied byte cap (`~/.pi/agent/settings.json` and `models.json` were one call away),
+  `fs:stat-paths` had no bounds, `app:settings-set` was `{ ...loadSettings(), ...patch }` with no key
+  whitelist (so a compromised renderer could rewrite `jobs` and bypass `sanitizeJobs()` entirely), and
+  the window had no `sandbox: true`. Now:
+  - `lib/net-policy.js` decides the key: it travels only to a local / LAN address (loopback, RFC1918,
+    `.local`/`.lan`/`.home`/`.internal`) or to a server the user configured (`strataUrl` /
+    `strataUrls`, matched by **origin**, not by prefix). Everything else is fetched without the key and
+    the log says `[strata] key withheld for <host>: <reason>`; the Monitor line shows
+    `key withheld (add this server in Settings)` rather than letting it read as a mystery. `http:` to a
+    non-local host is refused outright.
+  - `lib/fs-guard.js` confines `fs:read-text` to the sessions folder, userData and folders the user
+    picked in a dialog (main records those as they are chosen) - and the preload binding is gone
+    altogether, because nothing in the renderer ever called it: the channel was pure attack surface.
+    `fs:stat-paths` stays open (drag & drop stats files from anywhere the user drops them from, and it
+    returns metadata only) but denies `~/.pi/agent`, the settings file and the ledger file, and caps one
+    call at 50 paths.
+  - `app:settings-set` accepts only the 14 keys the Settings dialog and the app actually write; anything
+    else is refused and logged, and `jobs` is reachable only through `cron:save` + `sanitizeJobs()`.
+  - `sandbox: true` on the window. Verified rather than assumed: a sandboxed preload still has
+    `contextBridge`, `ipcRenderer` and `webUtils.getPathForFile` (so drag & drop keeps working) while
+    `require('node:fs')` is blocked, and the app boots in smoke mode with no renderer error.
+  `test/net-policy.test.js` pins the whole decision table (8 cases: which hosts count as local, the
+  protocol rule, origin-vs-prefix allowlisting, the read roots, the denied stat targets).
 
 ### Changed
 

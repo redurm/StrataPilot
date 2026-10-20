@@ -33,6 +33,13 @@ in the header opens Strata's web page in a browser):
 - To pin an address: set `strataUrl` (e.g. `{"strataUrl": "http://127.0.0.1:8081/v1"}` in
   `%APPDATA%\StrataPilot\stratapilot_settings.json`)
 - If the server requires an API key: set `STRATAPILOT_KEY` or `STRATA_API_KEY`
+- **Where that key is allowed to go**: it is attached only to a local / LAN address (loopback,
+  `10.x` / `192.168.x` / `172.16-31.x`, `.local` / `.lan` / `.home` / `.internal`) or to a server you
+  configured (`strataUrl` / `strataUrls`). Any other address is fetched **without** the key, plain
+  `http://` to a non-local host is refused outright, and the log records
+  `[strata] key withheld for <host>`. If the Monitor line ends with
+  `key withheld (add this server in Settings)`, add that address under **Settings** (or with
+  `+ add server`) - that is the deliberate opt-in for a remote server.
 - Clicking the URL in the header opens Strata's web page in the default browser
 - When unreachable the header turns red and shows the error (after 3 consecutive failures it marks
 

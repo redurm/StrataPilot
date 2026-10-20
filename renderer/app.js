@@ -4986,7 +4986,10 @@ async function pollMonitor() {
   }
   monitor.failures = 0;
   monitor.lastData = result.data;
-  setMonSrc(`${result.url} · live · updated ${new Date().toLocaleTimeString()}`);
+  // #6: the key only goes to a local/LAN address or to a server listed in Settings. When it was
+  // withheld the cards still render, but the line says so instead of letting the user wonder why an
+  // authenticated endpoint answered like an unauthenticated one.
+  setMonSrc(`${result.url} · live${result.keyWithheld ? ' · key withheld (add this server in Settings)' : ''} · updated ${new Date().toLocaleTimeString()}`);
   renderMonitor(result.data);
 }
 
