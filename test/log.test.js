@@ -130,3 +130,28 @@ test('init() on an unwritable path disables logging instead of throwing', () => 
   assert.doesNotThrow(() => appLog.init(path.join(blocker, 'logs', 'stratapilot.log')));
   assert.doesNotThrow(() => appLog.write('error', 'still running'));
 });
+
+test('rotation does not stat the file on every line (#13)', () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'stratapilot.log');
+  appLog.init(file);
+  const real = fs.statSync;
+  let stats = 0;
+  fs.statSync = function patched(...args) {
+    if (String(args[0] || '').includes('stratapilot.log')) stats += 1;
+    return real.apply(fs, args);
+  };
+  try {
+    for (let i = 0; i < 200; i += 1) appLog.write('info', `line-${i}`);
+  } finally {
+    fs.statSync = real;
+  }
+  assert.ok(stats <= 20, `${stats} stats for 200 lines: the in-memory counter has to carry the common case`);
+  const text = readLog(file);
+  assert.equal(text.split('\n').filter((line) => line.includes('line-')).length, 200, 'every line still landed');
+  fs.appendFileSync(file, 'x'.repeat(5 * 1024 * 1024));
+  appLog.init(file); // a restart always re-measures the file, even inside the resync window
+  appLog.write('info', 'after the restart');
+  appLog.write('info', 'past the cap');
+  assert.ok(fs.existsSync(`${file}.1`), 'the cap still triggers a real rotation');
+});

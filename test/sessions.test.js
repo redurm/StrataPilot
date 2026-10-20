@@ -530,3 +530,30 @@ test('deleteSessions: the sidebar stops listing deleted sessions (cache dropped 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('guard: a path that reaches the root THROUGH a link is refused (#13)', (t) => {
+  // path.resolve() is purely lexical, so `sessionsRoot/link-to-outside/file.jsonl` passed the old
+  // check while naming a real file somewhere else entirely - deleteSession() would have unlinked it
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-link-outside-'));
+  const linkPath = path.join(tmpRoot, 'linked-group');
+  try {
+    const victim = path.join(outside, 'full.jsonl');
+    fs.copyFileSync(fixture(path.join('g1', 'full.jsonl')), victim);
+    try {
+      fs.symlinkSync(outside, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (err) {
+      t.skip(`cannot create a link here: ${err.code || err.message}`);
+      return;
+    }
+    const through = path.join(linkPath, 'full.jsonl');
+    assert.ok(fs.existsSync(through), 'the link must resolve for the test to mean anything');
+    assert.throws(() => deleteSession(through), /refusing to touch path outside the sessions dir/);
+    assert.throws(() => renameSession(through, 'x'), /refusing to touch path outside the sessions dir/);
+    assert.ok(fs.existsSync(victim), 'the file outside the root must survive the rejected call');
+  } finally {
+    try {
+      fs.rmSync(linkPath, { recursive: true, force: true }); // rmSync on a link removes the link, not the target
+    } catch {}
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});

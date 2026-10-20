@@ -88,6 +88,13 @@
   }
 
   // The renderer walks the static HTML once per language change. Dynamic parts are built with t() in app.js.
+  /**
+   * Original (source-language) text per root element, so zh-TW -> zh-CN -> en restores the English
+   * source instead of translating a translation. A WeakMap: the store dies with the element, which a
+   * `rootEl.__i18nOrigText` strong Map never did (#13).
+   */
+  const origText = new WeakMap();
+
   const DOM_ATTRS = ['title', 'placeholder', 'aria-label'];
   const SKIP_SELECTOR = [
     '.transcript',
@@ -133,8 +140,14 @@
     const skipNodes = skipSelector
       ? new Set(Array.from(rootEl.querySelectorAll(skipSelector)))
       : new Set();
-    if (!rootEl.__i18nOrigText) rootEl.__i18nOrigText = new Map();
-    const store = rootEl.__i18nOrigText;
+    // the original text used to hang off the element as `rootEl.__i18nOrigText` (a strong Map on a DOM
+    // node): the node could not be collected while the map lived, and replacing a subtree left the map
+    // behind (#13). A module-level WeakMap keyed by the root element goes away with the element.
+    let store = origText.get(rootEl);
+    if (!store) {
+      store = new Map();
+      origText.set(rootEl, store);
+    }
     let changed = 0;
 
     const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
