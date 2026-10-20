@@ -15,6 +15,7 @@ const cron = require('./lib/cron');
 const netPolicy = require('./lib/net-policy');
 const fsGuard = require('./lib/fs-guard');
 const { resolveCaptureTarget } = require('./lib/smoke-shot');
+const { disposeAll, QUIT_GRACE_MS } = require('./lib/shutdown');
 // D10: the i18n core is shared with the renderer (one file, UMD) so both processes translate the same way
 const i18n = require('./renderer/i18n');
 
@@ -1554,16 +1555,40 @@ if (!gotLock) {
 
   app.on('window-all-closed', () => {
     cronStop();
-    for (const proc of processes.values()) proc.dispose({ graceMs: 300 });
-    processes.clear();
+    closeAllPiProcesses();
     app.quit();
   });
 
   app.on('before-quit', () => {
     cronStop();
     clearTimeout(usageRefreshTimer);
-    usageLedger.flush(); // the ledger writes are atomic; this only avoids re-scanning on next start
-    for (const proc of processes.values()) proc.dispose({ graceMs: 300 });
-    processes.clear();
+    // #8: this first flush is the "the app is going away right now" guarantee; the one armed by
+    // closeAllPiProcesses() is the correct one, after the children have stopped writing. The ledger
+    // re-scans changed files on the next start either way, so no token is written off - but the
+    // rollup this app writes should be the complete one.
+    usageLedger.flush();
+    closeAllPiProcesses();
   });
 }
+
+/**
+ * #8: both quit paths used to pass `graceMs: 300` - shorter than a model round trip and shorter than
+ * a session-file flush on a slow disk, so quitting mid-run could leave the last entry of a session
+ * half-written in a file the user expects to reopen intact. pi's documented orderly shutdown is
+ * closing stdin (docs/rpc.md: there is no shutdown command), so the grace period IS the shutdown - it
+ * is 5 s now, and it is logged per tab.
+ */
+function closeAllPiProcesses() {
+  const result = disposeAll(processes, {
+    graceMs: QUIT_GRACE_MS,
+    onLog: (text) => console.log(text),
+    onAllGone: () => usageLedger.flush(),
+  });
+  processes.clear();
+  // a wedged child must never hold the app open: dispose() kills at graceMs, and this covers the case
+  // where the exit event never arrives at all
+  const failsafe = setTimeout(() => result.finished(), QUIT_GRACE_MS + 1500);
+  failsafe.unref?.();
+  return result;
+}
+
