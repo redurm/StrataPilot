@@ -46,6 +46,9 @@ const LEAVE_ENGLISH = new Set([
   'out {n}',
   'out',
   'tok',
+
+  '?' // a bare question mark is the same in every language,
+  // and the toast that uses it is a placeholder for an unknown model name
 ]);
 
 /* ---- language resolution ---- */

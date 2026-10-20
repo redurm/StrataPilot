@@ -19,7 +19,8 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const SOURCES = [
-  ['renderer/app.js', ['tr', 'i18nKey']],
+  // toast() translates its message centrally (#32), so a bare toast('saved') is a catalog key too:
+  ['renderer/app.js', ['tr', 'i18nKey', 'toast']],
   ['main.js', ['tr']],
   // describeCron() builds the Jobs list text in lib/cron.js; without this the phrases it wraps in t() never reach
   // the catalogs, and the extractor cannot fail when one is missing
@@ -64,8 +65,10 @@ function wrappedKeys(source, fn) {
           continue;
         }
         if (ch === inString) {
-          if (inString !== '`' || buf.includes('${')) first.push(buf);
-          else first.push(buf);
+          // a template literal is consumed but never a key: it carries interpolation, so there is
+          // nothing to look up in the catalog. Without this, #32's toast() scan turned every
+          // `toast(\`...${x}...\`)` call into an impossible key.
+          if (inString !== '`') first.push(buf);
           inString = null;
           continue;
         }
