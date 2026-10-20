@@ -365,6 +365,21 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   also left the `// Smoke-only` block and `ipcMain.handle('app:diagnostics', …)` at column 0 inside
   `registerIpc()` - `node --check` passes, so CI could not see it; re-indented.
 
+- **Quitting mid-run could truncate a session file** - both shutdown paths disposed the pi children
+  with `graceMs: 300`. pi appends to the session JSONL as it goes, and its documented orderly shutdown
+  is closing stdin (`docs/rpc.md`: “Close the child's stdin to request an orderly shutdown. Pi disposes
+  the active runtime before exiting”) - there is no shutdown command to send, so the grace period IS
+  the shutdown, and 300 ms is shorter than a model round trip and shorter than a session-file flush on
+  a slow disk. The last entry could end up half-written in a file the user expects to reopen intact
+  (and the ledger then under-counts that run, because the corrupted line fails `JSON.parse`). The grace
+  is 5 s now, it is logged per tab (`[pi quit tab=…] grace=5000ms (closing stdin; pi flushes the
+  session before it exits)`), and a failsafe timer covers a child whose `exit` event never arrives. The
+  other half was ordering: `usageLedger.flush()` ran while the children were still writing, so the
+  rollup missed whatever landed after it - it now also runs once every child is gone. Nothing was ever
+  written off either way (the ledger re-scans changed files on the next start), but the rollup the app
+  writes should be the complete one. `lib/shutdown.js` holds the logic; `test/shutdown.test.js` pins
+  the grace, the ordering, the no-children case and the failsafe.
+
 ### Changed
 
 - **The README now starts from a fresh clone instead of from the feature list.** A first-time user used to
