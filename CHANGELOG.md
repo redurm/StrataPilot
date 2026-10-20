@@ -224,6 +224,19 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   text on hover (the old js slice plus css ellipsis meant the js `…` was itself hidden). Covered by
   `test/tree-depth.test.js`.
 
+- **Session titles came out garbled for CJK sessions** - `forEachLine()` in `lib/sessions.js` read session
+  files in 256 KB chunks and decoded each chunk on its own (`buf.toString('utf8')`), so a multi-byte
+  character that straddled a chunk boundary decoded as `U+FFFD` and the tail bytes of it were gone. With
+  CJK text (3 bytes per character) a 12 MB session has ~48 boundaries, so the sidebar title, the first/last
+  user and assistant previews and the search index all carried replacement characters - and
+  `lib/usage-ledger.js` scans through the same helper, so the ledger was reading the same damaged text.
+  The decoder is now kept across reads (`decoder.decode(chunk, { stream: true })` plus a final flush), the
+  same rule `splitRecords()` in `lib/pi-process.js` already follows for stdout. Note: the review also
+  claimed such a line fails `JSON.parse` and that the usage records on it were therefore never banked -
+  that did not reproduce: the broken sequence decodes to `U+FFFD` *inside a JSON string*, which is still
+  valid JSON, and the tokens were banked. The new `test/usage-ledger.test.js` case pins both halves
+  anyway (tokens banked, text undamaged) because the two scanners share this one helper.
+
 ### Changed
 
 - **The README now starts from a fresh clone instead of from the feature list.** A first-time user used to
