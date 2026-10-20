@@ -18,7 +18,7 @@ const path = require('node:path');
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-sessions-'));
 process.env.PI_CODING_AGENT_SESSION_DIR = tmpRoot;
 
-const { sessionsRoot, listSessions, readSessionMeta, deleteSession, renameSession, clearSessionCache, cacheSize } = require('../lib/sessions');
+const { sessionsRoot, listSessions, readSessionMeta, deleteSession, renameSession, clearSessionCache, cacheSize, forEachLine } = require('../lib/sessions');
 
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'sessions');
 const MAX_SCAN_BYTES = 12 * 1024 * 1024;
@@ -129,6 +129,63 @@ test('files bigger than MAX_SCAN_BYTES set truncatedScan and stop scanning early
   assert.equal(meta.name, '', 'the deep session_info must not be picked up');
   assert.notEqual(meta.title, 'DEEP-NAME');
   assert.ok(meta.userCount > 0, 'the head of the file must still be scanned');
+});
+
+/* ---- #2: a multi-byte character straddling the 256 KB read boundary ---- */
+
+const READ_CHUNK = 256 * 1024; // the chunkSize inside forEachLine(); a boundary lands wherever the bytes are
+const CJK = '漢字測試日本語テキスト';
+
+test('forEachLine keeps a multi-byte character split by the 256 KB read boundary (#2)', () => {
+  const dir = path.join(tmpRoot, 'utf8_group');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'boundary.jsonl');
+  // a 3-byte character is broken when the read window cuts it after its 1st or 2nd byte, so the
+  // first byte of the run has to sit at chunk-3 .. chunk-1; sweep a wider band to be sure
+  for (let pad = READ_CHUNK - 5; pad <= READ_CHUNK + 5; pad++) {
+    fs.writeFileSync(file, 'a'.repeat(pad) + CJK + '\n', 'utf8');
+    const lines = [];
+    forEachLine(file, (line) => lines.push(line));
+    assert.equal(lines.length, 1, `pad=${pad}: expected one line`);
+    const window = JSON.stringify(lines[0].slice(pad - 3, pad + 9));
+    assert.doesNotMatch(lines[0], /\uFFFD/, `pad=${pad} decoded as ${window}`);
+    assert.ok(lines[0].includes(CJK), `pad=${pad} lost the CJK run: ${window}`);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('readSessionMeta keeps a CJK title whose first character sits on the read boundary (#2)', () => {
+  const dir = path.join(tmpRoot, 'utf8_meta_group');
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    const file = path.join(dir, 'cjk.jsonl');
+    const head = JSON.stringify({ type: 'session', version: 3, id: 's-utf8', timestamp: '2024-03-01T00:00:00.000Z', cwd: 'C:/work/cjk' });
+    const userLine = (text) =>
+      JSON.stringify({ type: 'message', id: 'm-cjk', timestamp: '2024-03-01T00:00:02.000Z', message: { role: 'user', content: [{ type: 'text', text }] } });
+    const padLine = (n) =>
+      JSON.stringify({ type: 'message', id: 'm-pad', timestamp: '2024-03-01T00:00:01.000Z', message: { role: 'assistant', content: 'x'.repeat(n) } });
+    // bytes before the CJK run inside the user line (up to and including its opening quote)
+    const inside = userLine('').indexOf('""') + 1;
+    const headBytes = Buffer.byteLength(head) + 1;
+    const padEmptyBytes = Buffer.byteLength(padLine(0)) + 1;
+    // `cut` = how many bytes of the first CJK character the read window swallows (1 or 2 of its 3)
+    for (let cut = 1; cut <= 2; cut++) {
+      const padBytes = READ_CHUNK - cut - headBytes - padEmptyBytes - inside;
+      const lines = [head, padLine(padBytes), userLine(CJK), JSON.stringify({ type: 'message', id: 'm-tail', timestamp: '2024-03-01T00:00:03.000Z', message: { role: 'user', content: 'tail' } })];
+      fs.writeFileSync(file, lines.join('\n') + '\n', 'utf8');
+      // prove the fixture does what the issue describes: the read window cuts the first CJK byte
+      const offset = headBytes + padEmptyBytes + padBytes + inside;
+      assert.ok(offset <= READ_CHUNK - 1 && offset >= READ_CHUNK - 2, `cut=${cut}: the CJK run starts at byte ${offset}, the window ends at ${READ_CHUNK}`);
+
+      clearSessionCache();
+      const meta = readSessionMeta(file);
+      assert.doesNotMatch(meta.firstUserText, /\uFFFD/, `cut=${cut}: firstUserText decoded as ${JSON.stringify(meta.firstUserText)}`);
+      assert.equal(meta.firstUserText, CJK, `cut=${cut}`);
+      assert.equal(meta.title, CJK, `cut=${cut}: the sidebar title is firstUserText`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /* ---- renameSession: append-only ---- */

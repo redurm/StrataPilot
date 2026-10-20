@@ -681,3 +681,55 @@ test('more than the model cap in one day folds the overflow into "other" without
   assert.ok(report.models.length <= ledger.MAX_MODELS_PER_DAY, `model list is capped (${report.models.length})`);
   assert.ok(report.models.some((model) => model.model === ledger.OTHER_MODEL), 'the overflow is visible as other');
 });
+
+/* ---- #2: the 256 KB read boundary must not corrupt a scanned entry ---- */
+
+const READ_CHUNK = 256 * 1024; // the chunkSize inside lib/sessions.js forEachLine()
+
+/**
+ * A session file whose CJK text sits exactly on the read boundary.
+ *
+ * The report claimed the corrupted line fails JSON.parse, so the tokens in it are never banked.
+ * That half did not reproduce: the broken sequence decodes to U+FFFD *inside a JSON string*, which
+ * is still valid JSON, so the numbers were always banked. What is real is the text corruption - and
+ * the ledger scans through the same helper, so this pins both halves: the tokens are banked and the
+ * line reaches the scanner undamaged.
+ */
+test('a usage entry with CJK text straddling the 256 KB read boundary is scanned intact (#2)', () => {
+  const file = path.join(groupDir, 'boundary.jsonl');
+  const day = today();
+  const cjk = '漢字測試日本語テキスト';
+  const head = JSON.stringify({ type: 'session', version: 3, id: 'boundary', timestamp: `${day}T08:00:00.000Z`, cwd: 'C:/work/demo' });
+  const padLine = (n) => JSON.stringify({ type: 'message', id: 'pad', timestamp: `${day}T09:00:00.000Z`, message: { role: 'user', content: 'x'.repeat(n) } });
+  const turnLine = (text) =>
+    JSON.stringify({
+      type: 'message',
+      id: 'a-boundary',
+      timestamp: `${day}T10:00:00.000Z`,
+      message: { role: 'assistant', model: 'model-a', content: [{ type: 'text', text }], usage: usage(1000, 222, 0, 0, 0.5) },
+    });
+
+  for (let cut = 1; cut <= 2; cut++) {
+    // the CJK run starts 30 bytes into the assistant text; `cut` is how many of its first
+    // character's 3 bytes the read window swallows
+    const cjkOffsetInLine = turnLine('').indexOf('""') + 1 + 30;
+    const padBytes = READ_CHUNK - cut - (Buffer.byteLength(head) + 1) - (Buffer.byteLength(padLine(0)) + 1) - cjkOffsetInLine;
+    const text = 'y'.repeat(30) + cjk + ' done';
+    fs.writeFileSync(file, [head, padLine(padBytes), turnLine(text)].join('\n') + '\n', 'utf8');
+    assert.equal(
+      fs.readFileSync(file).indexOf(Buffer.from(cjk, 'utf8')),
+      READ_CHUNK - cut,
+      `cut=${cut}: the fixture must put the CJK run on the read boundary`,
+    );
+
+    refresh();
+    const report = series({ unit: 'day' });
+    assert.equal(report.totals.in, 1000, `cut=${cut}: the tokens on the boundary line must be banked`);
+    assert.equal(report.totals.out, 222, `cut=${cut}`);
+
+    const { readSessionMeta } = require('../lib/sessions');
+    const meta = readSessionMeta(file);
+    assert.doesNotMatch(meta.lastAssistantText, /\uFFFD/, `cut=${cut}: the scanned text decoded as ${JSON.stringify(meta.lastAssistantText)}`);
+    assert.ok(meta.lastAssistantText.includes(cjk), `cut=${cut}: the scanned text lost the CJK run`);
+  }
+});
