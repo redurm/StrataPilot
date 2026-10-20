@@ -125,6 +125,11 @@ Two things to know:
 CI: the `Release build` workflow runs on a `v*` tag or manually (Actions ▸ Run workflow), builds on all
 three platforms, uploads each artifact separately, and then **starts the packaged Windows build in smoke
 mode** so a build that does not launch never reaches the artifact list.
+On a tag push a `publish-release` job then collects those artifacts and opens the GitHub Release for the
+tag (`gh release create --verify-tag`, notes taken from that version's `CHANGELOG.md` section by
+`scripts/release-notes.js`). electron-builder's own publish stays disabled - it wants a token and fails
+after everything is already built (#38) - and the workflow uses the token GitHub hands the job, so no
+secret has to be configured (#41).
 
 ## Linux and macOS
 

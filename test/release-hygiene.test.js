@@ -75,3 +75,36 @@ test('the packaging config can actually produce artifacts (#38)', () => {
     assert.ok(/--publish\s+never/.test(call), `release.yml is missing --publish never: ${call.trim()}`);
   }
 });
+
+test('every released version has its own entries, and the rule text stays where it belongs (#41)', () => {
+  const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
+  const headings = [...changelog.matchAll(/^## \[([^\]]+)\]( .*)?$/gm)];
+  assert.ok(headings.length >= 3, 'expected at least Unreleased and two versions');
+  for (let i = 0; i < headings.length; i += 1) {
+    const name = headings[i][1];
+    const from = headings[i].index + headings[i][0].length;
+    const to = i + 1 < headings.length ? headings[i + 1].index : changelog.length;
+    const body = changelog.slice(from, to).trim();
+    if (name === 'Unreleased') continue;
+    // the release-notes script refuses a section like this, so catch it here instead of at release time
+    assert.match(body, /^### /m, `${name} has no entry heading: its release notes would be empty`);
+    assert.match(body, /^- /m, `${name} has no entries`);
+    assert.ok(!body.includes('Nothing unreleased'), `${name} carries the Unreleased rule text`);
+    assert.ok(!body.includes('The rule this file follows'), `${name} carries the Unreleased rule text`);
+  }
+  const rule = changelog.match(/The rule this file follows/g) || [];
+  assert.equal(rule.length, 1, `the versioning rule is repeated ${rule.length} times across the file`);
+  // it has to sit in the header: a rule paragraph inside `## [Unreleased]` gets carried into the next
+  // version when the block is folded, which is how 0.2.1 shipped with no entries of its own (#41)
+  const firstHeading = changelog.indexOf('## [');
+  assert.ok(changelog.indexOf('The rule this file follows') < firstHeading, 'the rule text must live in the header, above the first section');
+});
+
+test('a tag actually publishes a GitHub Release (#41)', () => {
+  const yml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.match(yml, /publish-release:/);
+  assert.ok(yml.includes('gh release create') && /--verify-tag/.test(yml), 'the release job must create the tag release with --verify-tag');
+  assert.match(yml, /gh release upload --clobber/); // a re-run on the same tag must not fail
+  assert.match(yml, /secrets\.GITHUB_TOKEN/);
+  assert.match(yml, /scripts\/release-notes\.js/);
+});

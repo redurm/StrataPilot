@@ -72,6 +72,43 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # A tag with no Release page is a release nobody can download: the artifacts above live under the
+  # Actions run, need a GitHub login to fetch, and expire after 30 days (#41). electron-builder's own
+  # publish is disabled on purpose (#38 - it needs a token and fails after everything is built), so the
+  # workflow does the publishing itself with the token GitHub already gives the job.
+  publish-release:
+    name: publish the GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: stratapilot-*
+          path: dist
+          merge-multiple: true
+      - name: release notes come from the CHANGELOG
+        run: node scripts/release-notes.js "$GITHUB_REF_NAME" > dist/RELEASE_NOTES.md
+      - name: create or top up the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(dist/*.exe dist/*.zip dist/*.dmg dist/*.AppImage dist/*.deb)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # a re-run on the same tag must not fail: replace the assets instead
+            gh release upload --clobber "$GITHUB_REF_NAME" "${files[@]}"
+            gh release edit "$GITHUB_REF_NAME" --notes-file dist/RELEASE_NOTES.md
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME"               --notes-file dist/RELEASE_NOTES.md "${files[@]}"
+          fi
+          gh release view "$GITHUB_REF_NAME"
+
   # A packaged build that never starts is worse than no build, so the Windows artifact is launched
   # here in smoke mode (no Strata server, no model) before anyone can download it.
   smoke-windows-artifact:
