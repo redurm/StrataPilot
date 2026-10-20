@@ -24,6 +24,8 @@ const SOURCES = [
   ['main.js', ['tr']],
   // describeCron() builds the Jobs list text in lib/cron.js; without this the phrases it wraps in t() never reach
   // the catalogs, and the extractor cannot fail when one is missing
+  // the scenarios are their own file now (#12); they call tr() for the labels they assert on, so
+  // their keys must stay in the catalogs or the stale-entry test would drop them
   ['lib/cron.js', ['t']],
 ];
 const HTML_FILE = 'renderer/index.html';
