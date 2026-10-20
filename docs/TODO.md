@@ -1,7 +1,7 @@
 # TODO
 
-Working backlog for StrataPilot. Feature and design documentation is in the parent
-[`README.md`](../README.md); known limitations are listed at the end of that file.
+Working backlog for StrataPilot. The reference is split by topic in this folder and indexed in the
+parent [`README.md`](../README.md); known limitations are listed at the end of that file.
 
 Status legend: `todo` (not started) · `doing` · `done` · `wontfix`
 Effort: `S` (< half a day) · `M` (half a day – 1 day) · `L` (> 1 day)

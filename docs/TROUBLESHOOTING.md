@@ -1,7 +1,9 @@
 # Troubleshooting
 
-Common problems with StrataPilot and how to fix them. Feature and design documentation is in the
-parent [`README.md`](../README.md).
+Runtime problems of an install that already works, by symptom. Getting from a clone to a running
+window is [INSTALL.md](INSTALL.md); the feature and design reference is indexed in the parent
+[`README.md`](../README.md); the log file, crash recovery and the **Diagnostics** button are written
+up in [LOGS.md](LOGS.md).
 
 ## Startup / environment
 
@@ -170,4 +172,5 @@ item 1; only collect the pieces by hand if the app will not start at all.
    Strata config when `strataConfigPath` is set in the settings file)
 5. For queue / compact issues: a screenshot of `OPEN SESSIONS (QUEUE)` (Working/Idle groups and
    badges) — the report prints the same rows as text under `[6] open sessions / queue`
-5. For queue / compact issues: a screenshot of `OPEN SESSIONS (QUEUE)` (Working/Idle groups and badges)
+
+What goes into that report section by section, and how the key redaction works: [LOGS.md](LOGS.md#one-click-diagnostics-report).

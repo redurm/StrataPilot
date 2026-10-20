@@ -305,6 +305,32 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   `STRATAPILOT_SMOKE_SESSION` now also prints
   `[smoke-tokens] bar="tok in … / out … / cache …" message_chips=N first="in … / out …" tooltip="…"`.
 
+- **The README is an index now: the reference is split into eleven topic files under `docs/`.** It had
+  grown to 1 400 lines / 109 KB, so a first-time reader scrolled past the Monitor, the token ledger and
+  the streaming notes before learning that Node.js 22.19+ has to be installed at all, and every section
+  had to be found by anchor inside one page. Kept in the README: the intro, a **Documentation** table,
+  a short **Quick start** (three commands plus the four "prove this layer" checks), the feature list,
+  **Known limitations** and the licence. Moved: `docs/INSTALL.md` (the three moving parts, the nine
+  steps, install failures), `docs/CONFIGURE.md` (`/setup`, pi ↔ Strata, the environment variables, the
+  settings file), `docs/SESSIONS.md` (the two sidebar lists, export, the serial queue, the tree and
+  branching, storage), `docs/COMPOSER.md` (`!`, `/`, `@`, links, shortcuts), `docs/TOKENS.md` (the
+  ledger, the chart, the rates, in / out / cache), `docs/MODEL.md` (auto-compaction, retry, compaction
+  while a request is in flight, the fake-timeout note, streaming performance), `docs/MONITOR.md`,
+  `docs/SCHEDULER.md`, `docs/APPEARANCE.md` (theme, language, accessibility), `docs/LOGS.md` (the log
+  file, crash recovery, the diagnostics report) and `docs/DEVELOP.md` (architecture, CI, smoke mode,
+  packaging, Linux and macOS). Text was moved verbatim; what changed is the plumbing - every `#anchor`
+  and relative path rewritten for its new home - and the split caught two things out on the way: the
+  cross-links had been written in lower case (`install.md` against `INSTALL.md`, a 404 on Linux and
+  nothing on Windows), and the troubleshooting list ended with a duplicated item 5. The architecture map
+  in `docs/DEVELOP.md` also finally lists what the last months added (`lib/usage-ledger.js`,
+  `lib/cron.js`, `lib/diagnostics.js`, `renderer/i18n.js`, `locales/`, `scripts/i18n-extract.js`).
+  `test/docs-links.test.js` (5 tests) keeps it honest: every relative link names a file that exists,
+  every `#anchor` names a heading, using GitHub's own slug rules (CJK letters are kept - the Language
+  heading is the one that proves the slugger right), the README index links every docs page and no
+  phantom one, and README.md stays under 320 lines so it cannot grow back into one long file. Links
+  inside fenced blocks and inline code are skipped, because the links section quotes `[text](url)` as
+  an example rather than meaning it.
+
 ## [0.1.0] - 2026-10-15
 
 First version of the app, replacing the `pi_gui` prototype (the app name, the settings file
