@@ -21,6 +21,9 @@ const ROOT = path.join(__dirname, '..');
 const SOURCES = [
   ['renderer/app.js', ['tr', 'i18nKey']],
   ['main.js', ['tr']],
+  // describeCron() builds the Jobs list text in lib/cron.js; without this the phrases it wraps in t() never reach
+  // the catalogs, and the extractor cannot fail when one is missing
+  ['lib/cron.js', ['t']],
 ];
 const HTML_FILE = 'renderer/index.html';
 const CATALOGS = ['zh-TW', 'zh-CN'];
