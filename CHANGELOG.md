@@ -4,39 +4,42 @@ All notable changes to **StrataPilot** (earlier **Pi on Strata**, earlier still 
 documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the version in `package.json` is the one
 that is shipped (`0.x` while the app has no packaging/installer yet).
+
+The rule this file follows (and `test/release-hygiene.test.js` enforces): a PR adds its entry
+under `Unreleased` and never touches `package.json`; cutting a release moves the `Unreleased` block
+under a dated version heading, bumps `package.json` / `package-lock.json` to match, and leaves an
+empty `Unreleased` behind. Parallel PRs all editing `Unreleased` conflict harmlessly (it is
+append-only); parallel PRs all editing the version would fight over the same line.
 
 ## [Unreleased]
 
-Nothing unreleased. The rule this file follows (and `test/release-hygiene.test.js` enforces): a PR
-adds its entry under `Unreleased` and never touches `package.json`; cutting a release moves the
-`Unreleased` block under a dated version heading, bumps `package.json` / `package-lock.json` to match,
-and leaves an empty `Unreleased` behind. Parallel PRs all editing `Unreleased` conflict harmlessly
-(it is append-only); parallel PRs all editing the version would fight over the same line.
+### Added
+
+- **A tag now publishes a GitHub Release** - the installers built by the `Release build` workflow were only Actions artifacts: behind a GitHub login, buried in the run that built them, and deleted after 30 days, so `v0.2.0` and `v0.2.1` had no Release page at all. A `publish-release` job (tag pushes only) collects the three platforms' artifacts, takes the notes from that version's `CHANGELOG.md` section through `scripts/release-notes.js`, and runs `gh release create --verify-tag` with the job's own `GITHUB_TOKEN` - no new secret, and electron-builder's implicit publish stays off (#38). Re-running the same tag tops the assets up with `gh release upload --clobber` instead of failing. `test/release-notes.test.js` and two more `release-hygiene` assertions pin it: the version in `package.json` must always have a CHANGELOG section, and no version section may carry the Unreleased rule text (that is how the 0.2.1 section ended up with no entries of its own).
+
+Nothing unreleased.
 
 ## [0.2.1] - 2026-10-20
 
 Bug fixes on top of 0.2.0. The headline is that releases are now downloadable: the 0.2.0 tag built
 nothing, because the Linux packaging config was invalid and electron-builder's implicit GitHub publish
 failed without a token after every artifact had already been built.
-Nothing unreleased. The rule this file follows (and `test/release-hygiene.test.js` enforces): a PR
-adds its entry under `Unreleased` and never touches `package.json`; cutting a release moves the
-`Unreleased` block under a dated version heading, bumps `package.json` / `package-lock.json` to match,
-and leaves an empty `Unreleased` behind. Parallel PRs all editing `Unreleased` conflict harmlessly
-(it is append-only); parallel PRs all editing the version would fight over the same line.
+
+### Changed
+- **The export smoke scenario now actually exports** - it used to fire while the tab was still running (so `runExport()` refused, and the scenario logged `ok=false error="no export result recorded"`, which reads like a product failure but was the scenario not waiting) against a tab that smoke starts with `--no-session`, so the export path - timeout, path validation, reveal-in-file-manager, minutes-long big sessions - had zero coverage in every run. It now skips loudly when the tab is ephemeral, waits for idle plus a real session file, and prints `FAIL` when the exported HTML is missing or under 1 KB. `STRATAPILOT_SMOKE_PERSIST=1` runs a smoke session against a real session file so those paths can be exercised; the default stays ephemeral so smoke runs do not litter the sessions folder (#36).
+- **The smoke scenarios left `renderer/app.js`** - the 25 `smoke*Scenario()` functions (~1 200 lines, 15% of the file) are now `renderer/smoke.js`, and `app.js` fetches that file only when the app was started with `STRATAPILOT_SMOKE=1`. A normal launch no longer parses test scaffolding, and the file that holds the real UI code went from 8 545 to 7 371 lines. `test/smoke-split.test.js` pins the arrangement: no scenario may be defined in `app.js`, `index.html` may not reference `smoke.js` (a `<script src>` would put the scaffolding back into every launch), `smoke.js` must stay a classic script because it reads `app.js` globals from the shared scope, and `app.js` may not mention `smoke` on more than 20 lines (#12).
+
+### Fixed
+- **`/stats` called every saved session ephemeral** - the last line read `d.sessionFile`, but pi's `get_session_stats` payload has no such field (its keys are `sessionId, userMessages, assistantMessages, toolCalls, toolResults, totalMessages, tokens, cost, contextUsage`), so the fallback always won and the app told users their session was not saved on disk when it was. It now prints `tab.sessionPath`, and `runExport()` asks `get_state` (which does carry `sessionFile`) before refusing, so a tab whose `bootstrap()` raced pi's session-file creation can still export (#36).
+- **A release tag produced zero downloadable artifacts** - the `v0.2.0` release build failed on all three platforms. Two independent causes: (1) `package.json` had `"author": "Chris Chou"` with no email, and electron-builder needs a maintainer email for the `.deb` control file, so the Linux job died before building anything; (2) on a tag push, electron-builder v26 starts an **implicit GitHub Release publish**, and with no `GH_TOKEN` in the workflow it failed *after* every artifact had been built - the step exited 1, `upload-artifact` never ran, and the packaged-app smoke job was skipped. `author` is now `{ name, email }` (GitHub noreply, not a personal address), `build.publish` is `null` and all three build steps pass `--publish never` (the workflow uploads artifacts itself), and `test/release-hygiene.test.js` now pins all three so packaging config can no longer regress silently (#38).
+
 
 
 ## [0.2.0] - 2026-10-20
 
 The first release with packaging, the Strata monitor, the token ledger, scheduled jobs and the
-interface language. Everything below is relative to 0.1.0.
-### Changed
-- **The export smoke scenario now actually exports** - it used to fire while the tab was still running (so `runExport()` refused, and the scenario logged `ok=false error="no export result recorded"`, which reads like a product failure but was the scenario not waiting) against a tab that smoke starts with `--no-session`, so the export path - timeout, path validation, reveal-in-file-manager, minutes-long big sessions - had zero coverage in every run. It now skips loudly when the tab is ephemeral, waits for idle plus a real session file, and prints `FAIL` when the exported HTML is missing or under 1 KB. `STRATAPILOT_SMOKE_PERSIST=1` runs a smoke session against a real session file so those paths can be exercised; the default stays ephemeral so smoke runs do not litter the sessions folder (#36).
-
-- **The smoke scenarios left `renderer/app.js`** - the 25 `smoke*Scenario()` functions (~1 200 lines, 15% of the file) are now `renderer/smoke.js`, and `app.js` fetches that file only when the app was started with `STRATAPILOT_SMOKE=1`. A normal launch no longer parses test scaffolding, and the file that holds the real UI code went from 8 545 to 7 371 lines. `test/smoke-split.test.js` pins the arrangement: no scenario may be defined in `app.js`, `index.html` may not reference `smoke.js` (a `<script src>` would put the scaffolding back into every launch), `smoke.js` must stay a classic script because it reads `app.js` globals from the shared scope, and `app.js` may not mention `smoke` on more than 20 lines (#12).
 ### Fixed
 
-- **`/stats` called every saved session ephemeral** - the last line read `d.sessionFile`, but pi's `get_session_stats` payload has no such field (its keys are `sessionId, userMessages, assistantMessages, toolCalls, toolResults, totalMessages, tokens, cost, contextUsage`), so the fallback always won and the app told users their session was not saved on disk when it was. It now prints `tab.sessionPath`, and `runExport()` asks `get_state` (which does carry `sessionFile`) before refusing, so a tab whose `bootstrap()` raced pi's session-file creation can still export (#36).
-- **A release tag produced zero downloadable artifacts** - the `v0.2.0` release build failed on all three platforms. Two independent causes: (1) `package.json` had `"author": "Chris Chou"` with no email, and electron-builder needs a maintainer email for the `.deb` control file, so the Linux job died before building anything; (2) on a tag push, electron-builder v26 starts an **implicit GitHub Release publish**, and with no `GH_TOKEN` in the workflow it failed *after* every artifact had been built - the step exited 1, `upload-artifact` never ran, and the packaged-app smoke job was skipped. `author` is now `{ name, email }` (GitHub noreply, not a personal address), `build.publish` is `null` and all three build steps pass `--publish never` (the workflow uploads artifacts itself), and `test/release-hygiene.test.js` now pins all three so packaging config can no longer regress silently (#38).
 
 - **The Strata monitor kept the labels of the language it was first opened in** - the card titles, the state badges and the Decode/Prefill subs are baked in with `tr()` when `buildMonitorCards()` runs, and that function returns early once `monitor.built` is set. The invalidation lived inside `if (!els.monitorView.classList.contains('hidden'))`, so a language change taken from Settings - the normal path, with the panel closed - never invalidated anything, and reopening the monitor later showed the old language forever. The flag is now cleared unconditionally: an open panel rebuilds immediately, a closed one on the next `openMonitor()` (#30).
 - **Toast messages stayed English for zh users** - about fifty `toast(...)` call sites pass a bare string, and `toast()` used to do `textContent = message`, so every one of them had to remember to wrap in `tr()`; forgetting was invisible, because the extractor only scanned `tr(` and `i18nKey(`. The translation now happens once inside `toast()` (`tr()` falls back to the key, so already-wrapped calls are unaffected), `toast` is part of the extractor's scanned functions so **every bare toast string is a catalog key** and a missing entry fails `test/i18n.test.js`, and 50 zh-TW / zh-CN entries were added - including the ones users actually hit: `this tab is already running`, `cannot export while this session is running or compacting`, `The interface answered again`, `failed to start pi`, `serial queue on: one session runs at a time...` (#32).
