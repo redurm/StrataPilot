@@ -352,6 +352,18 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   the bucket/model passes included `other`, the totals passes did not - so `totals.other` was pinned at
   0 (and the chart's bucket objects did not carry it at all) while every day bucket had a value; there
   is one `FIELDS` constant and one `addFields()` now, and `series()` reports the catch-all (#13).
+- **The smoke screenshot fallback threw instead of taking a screenshot** - `app:smoke-shot` resolved the
+  window as `BrowserWindow.fromWebContents(event.sender) || win()`. `win` is a module-level `let`, not a
+  function, and the local `const win` shadowed it, so the fallback read the local binding while it was
+  still being initialised: `ReferenceError: Cannot access 'win' before initialization`. The fallback is
+  unreachable in the happy path, which is why nothing complained - it only fires when the asking window
+  is already gone (a reload in flight, a crash recovery, a closed window), i.e. exactly when a scenario
+  is already going wrong, so the code meant to report a broken scenario was itself the failure. The
+  window choice moved to `lib/smoke-shot.js` as a pure `resolveCaptureTarget(senderWindow, appWindow)`
+  so it can be tested without Electron, and a window that is missing or destroyed is now reported as
+  `{ ok:false, error:'no window to capture' }`. Covered by `test/smoke-shot.test.js`. The same paste had
+  also left the `// Smoke-only` block and `ipcMain.handle('app:diagnostics', …)` at column 0 inside
+  `registerIpc()` - `node --check` passes, so CI could not see it; re-indented.
 
 ### Changed
 

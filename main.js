@@ -14,6 +14,7 @@ const diagnostics = require('./lib/diagnostics');
 const cron = require('./lib/cron');
 const netPolicy = require('./lib/net-policy');
 const fsGuard = require('./lib/fs-guard');
+const { resolveCaptureTarget } = require('./lib/smoke-shot');
 // D10: the i18n core is shared with the renderer (one file, UMD) so both processes translate the same way
 const i18n = require('./renderer/i18n');
 
@@ -1026,26 +1027,31 @@ function registerIpc() {
     if (!result.ok) console.log(`[cron] ack refused (${key}): ${result.error}`);
   });
 
-  // Smoke-only: lets a scenario take a screenshot (theme checks, layout checks). Never registered
-// outside smoke mode.
-if (process.env.STRATAPILOT_SMOKE) {
-  ipcMain.handle('app:smoke-shot', async (event, payload) => {
-    const win = BrowserWindow.fromWebContents(event.sender) || win();
-    const name = String((payload && payload.name) || 'shot').replace(/[^a-z0-9_-]/gi, '');
-    try {
-      const image = await win.webContents.capturePage();
-      const file = path.join(os.tmpdir(), `stratapilot-smoke-${name}.png`);
-      fs.writeFileSync(file, image.toPNG());
-      console.log(`[smoke-shot] wrote ${file} bounds=${JSON.stringify(win.getContentBounds())}`);
-      return { ok: true, file };
-    } catch (err) {
-      console.error(`[smoke-shot] failed: ${err.stack || err}`);
-      return { ok: false, error: err.message };
-    }
-  });
-}
+    // Smoke-only: lets a scenario take a screenshot (theme checks, layout checks). Never registered
+  // outside smoke mode.
+  if (process.env.STRATAPILOT_SMOKE) {
+    ipcMain.handle('app:smoke-shot', async (event, payload) => {
+      // the window that asked is usually gone exactly when a scenario is already going wrong, and
+      // the fallback used to read `win()` while a local `const win` shadowed the module-level
+      // `let win` - a TDZ ReferenceError, so the one path meant to report a broken scenario threw
+      // instead. See lib/smoke-shot.js and test/smoke-shot.test.js.
+      const target = resolveCaptureTarget(BrowserWindow.fromWebContents(event.sender), win);
+      if (!target) return { ok: false, error: 'no window to capture' };
+      const name = String((payload && payload.name) || 'shot').replace(/[^a-z0-9_-]/gi, '');
+      try {
+        const image = await target.webContents.capturePage();
+        const file = path.join(os.tmpdir(), `stratapilot-smoke-${name}.png`);
+        fs.writeFileSync(file, image.toPNG());
+        console.log(`[smoke-shot] wrote ${file} bounds=${JSON.stringify(target.getContentBounds())}`);
+        return { ok: true, file };
+      } catch (err) {
+        console.error(`[smoke-shot] failed: ${err.stack || err}`);
+        return { ok: false, error: err.message };
+      }
+    });
+  }
 
-ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(payload && typeof payload === 'object' ? payload : {}));
+  ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(payload && typeof payload === 'object' ? payload : {}));
 
   ipcMain.handle('app:settings-get', () => loadSettings());
 
