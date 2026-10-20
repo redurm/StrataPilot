@@ -44,7 +44,8 @@ const api = {
   smokeShot: (name) => ipcRenderer.invoke('app:smoke-shot', { name }),
   saveFile: (payload = {}) => ipcRenderer.invoke('fs:save-file', payload),
   statPaths: (paths) => ipcRenderer.invoke('fs:stat-paths', { paths }),
-  readText: (filePath, maxBytes) => ipcRenderer.invoke('fs:read-text', { filePath, maxBytes }),
+  // #6: `fs:read-text` had no preload binding removed-by-accident story - it simply had no caller at
+  // all, while being able to read any file on disk. The binding is gone; the handler is still guarded.
   openPath: (target, reveal) => ipcRenderer.invoke('app:open-path', { target, reveal }),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
 

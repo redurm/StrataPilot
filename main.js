@@ -12,6 +12,8 @@ const usageLedger = require('./lib/usage-ledger');
 const appLog = require('./lib/log');
 const diagnostics = require('./lib/diagnostics');
 const cron = require('./lib/cron');
+const netPolicy = require('./lib/net-policy');
+const fsGuard = require('./lib/fs-guard');
 // D10: the i18n core is shared with the renderer (one file, UMD) so both processes translate the same way
 const i18n = require('./renderer/i18n');
 
@@ -95,6 +97,72 @@ function writeSettings(settings) {
   } catch (err) {
     console.error('settings save failed:', err.message);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* #6: what the renderer may touch                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Folders the user picked in a dialog. `fs:read-text` is confined to the app's own roots plus these:
+ * the user choosing a folder in a dialog IS the consent, a renderer naming a path at random is not.
+ */
+const chosenDirs = new Set();
+const CHOSEN_MAX = 64;
+
+function noteChosen(target) {
+  if (!target) return;
+  let dir = String(target);
+  try {
+    dir = fs.statSync(dir).isDirectory() ? dir : path.dirname(dir);
+  } catch {
+    dir = path.dirname(dir);
+  }
+  chosenDirs.add(path.resolve(dir));
+  if (chosenDirs.size > CHOSEN_MAX) chosenDirs.delete(chosenDirs.keys().next().value);
+}
+
+function readRoots() {
+  return [sessions.sessionsRoot(), app.getPath('userData'), ...chosenDirs];
+}
+
+/**
+ * What `fs:stat-paths` must never report on: the folder that holds the Strata key, and this app's own
+ * settings/ledger files. Statting stays open everywhere else - drag & drop stats whatever the user
+ * dropped, and the channel returns metadata only (name / size / isDirectory / ext), never contents.
+ */
+function deniedStatPaths() {
+  return [path.join(os.homedir(), '.pi', 'agent'), SETTINGS_FILE(), USAGE_LEDGER_FILE()];
+}
+
+/** The keys the Settings dialog and the app itself write. `jobs` is deliberately absent. */
+const SETTINGS_KEYS = new Set([
+  'cwd',
+  'serialQueue',
+  'restoreTabs',
+  'strataUrl',
+  'strataUrls',
+  'strataConfigPath',
+  'monitorOpen',
+  'monitorWidth',
+  'sidebarHidden',
+  'theme',
+  'language',
+  'firstRunSeen',
+  'usagePrices',
+  'openTabs',
+]);
+
+/** Split a renderer patch into what it may write and what it may not. */
+function splitSettingsPatch(patch) {
+  const allowed = {};
+  const refused = [];
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return { allowed, refused: ['patch was not an object'] };
+  for (const [key, value] of Object.entries(patch)) {
+    if (SETTINGS_KEYS.has(key)) allowed[key] = value;
+    else refused.push(key);
+  }
+  return { allowed, refused };
 }
 
 /* ------------------------------------------------------------------ */
@@ -244,6 +312,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // #6: the preload only needs ipcRenderer / contextBridge / webUtils, all of which a sandboxed
+      // preload has. Without this the renderer process has full Node-level capability if anything
+      // ever gets code into it, which turns one bad string into read-the-config-then-ship-it-out.
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -646,13 +718,37 @@ function sanitizeJobs(input) {
   return out;
 }
 
+/**
+ * `http://host/v1` + `/metrics` -> `http://host/metrics`, the way the Monitor has always built it.
+ * Returning null is what the handlers report as "invalid base url".
+ */
+function buildTargetUrl(baseUrl, suffix) {
+  const trimmed = String(baseUrl == null ? '' : baseUrl).trim().replace(/\/+$/, '').replace(/\/v1$/i, '');
+  if (!trimmed) return null;
+  try {
+    return new URL(`${trimmed}${suffix}`);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #6: the key only travels to a local/LAN address or to a server the user configured. A withheld key
+ * is logged, never silently dropped - the Monitor shows "key withheld" so the user can add the server.
+ */
+function strataKeyFor(target, rendererKey) {
+  const configured = String(rendererKey || process.env.STRATAPILOT_KEY || process.env.STRATA_API_KEY || '');
+  const decision = netPolicy.keyForHost(target, netPolicy.allowlistFrom(loadSettings()), configured);
+  if (decision.withheld) console.log(`[strata] key withheld for ${target.host}: ${decision.reason}`);
+  return decision;
+}
+
 /* ------------------------------------------------------------------ */
 /* diagnostics report (A6: "Copy diagnostics")                        */
 /* ------------------------------------------------------------------ */
 
 /** GET a URL and return { ok, text } — the raw body, so /health can be quoted verbatim. */
-async function fetchText(url, { apiKey = '', timeoutMs = 4000 } = {}) {
-  const controller = new AbortController();
+async function fetchText(url, { apiKey = '', timeoutMs = 4000 } = {}) {  const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
   try {
@@ -690,11 +786,20 @@ async function buildDiagnostics(payload = {}) {
 
   const strata = { baseUrl: baseUrl || tr('(none: no tab with a model, and no strataUrl setting)') };
   if (baseUrl) {
-    const key = String(payload.apiKey || process.env.STRATAPILOT_KEY || process.env.STRATA_API_KEY || '');
-    const health = await fetchText(`${baseUrl}/health`, { apiKey: key });
-    strata.healthText = health.ok ? oneLineJson(health.text) : health.error;
-    const models = await fetchText(`${baseUrl}/v1/models`, { apiKey: key });
-    strata.modelsText = models.ok ? oneLineJson(models.text) : models.error;
+    const healthTarget = buildTargetUrl(baseUrl, '/health');
+    const modelsTarget = buildTargetUrl(baseUrl, '/v1/models');
+    const policy = netPolicy.urlPolicy(healthTarget);
+    if (!policy.ok) {
+      strata.healthText = policy.error;
+      strata.modelsText = policy.error;
+    } else {
+      const useKey = strataKeyFor(healthTarget, payload.apiKey);
+      strata.keyWithheld = useKey.withheld;
+      const health = await fetchText(healthTarget.href, { apiKey: useKey.key });
+      strata.healthText = health.ok ? oneLineJson(health.text) : health.error;
+      const models = await fetchText(modelsTarget.href, { apiKey: useKey.key });
+      strata.modelsText = models.ok ? oneLineJson(models.text) : models.error;
+    }
     strata.metricsUrl = `${baseUrl}/metrics`;
   }
   strata.engineConfig = diagnostics.readConfig(settings.strataConfigPath || '');
@@ -899,7 +1004,13 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
     return i18nPayload();
   });
   ipcMain.handle('app:settings-set', (_event, patch) => {
-    const merged = { ...loadSettings(), ...(patch && typeof patch === 'object' ? patch : {}) };
+    // #6: this used to be `{ ...loadSettings(), ...patch }` with no key whitelist, so a compromised
+    // renderer could rewrite strataUrls (the key allowlist), openTabs, or jobs - bypassing
+    // sanitizeJobs() entirely and arming a prompt to fire on a schedule. Anything not on the list is
+    // refused and logged; `jobs` is only reachable through cron:save + sanitizeJobs().
+    const { allowed, refused } = splitSettingsPatch(patch);
+    if (refused.length) console.log(`[settings] refused key(s): ${refused.join(', ')}`);
+    const merged = { ...loadSettings(), ...allowed };
     saveSettings(merged);
     return merged;
   });
@@ -1102,6 +1213,7 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
       properties: ['openDirectory', 'createDirectory'],
     });
     if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
+    noteChosen(result.filePaths[0]);
     return { ok: true, path: result.filePaths[0] };
   });
 
@@ -1144,6 +1256,7 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
       ...(Array.isArray(filters) && filters.length ? { filters } : {}),
     });
     if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
+    noteChosen(result.filePaths[0]);
     return { ok: true, path: result.filePaths[0] };
   });
 
@@ -1161,29 +1274,51 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
   });
 
   ipcMain.handle('fs:stat-paths', (_event, { paths: items = [] }) => {
-    return items.map((item) => {
+    // drag & drop stats files from anywhere the user dropped them from, so this stays open apart
+    // from the credential-bearing paths - but the renderer does not decide how many paths one call
+    // may ask for
+    const asked = Array.isArray(items) ? items.slice(0, 50) : [];
+    if (Array.isArray(items) && items.length > asked.length) {
+      console.log(`[fs] stat-paths truncated ${items.length} -> ${asked.length}`);
+    }
+    return asked.map((item) => {
+      const guard = fsGuard.statAllowed(String(item || ''), { denied: deniedStatPaths() });
+      if (!guard.ok) {
+        console.log(`[fs] stat refused: ${guard.path}`);
+        return { path: String(item), name: path.basename(String(item)), error: guard.error, refused: true };
+      }
       try {
-        const stat = fs.statSync(item);
+        const stat = fs.statSync(guard.path);
         return {
-          path: item,
-          name: path.basename(item),
-          dir: path.dirname(item),
+          path: guard.path,
+          name: path.basename(guard.path),
+          dir: path.dirname(guard.path),
           size: stat.size,
           isDirectory: stat.isDirectory(),
-          ext: path.extname(item).toLowerCase(),
+          ext: path.extname(guard.path).toLowerCase(),
         };
       } catch (err) {
-        return { path: item, name: path.basename(item), error: err.message };
+        return { path: String(item), name: path.basename(String(item)), error: err.message };
       }
     });
   });
 
   ipcMain.handle('fs:read-text', (_event, { filePath, maxBytes = 200000 }) => {
+    // #6: this used to read ANY absolute path the renderer named, with the cap supplied by the
+    // caller - ~/.pi/agent/settings.json and models.json (which hold the Strata key) were one call
+    // away. The preload binding is gone too, so the renderer has no way to reach this at all; the
+    // guard stays as defence in depth for any future caller.
+    const guard = fsGuard.readAllowed(String(filePath || ''), { roots: readRoots() });
+    if (!guard.ok) {
+      console.log(`[fs] read refused: ${guard.path}`);
+      return { ok: false, error: guard.error, refused: true };
+    }
     try {
-      const stat = fs.statSync(filePath);
+      const stat = fs.statSync(guard.path);
       if (stat.isDirectory()) return { ok: false, error: 'is a directory' };
-      if (stat.size > maxBytes) return { ok: false, error: `file larger than ${maxBytes} bytes`, tooLarge: true };
-      return { ok: true, text: fs.readFileSync(filePath, 'utf8'), size: stat.size };
+      const cap = Math.min(Math.max(Number(maxBytes) || 0, 0), 2000000);
+      if (stat.size > cap) return { ok: false, error: `file larger than ${cap} bytes`, tooLarge: true };
+      return { ok: true, text: fs.readFileSync(guard.path, 'utf8'), size: stat.size };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -1191,30 +1326,25 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
 
   ipcMain.handle('strata:metrics', async (_event, { baseUrl, all = false, apiKey = '', timeoutMs = 4000 } = {}) => {
     if (!baseUrl) return { ok: false, error: 'no base url' };
-    let target;
-    try {
-      const trimmed = String(baseUrl).replace(/\/+$/, '').replace(/\/v1$/i, '');
-      target = new URL(`${trimmed}/metrics${all ? '?requests=all' : ''}`);
-    } catch {
-      return { ok: false, error: `invalid base url: ${baseUrl}` };
-    }
-    if (target.protocol !== 'http:' && target.protocol !== 'https:') return { ok: false, error: 'unsupported protocol' };
-    const key = apiKey || process.env.STRATAPILOT_KEY || process.env.STRATA_API_KEY || '';
+    const target = buildTargetUrl(baseUrl, `/metrics${all ? '?requests=all' : ''}`);
+    const policy = netPolicy.urlPolicy(target);
+    if (!policy.ok) return { ok: false, error: policy.error, url: target ? target.href : String(baseUrl) };
+    const useKey = strataKeyFor(target, apiKey);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
     try {
       const response = await fetch(target, {
-        headers: { accept: 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
+        headers: { accept: 'application/json', ...(useKey.key ? { authorization: `Bearer ${useKey.key}` } : {}) },
         cache: 'no-store',
         signal: controller.signal,
       });
       const text = await response.text();
-      if (!response.ok) return { ok: false, error: `HTTP ${response.status}`, status: response.status, url: target.href };
+      if (!response.ok) return { ok: false, error: `HTTP ${response.status}`, status: response.status, url: target.href, keyWithheld: useKey.withheld };
       try {
-        return { ok: true, url: target.href, data: JSON.parse(text) };
+        return { ok: true, url: target.href, data: JSON.parse(text), keyWithheld: useKey.withheld };
       } catch {
-        return { ok: false, error: 'response was not JSON', url: target.href };
+        return { ok: false, error: 'response was not JSON', url: target.href, keyWithheld: useKey.withheld };
       }
     } catch (err) {
       return { ok: false, error: err.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : err.message, url: target.href };
@@ -1226,22 +1356,18 @@ ipcMain.handle('app:diagnostics', async (_event, payload) => buildDiagnostics(pa
   // D6: a cheap reachability probe per server, used by the Monitor's server switcher
   ipcMain.handle('strata:health', async (_event, { baseUrl, apiKey = '', timeoutMs = 2500 } = {}) => {
     if (!baseUrl) return { ok: false, error: 'no base url' };
-    let target;
-    try {
-      target = new URL(`${String(baseUrl).replace(/\/+$/, '').replace(/\/v1$/i, '')}/health`);
-    } catch {
-      return { ok: false, error: `invalid base url: ${baseUrl}` };
-    }
-    if (target.protocol !== 'http:' && target.protocol !== 'https:') return { ok: false, error: 'unsupported protocol' };
-    const key = apiKey || process.env.STRATAPILOT_KEY || process.env.STRATA_API_KEY || '';
+    const target = buildTargetUrl(baseUrl, '/health');
+    const policy = netPolicy.urlPolicy(target);
+    if (!policy.ok) return { ok: false, error: policy.error, url: target ? target.href : String(baseUrl) };
+    const useKey = strataKeyFor(target, apiKey);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
     const startedAt = Date.now();
     try {
-      const response = await fetch(target, { headers: { accept: 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) }, cache: 'no-store', signal: controller.signal });
+      const response = await fetch(target, { headers: { accept: 'application/json', ...(useKey.key ? { authorization: `Bearer ${useKey.key}` } : {}) }, cache: 'no-store', signal: controller.signal });
       const text = await response.text();
-      return { ok: response.ok, status: response.status, url: target.href, ms: Date.now() - startedAt, body: text.slice(0, 200) };
+      return { ok: response.ok, status: response.status, url: target.href, ms: Date.now() - startedAt, body: text.slice(0, 200), keyWithheld: useKey.withheld };
     } catch (err) {
       return { ok: false, error: err.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : err.message, url: target.href, ms: Date.now() - startedAt };
     } finally {
