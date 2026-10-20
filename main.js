@@ -599,6 +599,8 @@ const CRON_TICK_MS = 30 * 1000;
 const CRON_GRACE_MS = 2 * 60 * 1000;
 
 let cronTimer = null;
+/** key -> { jobId, name, firedAt, timer } for fires still waiting for a renderer ack. (#9) */
+const pendingFires = new Map();
 
 function jobList() {
   const jobs = loadSettings().jobs;
@@ -651,25 +653,70 @@ function cronRecompute(reason) {
 function cronTick() {
   const now = new Date();
   const jobs = jobList();
-  let changed = false;
   for (const job of jobs) {
     if (!job.enabled || !job.nextRun) continue;
     const due = Date.parse(job.nextRun);
     if (!Number.isFinite(due) || due > now.getTime()) continue;
     if (now.getTime() - due > CRON_GRACE_MS) continue; // handled by cronRecompute as "missed"
-    console.log(`[cron] firing "${job.name || job.schedule}" (${job.schedule}) target=${job.target || 'new-tab'}`);
-    send('cron:fire', { job, firedAt: now.toISOString(), manual: false });
-    job.lastRun = now.toISOString();
-    let next = null;
-    try {
-      next = cron.nextRun(job.schedule, now);
-    } catch (err) {
-      console.error(`[cron] job ${job.id} has an invalid schedule (${job.schedule}): ${err.message}`);
-    }
-    job.nextRun = next ? next.toISOString() : null;
-    changed = true;
+    fireJob(job, now, { manual: false });
   }
-  if (changed) saveJobs(jobs);
+}
+
+/**
+ * Announce a due job and wait for the renderer to accept it. Nothing is written to the job until the
+ * ack arrives: `send()` drops the event silently when the window is gone or reloading, and the old
+ * code marked the run as done in the same tick, so a fire during a C9 window reload was lost while
+ * the log said it ran. (#9)
+ */
+function fireJob(job, firedAt, { manual }) {
+  const firedAtIso = firedAt.toISOString();
+  if (!win || win.isDestroyed()) {
+    // nobody can accept the prompt: report it now rather than pretending it ran
+    console.log(`[cron] NOT firing "${job.name || job.schedule}": no window to accept the prompt`);
+    send('cron:notice', { kind: 'undelivered', jobs: [{ id: job.id, name: job.name || job.schedule, scheduled: job.nextRun }], reason: 'no window' });
+    const jobs = jobList();
+    const target = jobs.find((entry) => entry.id === job.id);
+    if (target) {
+      const rearmed = cron.rearmAfterUnackedFire(target, firedAt);
+      Object.assign(target, rearmed);
+      saveJobs(jobs);
+    }
+    return { ok: false, error: 'no window to accept the prompt' };
+  }
+  console.log(`[cron] firing "${job.name || job.schedule}" (${job.schedule}) target=${job.target || 'new-tab'} waiting for ack`);
+  const key = cron.fireKey(job.id, firedAtIso);
+  const timer = setTimeout(() => {
+    if (!pendingFires.delete(key)) return;
+    // leave lastRun alone and report it: the run did not happen, and saying so is cheaper than a
+    // user finding out from a transcript that was never written
+    console.log(`[cron] no ack for "${job.name || job.schedule}" after ${cron.CRON_ACK_MS}ms: the run did not happen`);
+    const jobs = jobList();
+    const target = jobs.find((entry) => entry.id === job.id);
+    if (target) {
+      Object.assign(target, cron.rearmAfterUnackedFire(target, new Date()));
+      saveJobs(jobs);
+    }
+    send('cron:notice', { kind: 'undelivered', jobs: [{ id: job.id, name: job.name || job.schedule, scheduled: firedAtIso }], reason: 'no ack' });
+  }, cron.CRON_ACK_MS);
+  timer.unref?.();
+  pendingFires.set(key, { jobId: job.id, name: job.name || job.schedule, firedAt: firedAtIso, timer });
+  send('cron:fire', { job, firedAt: firedAtIso, manual, key });
+  return { ok: true, pending: true, key };
+}
+
+/** The renderer accepted the prompt into a tab's outbox: now the run counts. */
+function cronAck(key) {
+  const entry = pendingFires.get(key);
+  if (!entry) return { ok: false, error: 'no such pending fire' };
+  clearTimeout(entry.timer);
+  pendingFires.delete(key);
+  const jobs = jobList();
+  const job = jobs.find((entry2) => entry2.id === entry.jobId);
+  if (!job) return { ok: false, error: 'no such job' };
+  Object.assign(job, cron.commitFire(job, entry.firedAt, new Date()));
+  saveJobs(jobs);
+  console.log(`[cron] acked "${entry.name}"; lastRun=${job.lastRun} next=${job.nextRun || '(none)'}`);
+  return { ok: true, lastRun: job.lastRun, nextRun: job.nextRun };
 }
 
 function cronStart() {
@@ -964,9 +1011,15 @@ function registerIpc() {
   ipcMain.handle('cron:run-now', (_event, { id } = {}) => {
     const job = jobList().find((entry) => entry.id === id);
     if (!job) return { ok: false, error: 'no such job' };
-    console.log(`[cron] run-now "${job.name}" (manual)`);
-    send('cron:fire', { job, firedAt: new Date().toISOString(), manual: true });
-    return { ok: true };
+    const result = fireJob(job, new Date(), { manual: true });
+    // #9: this used to answer { ok: true } without the job having been queued anywhere; the button
+    // now reports whether the renderer is even there to take the prompt
+    return result;
+  });
+
+  ipcMain.on('cron:ack', (_event, { key } = {}) => {
+    const result = cronAck(String(key || ''));
+    if (!result.ok) console.log(`[cron] ack refused (${key}): ${result.error}`);
   });
 
   // Smoke-only: lets a scenario take a screenshot (theme checks, layout checks). Never registered

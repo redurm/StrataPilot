@@ -6085,8 +6085,14 @@ async function resolveJobTarget(job) {
   return createTab({ cwd: job.cwd || state.cwd, ephemeral: job.ephemeral !== false });
 }
 
-async function handleCronFire({ job, firedAt, manual }) {
+async function handleCronFire({ job, firedAt, manual, key }) {
   const name = job.name || job.schedule || 'job';
+  // #9: main.js writes lastRun only after this ack. Acking here means the prompt is genuinely in a
+  // tab's outbox - if the window reloaded before the event arrived, we never get here and the run is
+  // reported as undelivered instead of silently marked as done.
+  const ack = () => {
+    if (key) api.cronAck(key);
+  };
   try {
     const tab = await resolveJobTarget(job);
     if (!tab) return;
@@ -6101,7 +6107,8 @@ async function handleCronFire({ job, firedAt, manual }) {
     pushNote(tab, `scheduled job "${name}" (${job.schedule}) queued${manual ? ' now (manual run)' : ''}: ${oneLine(job.prompt, 200)}`, 'info');
     scheduler.pumpSoon(0);
     toast(`scheduled job "${name}" queued in ${tabLabel(tab)}`, 'info', 6000);
-    console.log(`[cron] fired job=${job.id} name=${JSON.stringify(name)} target_tab=${tab.id} outbox=${tab.outbox.length} manual=${!!manual} firedAt=${firedAt}`);
+    console.log(`[cron] fired job=${job.id} name=${JSON.stringify(name)} target_tab=${tab.id} outbox=${tab.outbox.length} manual=${!!manual} firedAt=${firedAt} acked=${!!key}`);
+    ack();
   } catch (err) {
     console.error(`[cron] firing "${name}" failed: ${err.stack || err}`);
     toast(`scheduled job "${name}" failed: ${err.message}`, 'error', 9000);
@@ -7175,6 +7182,7 @@ function wireUi() {
     const info = event && typeof event === 'object' ? event : {};
     const names = (info.jobs || []).map((job) => job.name).join(', ');
     if (info.kind === 'missed') toast(`scheduled job${info.jobs.length > 1 ? 's' : ''} missed its run while the machine slept: ${names} \u2014 not replayed, next run is scheduled`, 'warning', 12000);
+    else if (info.kind === 'undelivered') toast(`scheduled job${info.jobs.length > 1 ? 's' : ''} ${names} could not be delivered (${info.reason || 'the interface was not there to take it'}) \u2014 it did NOT run, next run is scheduled`, 'warning', 12000);
     else if (info.kind === 'invalid') toast(`scheduled job ${names} has an invalid schedule: ${(info.jobs[0] || {}).error || ''}`, 'error', 12000);
     console.log(`[cron] notice kind=${info.kind} reason=${info.reason || ''} jobs=${names}`);
   });

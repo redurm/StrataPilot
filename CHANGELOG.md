@@ -318,6 +318,23 @@ that is shipped (`0.x` while the app has no packaging/installer yet).
   therefore the diagnostics report's log tail - mentions them. Framing recovers: the buffer restarts
   empty, so the next complete record is still parsed. Three cases in `test/pi-process.test.js`.
 
+- **A scheduled job that never ran was reported as having run** - `cronTick()` fired the job and marked
+  it run in the same tick: `send('cron:fire', …)` then `job.lastRun = …`, `job.nextRun = …`, saved.
+  But `send()` drops the event silently when the window is gone or reloading - and the renderer is
+  exactly the part C9 reloads after `render-process-gone` / `unresponsive` / `did-fail-load`. The
+  prompt was lost, the log said `firing "…"`, `lastRun` was set and the next run was armed for
+  tomorrow, and the user got no notice because `cronRecompute()` only reports runs whose *stored*
+  `nextRun` was slept through. A fire now waits for the renderer to ack it with the same key
+  (`cron.fireKey` → `cron:fire { key }` → `cron:ack`), and only then does `cron.commitFire()` move
+  `lastRun` and re-arm `nextRun`. If nothing acks within 5 s the job keeps its old `lastRun`, is
+  re-armed (so the 30 s tick cannot fire the same prompt four times before the grace window closes)
+  and a `cron:notice` of a new kind `undelivered` reaches the user as a toast: *it did NOT run, next
+  run is scheduled*. The same one-way shape on **run now** is fixed too - the button used to get
+  `{ ok: true }` without the job having been queued anywhere, and now reports whether the renderer is
+  there at all. Four cases in `test/cron.test.js` pin the state machine (key stability, commit moves
+  `lastRun` and arms the next occurrence rather than re-firing today, re-arm leaves `lastRun` alone,
+  an invalid schedule cannot throw the tick).
+
 ### Changed
 
 - **The README now starts from a fresh clone instead of from the feature list.** A first-time user used to
