@@ -21,6 +21,7 @@ const ROOT = path.join(__dirname, '..');
 const SOURCES = [
   // toast() translates its message centrally (#32), so a bare toast('saved') is a catalog key too:
   ['renderer/app.js', ['tr', 'i18nKey', 'toast', ['pushNote', 1]]],
+  ['renderer/storage.js', ['tr', 'i18nKey', 'toast', ['pushNote', 1]]],
   ['main.js', ['tr']],
   // describeCron() builds the Jobs list text in lib/cron.js; without this the phrases it wraps in t() never reach
   // the catalogs, and the extractor cannot fail when one is missing
