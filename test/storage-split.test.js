@@ -113,4 +113,18 @@ test('the composer, queue and outbox functions are declared in composer.js, not 
     assert.ok(app.includes(kept), `${kept} belongs in app.js, not in composer.js`);
     assert.ok(!moved.includes(kept), `${kept} does not belong in composer.js`);
   }
+});
+
+test('the transcript builders live in transcript.js, and app.js keeps the state they read', () => {
+  const moved = read('transcript.js');
+  const app = read('app.js');
+  for (const name of ['tokenLabel', 'appendPath', 'appendPreText', 'toolArgSummary', 'buildToolCard',
+    'bashEntryFromMessage', 'bashFootText', 'buildBashCard', 'buildMessageActions', 'buildMessageNode',
+    'buildNoteNode', 'buildItemNode', 'appendItem', 'pushNote', 'renderAll']) {
+    const decl = new RegExp(`^(?:async )?function ${name}\\(`, 'm');
+    assert.ok(decl.test(moved), `${name} should live in renderer/transcript.js`);
+    assert.ok(!decl.test(app), `${name} is declared in both files`);
+  }
+  const order = [...read('index.html').matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
+  assert.ok(order.indexOf('transcript.js') < order.indexOf('app.js'), 'load transcript.js before app.js');
 });
