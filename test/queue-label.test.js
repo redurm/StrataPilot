@@ -24,12 +24,14 @@ const path = require('node:path');
 // still fills {placeholders}, which is what these assertions are about
 const { makeT } = require(path.join('..', 'renderer', 'i18n.js'));
 
-const appSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8');
+const appSource = ['renderer/app.js', 'renderer/composer.js']
+  .map((f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8'))
+  .join(String.fromCharCode(10));
 
 /** Return the text of a top-level `function name(...) { ... }` in the renderer source. */
 function functionSource(name) {
   const start = appSource.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `renderer/app.js no longer defines ${name}()`);
+  assert.notEqual(start, -1, `renderer/app.js or composer.js no longer defines ${name}()`);
   const open = appSource.indexOf('{', start);
   let depth = 0;
   for (let i = open; i < appSource.length; i++) {

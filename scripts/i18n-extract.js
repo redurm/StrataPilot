@@ -25,6 +25,7 @@ const SOURCES = [
   ['renderer/tree.js', ['tr', 'i18nKey', 'toast', ['pushNote', 1]]],
   ['renderer/settings.js', ['tr', 'i18nKey', 'toast', ['pushNote', 1]]],
   ['renderer/modals.js', ['tr', 'i18nKey', 'toast', ['pushNote', 1]]],
+  ['renderer/composer.js', ['tr', 'i18nKey', 'toast', ['pushNote', 1]]],
   ['main.js', ['tr']],
   // describeCron() builds the Jobs list text in lib/cron.js; without this the phrases it wraps in t() never reach
   // the catalogs, and the extractor cannot fail when one is missing
