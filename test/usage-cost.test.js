@@ -15,19 +15,21 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const appSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'app.js'), 'utf8');
+const appSource = ['renderer/app.js', 'renderer/storage.js']
+  .map((f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8'))
+  .join(String.fromCharCode(10));
 
 /** Return the single-line `const NAME = ...;` declaration from the renderer source. */
 function constSource(name) {
   const match = appSource.match(new RegExp(`^const ${name} = .*;$`, 'm'));
-  assert.ok(match, `renderer/app.js no longer has a one-line \`const ${name}\``);
+  assert.ok(match, `renderer/app.js or renderer/storage.js no longer has a one-line \`const ${name}\``);
   return match[0];
 }
 
 /** Return the text of a top-level `function name(...) { ... }` in the renderer source. */
 function functionSource(name) {
   const start = appSource.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `renderer/app.js no longer defines ${name}()`);
+  assert.notEqual(start, -1, `renderer/app.js or renderer/storage.js no longer defines ${name}()`);
   const open = appSource.indexOf('{', start);
   let depth = 0;
   for (let index = open; index < appSource.length; index += 1) {
