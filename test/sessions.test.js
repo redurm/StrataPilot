@@ -474,6 +474,20 @@ test('cleanupPlan: age rule and per-folder cap, and neither rule deletes anythin
       assert.equal(byCount.bytes, 1000);
       assert.ok(byCount.candidates.every((entry) => /beyond the 2 newest/.test(entry.reason)));
 
+      // #46: both rules are >= comparisons, so 0 is not "off" - it is "everything in the folder is a
+      // candidate", including the file a live pi is appending to right now
+      assert.throws(() => cleanupPlan({ keepNewestPerGroup: 0 }), /must be at least 1/);
+      assert.throws(() => cleanupPlan({ olderThanDays: -1 }), /cannot be negative/);
+      // "older than 0 days" is a coherent request (everything on disk), and the open-tab skip set is
+      // what protects a session a live pi is writing to - so it stays allowed
+      const everything = cleanupPlan({ olderThanDays: 0 });
+      assert.equal(everything.candidates.length, 5, 'every file is a candidate, and deleteSessions still skips open ones');
+
+      const keepOne = cleanupPlan({ keepNewestPerGroup: 1 });
+      const names = keepOne.candidates.map((entry) => path.basename(entry.path));
+      assert.ok(!names.includes('new-a.jsonl'), 'the newest file in a group is never a candidate');
+      assert.ok(!names.includes('solo.jsonl'), 'a group with one file keeps it');
+
       const none = cleanupPlan({});
       assert.equal(none.candidates.length, 0);
       assert.equal(none.scannedFiles, 5);

@@ -2309,7 +2309,14 @@ async function bootstrap(tab) {
     tab.model = data.model || null;
     tab.thinking = data.thinkingLevel || tab.thinking;
     tab.sessionId = data.sessionId || '';
-    tab.sessionPath = data.sessionFile || tab.sessionPath;
+    // #46: hand the path to main as soon as it is known. A cleanup must not offer the file a live tab
+    // is writing to, and main only knows what it is told (or what it reads from get_state itself).
+    if (!tab.sessionPath && data.sessionFile) {
+      tab.sessionPath = data.sessionFile;
+      api.setSessionPath({ tabId: tab.id, sessionPath: data.sessionFile });
+    } else {
+      tab.sessionPath = tab.sessionPath || data.sessionFile || null;
+    }
     tab.name = data.sessionName || tab.name;
     tab.isStreaming = !!data.isStreaming;
     tab.autoCompact = data.autoCompactionEnabled !== false;

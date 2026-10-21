@@ -534,20 +534,28 @@ function spawnTab({ tabId, cwd, args = [], env = {} }) {
     cwdFallback = cwd || '(none)';
     console.log(`[spawn] tab=${tabId} cwd missing: ${cwdFallback} -> ${resolvedCwd}`);
   }
+  // D7: the process records which session file it owns (--session on the command line), so a bulk
+  // cleanup refuses to delete a session that is open in a tab - the file would keep being written to
+  // while deleted. A brand-new tab has no --session flag, so the path is filled in later, below (#46).
   const proc = new PiRpcProcess({ id: tabId, cwd: resolvedCwd, args, env });
-  // D7: remember which session file this process owns, so a bulk cleanup refuses to delete a
-  // session that is open in a tab (the file would keep being written to while deleted)
-  {
-    const flagIndex = args.findIndex((arg) => String(arg) === '--session');
-    proc.sessionPath = flagIndex >= 0 && args[flagIndex + 1] ? String(args[flagIndex + 1]) : null;
-  }
 
   proc.on('record', (record) => {
     send('pi:record', { tabId, record });
     // D9: a settled run - and a compaction, which is a model call of its own - is when new usage
     // lands in the session file, so the ledger follows without waiting for the process to exit
-    if (record && (record.type === 'agent_settled' || record.type === 'compaction_end')) scheduleUsageRefresh(2500);
+    if (record && (record.type === 'agent_settled' || record.type === 'compaction_end')) {
+      scheduleUsageRefresh(2500);
+      // #46: pi creates the file for a fresh session on its own. Until main knows where it is,
+      // openSessionPaths() cannot protect it, and a cleanup could delete the file this process is
+      // writing to. One get_state per settled run while the path is unknown, capped inside the process.
+      if (!proc.sessionPath) proc.resolveSessionPath().catch(() => {});
+    }
   });
+  proc.on('session-path', (file) => console.log(`[pi session tab=${tabId}] ${file}`));
+  // #46: pi writes the session file during its own startup, so the gap to close runs from spawn to the
+  // first settled run - long enough for a cleanup dialog opened right now to offer the file this
+  // process is about to write to. Ask once here instead of waiting for a turn to finish.
+  proc.resolveSessionPath().catch(() => {});
   proc.on('stderr', (text) => {
     console.error(`[pi stderr tab=${tabId}] ${text.slice(0, 1000)}`);
     send('pi:stderr', { tabId, text: text.slice(0, 4000) });

@@ -15,6 +15,10 @@
  *   slow   -> respond 500ms later (for timeout tests that cancel first)
  *   silent -> never respond (forces the command() timeout path)
  *   boom   -> exit the process immediately (tests pending rejection on exit)
+ *   get_state -> respond with {success:true, data:{sessionId, sessionFile}} where
+ *             sessionFile comes from STRATAPILOT_STUB_SESSION_FILE (empty means
+ *             "pi has not created the file yet"), which is how #46's
+ *             resolveSessionPath() is exercised.
  *
  * On startup it also emits one unparsable line and one non-response record so
  * the test can assert the `log` and `record` event paths.
@@ -22,6 +26,9 @@
 
 process.stdout.write('this line is not json\n');
 process.stdout.write(JSON.stringify({ type: 'extension_message', text: 'hello from stub' }) + '\n');
+
+// the record separator, kept out of string literals so this file has no escape sequences to trip on
+const LF = String.fromCharCode(10);
 
 const rl = require('node:readline').createInterface({ input: process.stdin });
 
@@ -64,6 +71,14 @@ rl.on('line', (line) => {
       break; // never answer -> caller times out
     case 'boom':
       process.exit(3);
+      break;
+    case 'get_state':
+      process.stdout.write(respond(cmd, {
+        data: {
+          sessionId: 'stub-session',
+          sessionFile: process.env.STRATAPILOT_STUB_SESSION_FILE || '',
+        },
+      }) + LF);
       break;
     default:
       process.stdout.write(respond(cmd) + '\n');

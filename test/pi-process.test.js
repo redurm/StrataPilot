@@ -11,7 +11,9 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { once } = require('node:events');
 
-const { PiRpcProcess, splitRecords, MAX_LINE_BYTES } = require('../lib/pi-process');
+const fs = require('node:fs');
+
+const { PiRpcProcess, splitRecords, MAX_LINE_BYTES, MAX_SESSION_PATH_PROBES } = require('../lib/pi-process');
 
 const STUB = path.join(__dirname, 'fixtures', 'rpc-stub.js');
 
@@ -20,6 +22,18 @@ function startStub() {
     id: 'stub',
     cwd: __dirname,
     // injectable invocation: run the stub with the current node instead of pi
+    invocation: { nodePath: process.execPath, cliPath: STUB, nodeArgPrefix: [], runAsNode: false },
+  });
+  proc.start();
+  return proc;
+}
+
+function startStubWith({ args = [], env = {} } = {}) {
+  const proc = new PiRpcProcess({
+    id: 'stub-args',
+    cwd: __dirname,
+    args,
+    env,
     invocation: { nodePath: process.execPath, cliPath: STUB, nodeArgPrefix: [], runAsNode: false },
   });
   proc.start();
@@ -262,4 +276,50 @@ test('the exit event carries the drop counters so the log and the report can men
   const [info] = await exited;
   assert.ok(info.droppedBytes > MAX_LINE_BYTES, `droppedBytes=${info.droppedBytes}`);
   assert.equal(info.droppedRecords, 1);
+});
+
+/* ---- resolveSessionPath: the file a fresh tab's pi created on its own (#46) ---- */
+
+test('a tab opened on an existing session knows its file from the flag and never probes', async () => {
+  const proc = startStubWith({ args: ['--session', 'C:/sessions/existing.jsonl'] });
+  assert.equal(proc.sessionPath, 'C:/sessions/existing.jsonl', 'the --session flag must be read at construction');
+  assert.equal(await proc.resolveSessionPath(), 'C:/sessions/existing.jsonl');
+  assert.equal(proc.sessionPathProbes, 0, 'a path that is already known must not cost an RPC');
+  proc.dispose();
+});
+
+test('an ephemeral tab (--no-session) never looks for a file', async () => {
+  const proc = startStubWith({ args: ['--no-session'] });
+  assert.equal(proc.sessionPath, null);
+  assert.equal(await proc.resolveSessionPath(), '');
+  assert.equal(proc.sessionPathProbes, 0, 'there is nothing to find, so there is nothing to ask for');
+  proc.dispose();
+});
+
+test('a fresh tab adopts the file pi created, once, and tells its listeners', async () => {
+  const file = 'C:/sessions/fresh.jsonl';
+  const proc = startStubWith({ env: { STRATAPILOT_STUB_SESSION_FILE: file } });
+  const seen = [];
+  proc.on('session-path', (value) => seen.push(value));
+  assert.equal(await proc.resolveSessionPath(), file);
+  assert.equal(proc.sessionPath, file);
+  assert.deepEqual(seen, [file], 'the session-path event is how main logs it and the renderer stays informed');
+  assert.equal(await proc.resolveSessionPath(), file, 'a second call must be free');
+  assert.equal(proc.sessionPathProbes, 1, 'the path must not be probed again once it is known');
+  proc.dispose();
+});
+
+test('a session that never gets a file stops probing instead of asking on every settle', async () => {
+  const proc = startStubWith({ env: { STRATAPILOT_STUB_SESSION_FILE: '' } });
+  for (let i = 0; i < MAX_SESSION_PATH_PROBES + 3; i += 1) {
+    assert.equal(await proc.resolveSessionPath(), '');
+  }
+  assert.equal(proc.sessionPathProbes, MAX_SESSION_PATH_PROBES, 'probing has to stop somewhere');
+  proc.dispose();
+});
+
+test('main fills the path in when a run settles, and only PiRpcProcess parses --session (#46)', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.ok(main.includes('proc.resolveSessionPath()'), 'the settle handler must fill in the path for fresh tabs');
+  assert.ok(!main.includes("String(arg) === '--session'"), 'the --session parsing belongs to PiRpcProcess, not to two places');
 });
