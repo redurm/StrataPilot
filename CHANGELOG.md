@@ -22,6 +22,11 @@ append-only); parallel PRs all editing the version would fight over the same lin
 - **The i18n smoke scenario stopped racing the scenario next door** - it opened the Settings dialog unconditionally while other scenarios were opening their own (storage, the cron editor, the setup wizard), and the app allows only one modal at a time. It then found no language dropdown (`options=` empty in its own log line), switched nothing, and printed the #30 failure text - a false alarm that read like the monitor-language regression had come back, twice. It now waits up to 20s for the modal slot, and says `SKIP` when the switch genuinely could not be exercised, so `monitor_translated=false` only appears when something really is broken. Verified against the full 26-scenario run: `options=auto,en,zh-TW,zh-CN`, `switched=true`, `monitor_translated=true`, zero `FAIL` lines (#43).
 
 
+
+### Fixed
+
+- **A session that is open in a tab can no longer end up on the cleanup delete list** - `openSessionPaths()` only knew the paths main had been told about: the `--session` flag at spawn, or a renderer report on switch/fork. A brand-new tab has no flag, and pi writes the session file during its own startup, so from that moment until the first settled run the file was a deletion candidate - deleting it leaves pi appending to a file that no longer exists. `PiRpcProcess` now owns the question: it reads `--session` itself, resolves the path through `get_state` right after spawn and again on settle (3 probes max, skipped entirely for `--no-session` tabs), and emits `session-path`; `bootstrap()` hands the path to main the moment it sees it, which costs no extra round trip and in practice wins the race, making main's own probe pure fallback. `cleanupPlan` also refuses `keepNewestPerGroup < 1` - `index >= 0` is always true, so 0 means every file in every folder is a candidate - while `olderThanDays: 0` ("everything on disk") stays legal because the skip set, not the age rule, is what protects open files. The storage smoke scenario now **fails** instead of merely recording when the open session is listed: before `open_in_list=true` with `everything=14 scanned=14`; after, `open_in_list=false` with `everything=14 scanned=15` (#46).
+
 ## [0.2.1] - 2026-10-20
 
 Bug fixes on top of 0.2.0. The headline is that releases are now downloadable: the 0.2.0 tag built

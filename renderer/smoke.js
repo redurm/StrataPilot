@@ -811,6 +811,11 @@ async function smokeStorageScenario() {
   const openPath = tab && tab.sessionPath ? tab.sessionPath : null;
   const normalised = (value) => String(value || '').replace(/[\/]+/g, '\\').toLowerCase();
   const openListed = openPath ? everything.candidates.some((entry) => normalised(entry.path) === normalised(openPath)) : false;
+  // #46: this used to be recorded, never asserted. A session that is open in a tab must never be on the
+  // delete list - deleting it means pi keeps appending to a file that no longer exists.
+  if (openListed) {
+    console.log(`[smoke-storage] FAIL the session open in this tab is on the delete list: ${openPath} (#46)`);
+  }
   const footer = els.sideFoot.textContent;
   const opened = openStorageModal();
   await new Promise((resolve) => setTimeout(resolve, 700));
