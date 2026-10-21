@@ -83,7 +83,7 @@ test('no moved script runs app.js code at load time', () => {
   // happy and every unit test is green. Benign literals are fine; a call into app.js is not.
   const appNames = new Set();
   for (const m of read('app.js').matchAll(/^(?:const|let|var|function|async function)\s+([A-Za-z0-9_$]+)/gm)) appNames.add(m[1]);
-  for (const file of ['storage.js', 'tree.js', 'settings.js', 'dom-refs.js']) {
+  for (const file of ['storage.js', 'tree.js', 'settings.js', 'dom-refs.js', 'modals.js', 'composer.js', 'transcript.js', 'monitor.js', 'chrome.js']) {
     const lines = read(file).split(/\r?\n/);
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
@@ -142,4 +142,25 @@ test('the Monitor panel lives in monitor.js, and its load-time tables stay in ap
   }
   const order = [...read('index.html').matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
   assert.ok(order.indexOf('monitor.js') < order.indexOf('app.js'), 'load monitor.js before app.js');
+});
+
+test('the chrome lives in chrome.js, the menus in composer.js, and the bar table stays in app.js', () => {
+  const chrome = read('chrome.js');
+  const composer = read('composer.js');
+  const app = read('app.js');
+  for (const name of ['rerenderChrome', 'applyLanguageSwitch', 'renderTabs', 'renderSelectors', 'renderStats',
+    'refreshStats', 'renderPinnedBars', 'renderNowBar', 'renderWidgets', 'renderCwdChip', 'renderAttachments',
+    'renderOpenSessions', 'refreshSessionsSoon', 'refreshSessions', 'renderEnvBar']) {
+    assert.ok(chrome.includes('function ' + name + '('), `${name} should live in renderer/chrome.js`);
+    assert.ok(!app.includes('function ' + name + '('), `${name} is declared in both files`);
+  }
+  for (const name of ['refreshSlashMenu', 'refreshPathMenu']) {
+    assert.ok(composer.includes('function ' + name + '('), `${name} belongs with the composer, not the chrome`);
+    assert.ok(!chrome.includes('function ' + name + '('), `${name} is not chrome`);
+  }
+  // the case that actually shipped broken in this step: a table built with i18nKey() at load time
+  for (const table of ['const REQUEST_SOURCE_LABEL']) {
+    assert.ok(app.includes(table), `${table} is a load-time i18n consumer: it stays in app.js`);
+    assert.ok(!chrome.includes(table), `${table} does not belong in chrome.js`);
+  }
 });

@@ -632,3 +632,83 @@ function persistedOutbox(tab) {
   if (pending.imagesDropped) entry.pendingImagesDropped = pending.imagesDropped;
   return entry;
 }
+
+async function refreshSlashMenu() {
+  const query = slashQuery();
+  if (query === null) {
+    closeSlashMenu();
+    return;
+  }
+  const tab = activeTab();
+  if (tab && tab.alive && !tab.commandsLoaded) {
+    await loadCommands(tab);
+    if (slashQuery() !== query) return; // the user kept typing while pi answered
+  }
+  const catalog = slashCatalog(tab);
+  const matches = catalog
+    .filter((c) => {
+      if (!query) return true;
+      const n = c.name.toLowerCase();
+      return n.startsWith(query) || n.includes(query) || (c.desc || '').toLowerCase().includes(query);
+    })
+    .sort((a, b) => {
+      const rank = (c) => (c.name.toLowerCase().startsWith(query) ? 0 : 1);
+      return rank(a) - rank(b) || a.name.length - b.name.length;
+    })
+    .slice(0, 12);
+  if (!matches.length) {
+    closeSlashMenu();
+    return;
+  }
+  slashMenu.items = matches;
+  slashMenu.index = 0;
+  slashMenu.open = true;
+  els.slashMenu.classList.remove('hidden');
+  els.slashMenu.textContent = '';
+  matches.forEach((item, index) => {
+    const row = el('div', `slash-item${index === 0 ? ' active' : ''}`);
+    row.appendChild(el('span', 'slash-name', `/${item.name}${item.args ? ` ${item.args}` : ''}`));
+    if (item.desc) row.appendChild(el('span', 'slash-desc', item.desc));
+    row.appendChild(el('span', 'slash-src', item.source));
+    row.addEventListener('mousedown', (event) => {
+      event.preventDefault(); // keep the caret in the textarea
+      acceptSlashItem(item);
+    });
+    els.slashMenu.appendChild(row);
+  });
+}
+
+async function refreshPathMenu() {
+  const query = atQuery();
+  if (!query) {
+    if (pathMenu.open) closePathMenu();
+    return;
+  }
+  const tab = activeTab();
+  if (!tab) return;
+  const request = ++pathMenu.requestId;
+  const res = await api.fsComplete({ cwd: tab.cwd, fragment: query.fragment });
+  if (request !== pathMenu.requestId) return; // a faster typist won
+  const fresh = atQuery();
+  if (!fresh || fresh.fragment !== query.fragment) return; // the caret moved while the list was built
+  if (!res.ok || !res.entries.length) {
+    closePathMenu();
+    return;
+  }
+  pathMenu.items = res.entries;
+  pathMenu.index = 0;
+  pathMenu.open = true;
+  els.slashMenu.classList.remove('hidden');
+  els.slashMenu.textContent = '';
+  res.entries.forEach((entry, index) => {
+    const row = el('div', `slash-item${index === 0 ? ' active' : ''}`);
+    row.appendChild(el('span', 'slash-name', `@${entry.path}${entry.isDirectory ? '/' : ''}`));
+    row.appendChild(el('span', 'slash-desc', entry.isDirectory ? 'folder' : 'file'));
+    row.appendChild(el('span', 'slash-src', res.total > res.entries.length ? `${res.entries.length} of ${res.total}` : tab.cwd.split(/[\/]/).pop() || ''));
+    row.addEventListener('mousedown', (event) => {
+      event.preventDefault(); // keep the caret in the textarea
+      acceptPathItem(entry);
+    });
+    els.slashMenu.appendChild(row);
+  });
+}

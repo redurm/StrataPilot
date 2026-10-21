@@ -218,7 +218,7 @@ test('the static chrome is walked once per language change, with the dynamic par
 });
 
 test('transcript notes are catalog keys, not interpolated strings (#45)', () => {
-  const app = ['app.js', 'transcript.js', 'composer.js', 'storage.js', 'settings.js', 'tree.js', 'modals.js', 'monitor.js']
+  const app = ['app.js', 'transcript.js', 'composer.js', 'storage.js', 'settings.js', 'tree.js', 'modals.js', 'monitor.js', 'chrome.js']
     .map((f) => fs.readFileSync(path.join(ROOT, 'renderer', f), 'utf8'))
     .join(String.fromCharCode(10));
   // pushNote() translates its text argument, so a template literal there can never be looked up: the
