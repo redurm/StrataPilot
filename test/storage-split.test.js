@@ -65,4 +65,34 @@ test('the page loads storage.js before app.js, and nothing lazy-loads it', () =>
   assert.ok(order.indexOf('storage.js') < order.indexOf('app.js'), 'load it before app.js');
   assert.ok(!/loadScriptOnce\(['"]storage\.js/.test(read('app.js')), 'storage.js must not be lazy-loaded');
   assert.ok(!/loadScriptOnce\(['"]storage\.js/.test(read('smoke.js')), 'smoke.js must not be the only thing that loads it');
+});
+
+test('the Settings dialog functions are declared in settings.js, not in app.js', () => {
+  const moved = read('settings.js');
+  const app = read('app.js');
+  for (const name of ['applyTheme', 'openSettingsModal', 'applySettings']) {
+    const decl = new RegExp(`^(?:async )?function ${name}\\(`, 'm');
+    assert.ok(decl.test(moved), `${name} should live in renderer/settings.js`);
+    assert.ok(!decl.test(app), `${name} is declared in both files`);
+  }
+});
+
+test('no moved script runs app.js code at load time', () => {
+  // the rule step 2 taught: a top-level table built with i18nKey() (or any call into app.js) inside a
+  // script that loads before app.js is a ReferenceError that kills the window, while node --check is
+  // happy and every unit test is green. Benign literals are fine; a call into app.js is not.
+  const appNames = new Set();
+  for (const m of read('app.js').matchAll(/^(?:const|let|var|function|async function)\s+([A-Za-z0-9_$]+)/gm)) appNames.add(m[1]);
+  for (const file of ['storage.js', 'tree.js', 'settings.js', 'dom-refs.js']) {
+    const lines = read(file).split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (!line || /^[ \t})/*]/.test(line)) continue;
+      if (/^(?:async )?function /.test(line)) continue;
+      if (/^'use strict';$/.test(line)) continue;
+      for (const m of line.matchAll(/\b([A-Za-z0-9_$]+)\s*\(/g)) {
+        assert.ok(!appNames.has(m[1]), `${file}:${i + 1} calls ${m[1]}() from app.js while it loads - keep this table in app.js`);
+      }
+    }
+  }
 });
