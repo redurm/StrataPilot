@@ -20,7 +20,7 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const SOURCES = [
   // toast() translates its message centrally (#32), so a bare toast('saved') is a catalog key too:
-  ['renderer/app.js', ['tr', 'i18nKey', 'toast']],
+  ['renderer/app.js', ['tr', 'i18nKey', 'toast', ['pushNote', 1]]],
   ['main.js', ['tr']],
   // describeCron() builds the Jobs list text in lib/cron.js; without this the phrases it wraps in t() never reach
   // the catalogs, and the extractor cannot fail when one is missing
@@ -37,10 +37,11 @@ function read(rel) {
 }
 
 /**
- * Collect the string literals that make up the FIRST argument of every `fn(` call. Walking by hand
- * instead of one big regex keeps `tr(cond ? 'one' : 'other', { n })` working - both keys count.
+ * Collect the string literals that make up the argument at `argIndex` (0 by default) of every `fn(`
+ * call. Walking by hand instead of one big regex keeps `tr(cond ? 'one' : 'other', { n })` working -
+ * both keys count. pushNote(tab, 'text') needs the second argument, because the first one is a tab.
  */
-function wrappedKeys(source, fn) {
+function wrappedKeys(source, fn, argIndex = 0) {
   const keys = new Set();
   const needle = `${fn}(`;
   let at = 0;
@@ -55,6 +56,7 @@ function wrappedKeys(source, fn) {
     }
     let i = at + needle.length;
     let depth = 1;
+    let skipped = 0;
     const first = [];
     let inString = null;
     let buf = '';
@@ -70,7 +72,7 @@ function wrappedKeys(source, fn) {
           // a template literal is consumed but never a key: it carries interpolation, so there is
           // nothing to look up in the catalog. Without this, #32's toast() scan turned every
           // `toast(\`...${x}...\`)` call into an impossible key.
-          if (inString !== '`') first.push(buf);
+          if (inString !== '`' && skipped === argIndex) first.push(buf);
           inString = null;
           continue;
         }
@@ -87,7 +89,10 @@ function wrappedKeys(source, fn) {
       else if (ch === ')' || ch === ']' || ch === '}') {
         depth -= 1;
         if (depth === 0) break;
-      } else if (ch === ',' && depth === 1) break; // end of the first argument
+      } else if (ch === ',' && depth === 1) {
+        skipped += 1;
+        if (skipped > argIndex) break; // the argument we wanted is behind us
+      }
     }
     for (const raw of first) {
       const text = unescapeJs(raw);
@@ -148,8 +153,9 @@ function collect() {
   const keys = new Set();
   for (const [rel, fns] of SOURCES) {
     const source = read(rel);
-    for (const fn of fns) {
-      for (const key of wrappedKeys(source, fn)) keys.add(key);
+    for (const spec of fns) {
+      const [fn, argIndex = 0] = Array.isArray(spec) ? spec : [spec, 0];
+      for (const key of wrappedKeys(source, fn, argIndex)) keys.add(key);
     }
   }
   for (const key of staticHtmlKeys(read(HTML_FILE))) keys.add(key);
