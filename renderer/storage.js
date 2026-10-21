@@ -788,6 +788,3 @@ async function openUsageModal() {
  * Both are cheap: the observers only look at the nodes that were actually added.
  */
 
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-let dialogOpener = null;
-let dialogStack = [];
