@@ -162,8 +162,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64 libxss1 libgbm1
-      - name: install pi
-        run: curl -fsSL https://pi.dev/install.sh | sh
+      - name: install pi pinned to the version this GUI is tested against
+        shell: bash
+        run: |
+          # the managed installer (https://pi.dev/install.sh) covers macOS and Linux only, and it
+          # tracks its own channel - a scenario run would mean something different on each platform,
+          # and would move under us when pi releases. The scenarios want the version lib/pi-launch.js
+          # calls TESTED_PI_VERSION, resolved through STRATAPILOT_PI_CLI so nothing is guessed.
+          set -e
+          VERSION=$(node -e "process.stdout.write(require('./lib/pi-launch').TESTED_PI_VERSION)")
+          npm install -g "@earendil-works/pi-coding-agent@$VERSION"
+          PREFIX=$(npm prefix -g)
+          echo "STRATAPILOT_PI_CLI=$PREFIX/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" >> "$GITHUB_ENV"
+          node -e "const fs=require('fs');const p=process.env.STRATAPILOT_PI_CLI||'$PREFIX/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js';if(!fs.existsSync(p))throw new Error('pi cli missing at '+p)"
       - name: npm ci (with the Electron binary)
         run: npm ci
       - name: run every scenario that needs no model

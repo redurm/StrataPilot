@@ -129,6 +129,21 @@ test('safeScenarioTags covers exactly the safe set, and the tags are distinct', 
   for (const tag of tags) assert.ok(SMOKE_SRC.includes(`[${tag}]`), `${tag} is not printed anywhere`);
 });
 
+test('the CI job that runs the safe set is wired to it, and to the checker', () => {
+  const ci = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
+  const start = ci.indexOf('smoke-scenarios:');
+  assert.ok(start > 0, 'the smoke-scenarios job is missing from CI');
+  const job = ci.slice(start);
+  assert.ok(/os: \[windows-latest, ubuntu-latest\]/.test(job), 'the scenarios must run on the two platforms this app ships on');
+  assert.ok(job.includes('STRATAPILOT_SMOKE_SAFE'), 'the job must run the safe set, not a hand-picked list of flags that drifts');
+  assert.ok(job.includes('scripts/check-smoke-log.js') && job.includes('--safe'), 'the verdict must come from the log checker');
+  assert.ok(job.includes("require('./lib/pi-launch').TESTED_PI_VERSION"), 'pi must be pinned to the version this GUI is tested against, not to a literal that drifts');
+  const lines = job.split('\n').map((line) => line.trim());
+  assert.ok(!lines.some((line) => line.startsWith('curl -fsSL https://pi.dev/install.sh')), 'the managed installer refuses Windows and tracks its own channel, so a run would mean something different on every platform');
+  assert.ok(!lines.some((line) => line.startsWith('curl -fsSL https://pi.dev/install.sh')), 'the managed installer refuses Windows and tracks its own channel, so a run would mean something different on every platform');
+  assert.ok(job.includes('upload-artifact'), 'a failing run has to leave its log behind');
+});
+
 test('flag values: 0 and empty mean off, anything else means on', () => {
   assert.equal(isOn('0'), false);
   assert.equal(isOn(''), false);
