@@ -24,7 +24,7 @@ const path = require('node:path');
 // still fills {placeholders}, which is what these assertions are about
 const { makeT } = require(path.join('..', 'renderer', 'i18n.js'));
 
-const appSource = ['renderer/app.js', 'renderer/composer.js', 'renderer/transcript.js', 'renderer/monitor.js']
+const appSource = ['renderer/app.js', 'renderer/composer.js', 'renderer/transcript.js', 'renderer/monitor.js', 'renderer/chrome.js']
   .map((f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8'))
   .join(String.fromCharCode(10));
 
