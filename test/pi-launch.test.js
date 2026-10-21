@@ -11,6 +11,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
 const { TESTED_PI_VERSION, piVersionStatus } = require('../lib/pi-launch');
 
 test('TESTED_PI_VERSION is a concrete version, not a range', () => {
@@ -48,7 +52,15 @@ test('the comparison is not tied to one tested version', () => {
 
 /* ---- #13: the cache used to be permanent, and any node on PATH was good enough ---- */
 
-const { resolvePiInvocation, invalidatePiInvocationCache, INVOCATION_TTL_MS, MIN_NODE_VERSION, compareVersions } = require('../lib/pi-launch');
+const {
+  resolvePiInvocation,
+  invalidatePiInvocationCache,
+  versionOfCliPackage,
+  PI_PACKAGE_NAME,
+  INVOCATION_TTL_MS,
+  MIN_NODE_VERSION,
+  compareVersions,
+} = require('../lib/pi-launch');
 
 test('the resolved invocation is cached, and invalidating it forces a fresh look (#13)', () => {
   invalidatePiInvocationCache();
@@ -78,4 +90,51 @@ test('an old Node on PATH is reported instead of being handed to pi (#13)', () =
   const inv = resolvePiInvocation();
   assert.ok(inv.nodeTooOld === true || inv.nodeTooOld === false, 'nodeTooOld must always be a decision, not undefined');
   if (inv.nodeTooOld) assert.ok(inv.nodeVersion, 'a rejection has to name the version it saw');
+});
+
+
+/* ---- the version of a pi that is not a managed install (#47) ---- */
+
+function makeFakePi(root, version) {
+  const pkgDir = path.join(root, 'node_modules', '@earendil-works', 'pi-coding-agent');
+  const binDir = path.join(pkgDir, 'dist', 'bundle');
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ name: PI_PACKAGE_NAME, version, bin: { pi: 'dist/bundle/cli.js' } }));
+  fs.writeFileSync(path.join(binDir, 'cli.js'), '// stub');
+  return { pkgDir, cliPath: path.join(binDir, 'cli.js') };
+}
+
+test('versionOfCliPackage reads the version of the package the CLI lives in', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-piversion-'));
+  try {
+    const { cliPath } = makeFakePi(root, '9.9.9');
+    // a decoy above it: the walk must find pi's package.json, not the first one it meets
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'some-workspace', version: '0.0.1' }));
+    assert.equal(versionOfCliPackage(cliPath), '9.9.9');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a CLI with no pi package above it reports no version instead of guessing', () => {
+  assert.equal(versionOfCliPackage(path.join(os.tmpdir(), 'stratapilot-not-pi-here', 'cli.js')), null);
+  assert.equal(versionOfCliPackage(null), null);
+});
+
+test('STRATAPILOT_PI_CLI decides the reported version, not the managed install (#47)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stratapilot-pioverride-'));
+  const previous = process.env.STRATAPILOT_PI_CLI;
+  try {
+    const { cliPath } = makeFakePi(root, '9.9.9');
+    process.env.STRATAPILOT_PI_CLI = cliPath;
+    invalidatePiInvocationCache();
+    const inv = resolvePiInvocation();
+    assert.equal(inv.cliPath, path.resolve(cliPath));
+    assert.equal(inv.piVersion, '9.9.9', 'the env bar must describe the pi that will actually run, not the one the managed install happens to hold');
+  } finally {
+    if (previous === undefined) delete process.env.STRATAPILOT_PI_CLI;
+    else process.env.STRATAPILOT_PI_CLI = previous;
+    invalidatePiInvocationCache();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

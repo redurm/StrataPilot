@@ -11,6 +11,78 @@
    loads it after app.js has finished its top level. Keep it a classic script, and keep it lazy.
 */
 
+/*
+ * #47: every scenario, in the order they run, each tagged with the flag that turns it on.
+ * lib/smoke-flags.js decides which of these CI may run without a model (STRATAPILOT_SMOKE_SAFE), and
+ * test/smoke-flags.test.js fails if a scenario is added here without being classified there.
+ */
+const SCENARIO_TABLE = [
+
+  { flag: 'smokeQueue', label: 'queue', run: smokeQueueScenario },
+  { flag: 'smokeCompact', label: 'compact', run: smokeCompactScenario },
+  { flag: 'smokeOrder', label: 'order', run: smokeOrderScenario },
+  { flag: 'smokeAutoCompact', label: 'auto-compact', run: smokeAutoCompactScenario },
+  { flag: 'smokeBash', label: 'bash', run: smokeBashScenario },
+  { flag: 'smokeBars', label: 'bars', run: smokeBarsScenario },
+  { flag: 'smokePaste', label: 'paste', run: smokePasteScenario },
+  { flag: 'smokeCopy', label: 'copy', run: smokeCopyScenario },
+  { flag: 'smokeExport', label: 'export', run: smokeExportScenario },
+  { flag: 'smokeSetup', label: 'setup', run: smokeSetupScenario },
+  { flag: 'smokeFork', label: 'fork', run: smokeForkScenario },
+  { flag: 'smokeTree', label: 'tree', run: smokeTreeScenario },
+  { flag: 'smokePath', label: 'path', run: smokePathScenario },
+  { flag: 'smokeServers', label: 'servers', run: smokeServersScenario },
+  { flag: 'smokeStorage', label: 'storage', run: smokeStorageScenario },
+  { flag: 'smokeUsage', label: 'usage', run: smokeUsageScenario },
+  { flag: 'smokeI18n', label: 'i18n', run: smokeI18nScenario },
+  { flag: 'smokeA11y', label: 'a11y', run: smokeA11yScenario },
+  { flag: 'smokeTheme', label: 'theme', run: smokeThemeScenario },
+  { flag: 'smokeTabTag', label: 'tab-tag', run: smokeTabTagScenario },
+  { flag: 'smokeCron', label: 'cron', run: smokeCronScenario },
+  { flag: 'smokeOutbox', label: 'outbox', run: smokeOutboxScenario },
+  { flag: 'smokeRetry', label: 'retry', run: smokeRetryScenario },
+  { flag: 'smokeSettings', label: 'settings', run: smokeSettingsScenario },
+  { flag: 'smokeDiag', label: 'diagnostics', run: smokeDiagScenario },
+];
+
+const SCENARIO_GAP_MS = 250;
+
+/**
+ * Run scenarios one after another and print one tally line at the end (#47).
+ *
+ * Scenarios report problems as log lines - they were written for a human reading a console, and each
+ * one keeps going after a failure so a single broken scenario does not hide the rest. A CI tally has
+ * to count those lines, otherwise the build would only catch a scenario that crashed.
+ */
+async function runScenarioQueue(queued) {
+  if (!queued.length) return;
+  const realLog = console.log;
+  let failLines = 0;
+  console.log = (...args) => {
+    const line = args.map((arg) => (typeof arg === 'string' ? arg : String(arg))).join(' ');
+    if (line.includes(' FAIL')) failLines += 1;
+    realLog.apply(console, args);
+  };
+  const crashed = [];
+  let ran = 0;
+  for (const entry of queued) {
+    try {
+      await entry.run();
+      ran += 1;
+    } catch (err) {
+      crashed.push(entry.label);
+      console.error(`[smoke-scenarios] FAIL ${entry.label} threw: ${err && err.message ? err.message : err}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, SCENARIO_GAP_MS));
+  }
+  console.log = realLog;
+  const crashedText = crashed.length ? ` (${crashed.join(',')})` : '';
+  console.log(`[smoke-scenarios] tally ran=${ran}/${queued.length} crashed=${crashed.length}${crashedText} fail_lines=${failLines}`);
+  // the fixed startup window is a backstop now, not the finish line: quitting here means a run that
+  // hangs is visibly missing its tally line instead of looking like a pass
+  api.smokeQuit();
+}
+
 async function runSmokeScenarios() {
 
 if (state.info.smoke && state.info.smokeSession) {
@@ -72,105 +144,14 @@ if (state.info.smoke) {
   openMonitor();
 }
 
-if (state.info.smoke && state.info.smokeQueue) {
-  setTimeout(() => smokeQueueScenario().catch((err) => console.error('[smoke] queue scenario failed', err)), 1200);
-}
-
-if (state.info.smoke && state.info.smokeCompact) {
-  setTimeout(() => smokeCompactScenario().catch((err) => console.error('[smoke] compact scenario failed', err)), 1200);
-}
-
-if (state.info.smoke && state.info.smokeOrder) {
-  setTimeout(() => smokeOrderScenario().catch((err) => console.error('[smoke] order scenario failed', err)), 1200);
-}
-
-if (state.info.smoke && state.info.smokeAutoCompact) {
-  setTimeout(() => smokeAutoCompactScenario().catch((err) => console.error('[smoke] auto-compact scenario failed', err)), 1200);
-}
-
-if (state.info.smoke && state.info.smokeBash) {
-  setTimeout(() => smokeBashScenario().catch((err) => console.error('[smoke] bash scenario failed', err)), 1200);
-}
-
-if (state.info.smoke && state.info.smokeBars) {
-  setTimeout(() => smokeBarsScenario().catch((err) => console.error('[smoke] bars scenario failed', err)), 1200);
-}
-
-if (state.info.smoke && state.info.smokePaste) {
-  setTimeout(() => smokePasteScenario().catch((err) => console.error('[smoke] paste scenario failed', err)), 1200);
-}
-
-if (state.info.smoke && state.info.smokeCopy) {
-  setTimeout(() => smokeCopyScenario().catch((err) => console.error('[smoke] copy scenario failed', err)), 1200);
-}
-
-if (state.info.smoke && state.info.smokeExport) {
-  setTimeout(() => smokeExportScenario().catch((err) => console.error('[smoke] export scenario failed', err)), 1200);
-}
-
-if (state.info.smoke && state.info.smokeSetup) {
-  setTimeout(() => smokeSetupScenario().catch((err) => console.error('[smoke] setup scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeFork) {
-  setTimeout(() => smokeForkScenario().catch((err) => console.error('[smoke] fork scenario failed', err)), 2500);
-}
-
-if (state.info.smoke && state.info.smokeTree) {
-  setTimeout(() => smokeTreeScenario().catch((err) => console.error('[smoke] tree scenario failed', err)), 2500);
-}
-
-if (state.info.smoke && state.info.smokePath) {
-  setTimeout(() => smokePathScenario().catch((err) => console.error('[smoke] path scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeServers) {
-  setTimeout(() => smokeServersScenario().catch((err) => console.error('[smoke] servers scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeStorage) {
-  setTimeout(() => smokeStorageScenario().catch((err) => console.error('[smoke] storage scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeUsage) {
-  setTimeout(() => smokeUsageScenario().catch((err) => console.error('[smoke] usage scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeI18n) {
-  setTimeout(() => smokeI18nScenario().catch((err) => console.error('[smoke] i18n scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeA11y) {
-  setTimeout(() => smokeA11yScenario().catch((err) => console.error('[smoke] a11y scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeTheme) {
-  setTimeout(() => smokeThemeScenario().catch((err) => console.error('[smoke] theme scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeTabTag) {
-  setTimeout(() => smokeTabTagScenario().catch((err) => console.error('[smoke] tab tag scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeCron) {
-  setTimeout(() => smokeCronScenario().catch((err) => console.error('[smoke] cron scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeOutbox) {
-  setTimeout(() => smokeOutboxScenario().catch((err) => console.error('[smoke] outbox scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeRetry) {
-  setTimeout(() => smokeRetryScenario().catch((err) => console.error('[smoke] retry scenario failed', err)), 1500);
-}
-
-if (state.info.smoke && state.info.smokeSettings) {
-  setTimeout(() => smokeSettingsScenario().catch((err) => console.error('[smoke] settings scenario failed', err)), 1200);
-}
-
-if (state.info.smoke && state.info.smokeDiag) {
-  setTimeout(() => smokeDiagScenario().catch((err) => console.error('[smoke] diagnostics scenario failed', err)), 1500);
-}
+  // #47: one scenario at a time, in the order of SCENARIO_TABLE. They used to be launched all at
+  // once on staggered timers, and that produced two kinds of false result: scenarios fighting over the
+  // one dialog the app allows (a Close click landing in the settings dialog instead of the storage one),
+  // and the startup window closing while a scenario was still working, so its summary line never
+  // printed and CI had nothing to fail on. The queue tallies what ran and asks main to quit, so the
+  // honest signal is "every scenario reported", not "the window stayed up long enough".
+  if (state.info.smokeMonitor) openMonitor();
+  await runScenarioQueue(SCENARIO_TABLE.filter((entry) => state.info[entry.flag]));
 
 if (state.info.smoke && state.info.smokePrompt) {
   els.input.value = state.info.smokePrompt;
@@ -367,13 +348,23 @@ async function smokeBarsScenario() {
 // source (never innerHTML), and `resend` must go through send(): while another tab owns the
 // single-flight provider the resent text has to land in this tab's outbox, not reach the model.
 async function smokeCopyScenario() {
-  const tab = activeTab();
+  // #47: this used to act on whatever tab was active, and in a full run that tab belongs to the
+  // scenario that ran before - often still generating, so send() parked the prompt in the outbox and
+  // there was nothing to copy. Every combined run printed "skipped": the copy and resend path was
+  // never actually exercised. Take a tab of our own instead.
+  const tab = await createTab({ cwd: state.cwd, ephemeral: true });
+  if (!tab) {
+    console.log('[smoke-copy] SKIP could not open a tab of its own');
+    return;
+  }
+  activateTab(tab.id);
   const prompt = 'Reply with exactly: COPY-OK';
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const waitFor = async (fn, ms = 30000) => {
     for (let i = 0; i < Math.ceil(ms / 250) && !fn(); i++) await sleep(250);
     return fn();
   };
+  const hasUserMessage = () => tab.items.some((item) => item.kind === 'message' && item.message && item.message.role === 'user');
   // capture what copy puts on the clipboard (reading the real clipboard needs focus + permission)
   const copied = [];
   const realWrite = navigator.clipboard.writeText.bind(navigator.clipboard);
@@ -396,7 +387,12 @@ async function smokeCopyScenario() {
   try {
     els.input.value = prompt;
     await send();
-    await waitFor(() => !tab.isStreaming);
+    // #47: wait for the prompt to land in THIS tab. While the tab is still starting, or while another
+    // scenario's generation holds the single-flight provider, send() parks the message in the outbox -
+    // and `!tab.isStreaming` is true the whole time, so the old wait passed instantly and the scenario
+    // went looking for messages that had never been sent.
+    const landed = await waitFor(hasUserMessage, 60000);
+    await waitFor(() => !tab.isStreaming && tab.outbox.length === 0, 60000);
 
     // another tab takes the single-flight provider, so a resend here must be queued
     const other = await createTab({ cwd: state.cwd, ephemeral: true });
@@ -407,7 +403,9 @@ async function smokeCopyScenario() {
     const userItem = tab.items.find((it) => it.kind === 'message' && it.message.role === 'user');
     const asstItem = [...tab.items].reverse().find((it) => it.kind === 'message' && it.message.role === 'assistant');
     if (!userItem || !asstItem) {
-      console.log(`[smoke-copy] skipped: another smoke scenario took this tab over, so the copy targets are gone (user=${!!userItem} assistant=${!!asstItem})`);
+      console.log(
+        `[smoke-copy] SKIP this tab never got the conversation it needs (user=${!!userItem} assistant=${!!asstItem} landed=${landed} alive=${tab.alive} outbox=${tab.outbox.length} streaming=${tab.isStreaming}) - the copy path was not exercised`,
+      );
       return;
     }
     const userKey = userItem.key;
@@ -465,7 +463,19 @@ async function smokeCopyScenario() {
  * the file is then stat'd from the renderer through the read-only fs:stat-paths.
  */
 async function smokeExportScenario() {
-  const tab = activeTab();
+  // #47: in a full run the active tab is whatever the scenario before left behind, and the tabs those
+  // scenarios create are ephemeral (--no-session), so this used to SKIP while a perfectly good session
+  // file sat on disk. Prefer a tab that owns a session file.
+  let tab = activeTab();
+  if (tab && (tab.ephemeral || !tab.sessionPath)) {
+    const owned = state.order
+      .map((id) => state.tabs.get(id))
+      .find((candidate) => candidate && candidate.alive && !candidate.ephemeral && candidate.sessionPath);
+    if (owned) {
+      tab = owned;
+      activateTab(tab.id);
+    }
+  }
   if (!tab) {
     console.log('[smoke-export] no active tab');
     return;
@@ -496,6 +506,16 @@ async function smokeExportScenario() {
   }
   if (tab.compacting || isWorking(tab)) {
     console.log('[smoke-export] FAIL still busy after 90s, so the export path was never exercised');
+    return;
+  }
+
+  // pi refuses an empty session ("Nothing to export yet"), and CI runs the safe set without ever
+  // sending a prompt, so an empty transcript is expected there. Skipping is honest; failing would be
+  // blaming the product for a conversation that never happened. Run with STRATAPILOT_SMOKE_PROMPT to
+  // exercise the export path for real.
+  const hasUserMessage = tab.items.some((item) => item.kind === 'message' && item.message && item.message.role === 'user');
+  if (!hasUserMessage) {
+    console.log('[smoke-export] SKIP nothing to export yet: this run never sent a prompt, so the transcript is empty');
     return;
   }
   els.input.value = `/export ${out}`;
@@ -633,7 +653,10 @@ async function smokeCronScenario() {
   const wasEnabled = scheduler.enabled;
   scheduler.enabled = false;
   try {
-    const saved = await api.cronSave([{ id: 'smoke-job', name: 'smoke job', schedule: '*/5 * * * *', prompt: 'SMOKE-CRON-MUST-NOT-BE-SENT', target: 'new-tab', cwd: state.cwd, ephemeral: true, enabled: true }]);
+    // the schedule is deliberately one that fires about once a year: if the app quits before the
+    // scenario can clear its job, a */5 job keeps firing on the developer's machine and spawns a tab
+    // every five minutes. cronRunNow, which is what this scenario exercises, ignores the schedule.
+    const saved = await api.cronSave([{ id: 'smoke-job', name: 'smoke job', schedule: '0 0 1 1 *', prompt: 'SMOKE-CRON-MUST-NOT-BE-SENT', target: 'new-tab', cwd: state.cwd, ephemeral: true, enabled: true }]);
     const listed = await api.cronList();
     const preview = await api.cronPreview('30 9 * * 1-5');
     const bad = await api.cronPreview('nope');

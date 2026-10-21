@@ -15,6 +15,7 @@ const cron = require('./lib/cron');
 const netPolicy = require('./lib/net-policy');
 const fsGuard = require('./lib/fs-guard');
 const { resolveCaptureTarget } = require('./lib/smoke-shot');
+const smokeFlags = require('./lib/smoke-flags');
 const { disposeAll, QUIT_GRACE_MS } = require('./lib/shutdown');
 // D10: the i18n core is shared with the renderer (one file, UMD) so both processes translate the same way
 const i18n = require('./renderer/i18n');
@@ -939,38 +940,11 @@ function registerIpc() {
       settingsPath: SETTINGS_FILE(),
       defaultCwd: process.cwd(),
       home: os.homedir(),
-      smoke: !!process.env.STRATAPILOT_SMOKE,
-      smokePrompt: process.env.STRATAPILOT_SMOKE_PROMPT || '',
-      smokeSession: process.env.STRATAPILOT_SMOKE_SESSION || '',
-      smokePersist: !!process.env.STRATAPILOT_SMOKE_PERSIST,
-      smokeSteer: !!process.env.STRATAPILOT_SMOKE_STEER,
-      smokeQueue: !!process.env.STRATAPILOT_SMOKE_QUEUE,
-      smokeMonitor: !!process.env.STRATAPILOT_SMOKE_MONITOR,
-      smokeCompact: !!process.env.STRATAPILOT_SMOKE_COMPACT,
-      smokeOrder: !!process.env.STRATAPILOT_SMOKE_ORDER,
-      smokeAutoCompact: !!process.env.STRATAPILOT_SMOKE_AUTO_COMPACT,
-      smokeBash: !!process.env.STRATAPILOT_SMOKE_BASH,
-      smokeBars: !!process.env.STRATAPILOT_SMOKE_BARS,
-      smokePaste: !!process.env.STRATAPILOT_SMOKE_PASTE,
-      smokeCopy: !!process.env.STRATAPILOT_SMOKE_COPY,
-      smokeExport: !!process.env.STRATAPILOT_SMOKE_EXPORT,
-      smokeExportOut: process.env.STRATAPILOT_SMOKE_EXPORT_OUT || path.join(os.tmpdir(), 'stratapilot_smoke_export.html'),
-      smokeDiag: !!process.env.STRATAPILOT_SMOKE_DIAG,
-      smokeSettings: !!process.env.STRATAPILOT_SMOKE_SETTINGS,
-      smokeRetry: !!process.env.STRATAPILOT_SMOKE_RETRY,
-      smokeOutbox: !!process.env.STRATAPILOT_SMOKE_OUTBOX,
-      smokeCron: !!process.env.STRATAPILOT_SMOKE_CRON,
-      smokeTabTag: !!process.env.STRATAPILOT_SMOKE_TABTAG,
-      smokeTheme: !!process.env.STRATAPILOT_SMOKE_THEME,
-      smokeA11y: !!process.env.STRATAPILOT_SMOKE_A11Y,
-      smokeUsage: !!process.env.STRATAPILOT_SMOKE_USAGE,
-      smokeI18n: !!process.env.STRATAPILOT_SMOKE_I18N,
-      smokeStorage: !!process.env.STRATAPILOT_SMOKE_STORAGE,
-      smokeServers: !!process.env.STRATAPILOT_SMOKE_SERVERS,
-      smokePath: !!process.env.STRATAPILOT_SMOKE_PATH,
-      smokeTree: !!process.env.STRATAPILOT_SMOKE_TREE,
-      smokeFork: !!process.env.STRATAPILOT_SMOKE_FORK,
-      smokeSetup: !!process.env.STRATAPILOT_SMOKE_SETUP,
+      // #47: the smoke flags live in lib/smoke-flags.js so the safe set CI runs can be unit tested;
+      // STRATAPILOT_SMOKE_SAFE turns on every scenario that needs no model and no credentials.
+      ...smokeFlags.smokeInfoFromEnv(process.env, {
+        exportOutDefault: path.join(os.tmpdir(), 'stratapilot_smoke_export.html'),
+      }),
     };
   });
 
@@ -1052,6 +1026,16 @@ function registerIpc() {
         console.error(`[smoke-shot] failed: ${err.stack || err}`);
         return { ok: false, error: err.message };
       }
+    });
+
+    // #47: the scenario queue asks to be quit once every scenario has reported. That makes the honest
+    // signal "every scenario printed a line" instead of "the window stayed up long enough": a run that
+    // hangs is visibly missing its tally line. The fixed startup window above stays as the backstop.
+    // This handler exists only inside the smoke-mode block, so a normal renderer cannot end the app.
+    ipcMain.handle('app:smoke-quit', () => {
+      console.log('[smoke] scenario queue finished, quitting');
+      app.quit();
+      return { ok: true };
     });
   }
 
