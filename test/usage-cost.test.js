@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const appSource = ['renderer/app.js', 'renderer/storage.js', 'renderer/settings.js', 'renderer/modals.js', 'renderer/composer.js', 'renderer/transcript.js']
+const appSource = ['renderer/app.js', 'renderer/storage.js', 'renderer/settings.js', 'renderer/modals.js', 'renderer/composer.js', 'renderer/transcript.js', 'renderer/monitor.js']
   .map((f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8'))
   .join(String.fromCharCode(10));
 
