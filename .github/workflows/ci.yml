@@ -168,13 +168,18 @@ jobs:
           # the managed installer (https://pi.dev/install.sh) covers macOS and Linux only, and it
           # tracks its own channel - a scenario run would mean something different on each platform,
           # and would move under us when pi releases. The scenarios want the version lib/pi-launch.js
-          # calls TESTED_PI_VERSION, resolved through STRATAPILOT_PI_CLI so nothing is guessed.
+          # calls TESTED_PI_VERSION, resolved through STRATAPILOT_PI_CLI so nothing is guessed. The CLI
+          # path comes from the package's own bin field: the global node_modules sits under lib/ on
+          # Linux and directly under the prefix on Windows, so deriving it from npm prefix -g is wrong.
           set -e
           VERSION=$(node -e "process.stdout.write(require('./lib/pi-launch').TESTED_PI_VERSION)")
           npm install -g "@earendil-works/pi-coding-agent@$VERSION"
-          PREFIX=$(npm prefix -g)
-          echo "STRATAPILOT_PI_CLI=$PREFIX/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" >> "$GITHUB_ENV"
-          node -e "const fs=require('fs');const p=process.env.STRATAPILOT_PI_CLI||'$PREFIX/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js';if(!fs.existsSync(p))throw new Error('pi cli missing at '+p)"
+          ROOT=$(npm root -g)
+          PKG="$ROOT/@earendil-works/pi-coding-agent"
+          CLI=$(node -e 'const path=require("path");const dir=process.argv[1];const pkg=require(path.join(dir,"package.json"));const bin=typeof pkg.bin==="string"?pkg.bin:pkg.bin.pi;process.stdout.write(path.join(dir,bin))' "$PKG")
+          test -f "$CLI" || { echo "pi cli not found at $CLI"; exit 1; }
+          echo "STRATAPILOT_PI_CLI=$CLI" >> "$GITHUB_ENV"
+          node "$CLI" --version || true
       - name: npm ci (with the Electron binary)
         run: npm ci
       - name: run every scenario that needs no model
