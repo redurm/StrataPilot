@@ -18,6 +18,8 @@ append-only); parallel PRs all editing the version would fight over the same lin
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-21
+
 ### Added
 
 - **A tag now publishes a GitHub Release** - the installers built by the `Release build` workflow were only Actions artifacts: behind a GitHub login, buried in the run that built them, and deleted after 30 days, so `v0.2.0` and `v0.2.1` had no Release page at all. A `publish-release` job (tag pushes only) collects the three platforms' artifacts, takes the notes from that version's `CHANGELOG.md` section through `scripts/release-notes.js`, and runs `gh release create --verify-tag` with the job's own `GITHUB_TOKEN` - no new secret, and electron-builder's implicit publish stays off (#38). Re-running the same tag tops the assets up with `gh release upload --clobber` instead of failing. `test/release-notes.test.js` and two more `release-hygiene` assertions pin it: the version in `package.json` must always have a CHANGELOG section, and no version section may carry the Unreleased rule text (that is how the 0.2.1 section ended up with no entries of its own).
