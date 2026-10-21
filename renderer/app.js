@@ -5,7 +5,6 @@
 /* ------------------------------------------------------------------ */
 
 const api = window.piGui;
-const $ = (id) => document.getElementById(id);
 
 /* ------------------------------------------------------------------ */
 /* D10: language (English / 繁體中文 / 简体中文)                        */
@@ -116,63 +115,6 @@ async function applyLanguageSwitch(pref) {
   return payload;
 }
 
-const els = {
-  tabs: $('tabs'),
-  transcript: $('transcript'),
-  sessionList: $('sessionList'),
-  sideFoot: $('sideFoot'),
-  search: $('search'),
-  input: $('input'),
-  attachments: $('attachments'),
-  modelSel: $('modelSel'),
-  thinkingSel: $('thinkingSel'),
-  busySel: $('busySel'),
-  stats: $('stats'),
-  cwdChip: $('cwdChip'),
-  queueBar: $('queueBar'),
-  nowBar: $('nowBar'),
-  btnSend: $('btnSend'),
-  btnAbort: $('btnAbort'),
-  btnClearQueue: $('btnClearQueue'),
-  btnCompact: $('btnCompact'),
-  btnStopRetry: $('btnStopRetry'),
-  btnRestart: $('btnRestart'),
-  extWidgets: $('extWidgets'),
-  dropOverlay: $('dropOverlay'),
-  modalRoot: $('modalRoot'),
-  toasts: $('toasts'),
-  envInfo: $('envInfo'),
-  body: $('body'),
-  fileInput: $('fileInput'),
-  queueList: $('queueList'),
-  serialToggle: $('serialToggle'),
-  btnMonitor: $('btnMonitor'),
-  monitorView: $('monitorView'),
-  monSrc: $('monSrc'),
-  monServers: $('monServers'),
-  monBadges: $('monBadges'),
-  monStateLabel: $('monStateLabel'),
-  monStateDetail: $('monStateDetail'),
-  monStateBar: $('monStateBar'),
-  monCards: $('monCards'),
-  monCtxFill: $('monCtxFill'),
-  monCtxPct: $('monCtxPct'),
-  monCtxSub: $('monCtxSub'),
-  monSlotsText: $('monSlotsText'),
-  monSlotsBar: $('monSlotsBar'),
-  monRamText: $('monRamText'),
-  monRamBar: $('monRamBar'),
-  monTempText: $('monTempText'),
-  monTempBar: $('monTempBar'),
-  monEngineText: $('monEngineText'),
-  monReqAll: $('monReqAll'),
-  monReqBody: $('monReqBody'),
-  monTotals: $('monTotals'),
-  monResizer: $('monResizer'),
-  slashMenu: $('slashMenu'),
-  btnDiag: $('btnDiag'),
-  btnSettings: $('btnSettings'),
-};
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 // Anything bigger than this is too heavy for the RPC `images` payload (base64 JSON line).
