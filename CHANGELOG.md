@@ -18,6 +18,10 @@ append-only); parallel PRs all editing the version would fight over the same lin
 
 ## [Unreleased]
 
+### Changed
+
+- **`renderer/app.js` starts splitting: every cached DOM lookup now lives in `renderer/dom-refs.js`** - the 165 top-level functions in `app.js` all reach into one `els` object, which is the reason the file could not be split at all: every candidate boundary first has to answer "what does this area do with the shared DOM lookups". That object, and the `$` helper it calls at load time, is now its own classic script loaded before `app.js`, so the next boundaries (storage and usage dialogs, the cron editor, the session tree, settings, the composer, the transcript) become moves instead of rewrites. The UI does not change: the scenario suite is the evidence, `tally ran=16/16 crashed=0 fail_lines=0` before and after. `test/dom-refs.test.js` pins the parts that would fail quietly - the page must load `dom-refs.js` **before** `app.js` (a lookup built too early is a null, i.e. a button whose handler never fires), `els` may be declared in exactly one place, every `els.<name>` the code reads must exist, `els[...]` dynamic access is refused because it would hide a lookup from that check, and `build.files` must keep covering `renderer/**` so an installed app cannot lose a script and open a blank window (#12, step 1).
+
 ## [0.2.2] - 2026-10-21
 
 ### Added
