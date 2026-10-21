@@ -1040,6 +1040,17 @@ async function smokeI18nScenario() {
   }
   await reopenMonitor();
   const tw = read();
+  // #45: the transcript's system notes go through pushNote(), which translates them centrally. Prove
+  // that end to end instead of trusting the catalog diff: push a note whose key the catalogs must
+  // answer, then read the text the transcript actually shows.
+  const noteTab = activeTab();
+  if (noteTab) pushNote(noteTab, 'run aborted', 'warn');
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const noteTexts = [...els.transcript.querySelectorAll('.note')].map((node) => node.textContent);
+  const noteTranslated = noteTexts.some((text) => text.includes('這次執行已中止'));
+  if (!noteTranslated) {
+    console.log(`[smoke-i18n] FAIL the transcript note stayed in English after switching to zh-TW: ${JSON.stringify(noteTexts.slice(-1)[0] || '(no note)')} (#45)`);
+  }
   await api.smokeShot('i18n-zh-TW');
   await pick('zh-CN');
   await reopenMonitor();
@@ -1059,7 +1070,7 @@ async function smokeI18nScenario() {
     console.log(`[smoke-i18n] FAIL the monitor kept its old labels after a language change taken while the panel was closed: tw=${JSON.stringify(tw.monitor.slice(0, 60))} cn=${JSON.stringify(cn.monitor.slice(0, 60))} (#30)`);
   }
   console.log(
-    `[smoke-i18n] start_lang=${before.lang} options=${options.join(',')} tw_lang=${tw.lang} tw_newSession=${JSON.stringify(tw.newSession)} tw_settings=${JSON.stringify(tw.settings)} tw_storage=${JSON.stringify(tw.storage)} tw_foot=${JSON.stringify(tw.foot)} tw_sendTitle=${JSON.stringify(tw.sendTitle)} tw_placeholder=${JSON.stringify(tw.placeholder.slice(0, 40))} tw_monitor=${JSON.stringify(tw.monitor.slice(0, 60))} cn_lang=${cn.lang} cn_newSession=${JSON.stringify(cn.newSession)} cn_foot=${JSON.stringify(cn.foot)} cn_monitor=${JSON.stringify(cn.monitor.slice(0, 60))} switched=${tw.lang === 'zh-TW' && cn.lang === 'zh-CN'} cjk=${cjk.test(tw.newSession) && cjk.test(tw.settings) && cjk.test(tw.placeholder) && cjk.test(cn.newSession)} monitor_translated=${monitorTranslated} restored=${back.lang === 'en' && back.newSession === before.newSession && back.sendTitle === before.sendTitle && back.monitor === before.monitor} saved_pref=${saved && saved.language} entries=${i18nInfo.entries} pref=${i18nInfo.pref} system=${i18nInfo.systemLocale}`,
+    `[smoke-i18n] start_lang=${before.lang} options=${options.join(',')} tw_lang=${tw.lang} tw_newSession=${JSON.stringify(tw.newSession)} tw_settings=${JSON.stringify(tw.settings)} tw_storage=${JSON.stringify(tw.storage)} tw_foot=${JSON.stringify(tw.foot)} tw_sendTitle=${JSON.stringify(tw.sendTitle)} tw_placeholder=${JSON.stringify(tw.placeholder.slice(0, 40))} tw_monitor=${JSON.stringify(tw.monitor.slice(0, 60))} cn_lang=${cn.lang} cn_newSession=${JSON.stringify(cn.newSession)} cn_foot=${JSON.stringify(cn.foot)} cn_monitor=${JSON.stringify(cn.monitor.slice(0, 60))} switched=${tw.lang === 'zh-TW' && cn.lang === 'zh-CN'} cjk=${cjk.test(tw.newSession) && cjk.test(tw.settings) && cjk.test(tw.placeholder) && cjk.test(cn.newSession)} monitor_translated=${monitorTranslated} pushnote=${JSON.stringify((noteTexts.slice(-1)[0] || '').slice(0, 40))} pushnote_translated=${noteTranslated} restored=${back.lang === 'en' && back.newSession === before.newSession && back.sendTitle === before.sendTitle && back.monitor === before.monitor} saved_pref=${saved && saved.language} entries=${i18nInfo.entries} pref=${i18nInfo.pref} system=${i18nInfo.systemLocale}`,
   );
 }
 

@@ -216,3 +216,16 @@ test('the static chrome is walked once per language change, with the dynamic par
   }
   assert.match(core, /applyDom\(rootEl, t, options\)/);
 });
+
+test('transcript notes are catalog keys, not interpolated strings (#45)', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  // pushNote() translates its text argument, so a template literal there can never be looked up: the
+  // note would read correctly in English and stay English forever for a Chinese user. 30 of them used
+  // to be exactly that.
+  const templates = [...app.matchAll(/pushNote\(\s*\w+,\s*`/g)];
+  assert.deepEqual(templates.map((m) => m[0]), [], 'pass a {placeholder} key plus the values instead of a template literal');
+  const calls = (app.match(/pushNote\(/g) || []).length;
+  assert.ok(calls >= 25, `the transcript notes are expected to go through pushNote, found ${calls} call sites`);
+  // and the translation itself lives in one place, not in 30 call sites
+  assert.match(app, /text: tokens \? tr\(text, tokens\) : tr\(text\)/);
+});

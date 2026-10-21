@@ -795,8 +795,12 @@ function appendItem(tab, item) {
   }
 }
 
-function pushNote(tab, text, noteType = '') {
-  appendItem(tab, { key: nextKey(tab), kind: 'note', noteType, text });
+function pushNote(tab, text, noteType = '', tokens = null) {
+  // #45: these notes are the app's own words, so they are translated here, once - the same shape #32
+  // used for toast(). Callers pass a catalog key plus the values that fill its {placeholders}; tr()
+  // falls back to the key itself, so a key with no catalog entry still reads correctly in English.
+  // What stays untranslated is pi's own output (stderr, tool payloads): that is one language on purpose.
+  appendItem(tab, { key: nextKey(tab), kind: 'note', noteType, text: tokens ? tr(text, tokens) : tr(text) });
 }
 
 function isScrolledUp() {
@@ -1154,7 +1158,7 @@ function handleRecord(tab, record) {
       tab.compactStartedAt = Date.now();
       tab.compactEventSeen = false;
       tab.compactEventResult = undefined;
-      pushNote(tab, `compacting (${record.reason})…`, 'compact');
+      pushNote(tab, 'compacting ({reason})…', 'compact', { reason: record.reason });
       renderTabs();
       renderOpenSessions();
       renderComposerState();
@@ -1165,9 +1169,9 @@ function handleRecord(tab, record) {
       tab.compactStartedAt = 0;
       tab.compactEventSeen = true;
       tab.compactEventResult = record.result || null;
-      if (record.result) pushNote(tab, `compacted ${fmtTokens(record.result.tokensBefore)} → ~${fmtTokens(record.result.estimatedTokensAfter)} tokens`, 'compact');
+      if (record.result) pushNote(tab, 'compacted {before} → ~{after} tokens', 'compact', { before: fmtTokens(record.result.tokensBefore), after: fmtTokens(record.result.estimatedTokensAfter) });
       else if (record.aborted) pushNote(tab, 'compaction cancelled', 'warn');
-      else if (record.errorMessage) pushNote(tab, `compaction failed: ${record.errorMessage}`, 'error');
+      else if (record.errorMessage) pushNote(tab, 'compaction failed: {error}', 'error', { error: record.errorMessage });
       refreshStats(tab);
       refreshSessionsSoon();
       scheduleUsageSummary(); // a compaction is a model call: its usage belongs in the ledger too
@@ -1179,19 +1183,19 @@ function handleRecord(tab, record) {
       break;
     case 'auto_retry_start':
       tab.retrying = { attempt: record.attempt || 1, maxAttempts: record.maxAttempts || 0, delayMs: record.delayMs || 0 };
-      pushNote(tab, `retry ${record.attempt}/${record.maxAttempts} in ${record.delayMs}ms: ${record.errorMessage}`, 'warn');
+      pushNote(tab, 'retry {attempt}/{max} in {delay}ms: {error}', 'warn', { attempt: record.attempt, max: record.maxAttempts, delay: record.delayMs, error: record.errorMessage });
       renderComposerState();
       break;
     case 'auto_retry_end':
       tab.retrying = null;
-      if (!record.success) pushNote(tab, `retry failed after ${record.attempt} attempts: ${record.finalError || ''}`, 'error');
+      if (!record.success) pushNote(tab, 'retry failed after {attempt} attempts: {error}', 'error', { attempt: record.attempt, error: record.finalError || '' });
       renderComposerState();
       break;
     case 'entry_appended':
-      if (record.entry && record.entry.type === 'custom') pushNote(tab, `[${record.entry.customType}] ${truncate(JSON.stringify(record.entry.data ?? ''), 800)}`);
+      if (record.entry && record.entry.type === 'custom') pushNote(tab, 'extension event [{type}]: {data}', '', { type: record.entry.customType, data: truncate(JSON.stringify(record.entry.data ?? ''), 800) });
       break;
     case 'extension_error':
-      pushNote(tab, `extension error (${record.event}): ${record.error}`, 'error');
+      pushNote(tab, 'extension error ({event}): {error}', 'error', { event: record.event, error: record.error });
       break;
     case 'extension_ui_request':
       handleExtensionUi(tab, record);
@@ -2126,11 +2130,24 @@ function restorePendingOutbox(entry, tab) {
   const dropped = Number(entry.outboxImagesDropped || 0) + Number(entry.pendingImagesDropped || 0);
   pushNote(
     tab,
-    `${restored.length} queued message${restored.length === 1 ? '' : 's'} from the previous run ${restored.length === 1 ? 'is' : 'are'} held back and will NOT be sent on their own.` +
-      ' Open the **pending** badge in the queue row to send them or drop them.' +
-      (dropped ? ` ${dropped} message${dropped === 1 ? ' has' : 's'} image${dropped === 1 ? 's' : 's'} too large to store, they were dropped.` : ''),
+    restored.length === 1
+      ? '{count} queued message from the previous run is held back and will NOT be sent on its own. Open the **pending** badge in the queue row to send it or drop it.'
+      : '{count} queued messages from the previous run are held back and will NOT be sent on their own. Open the **pending** badge in the queue row to send them or drop them.',
     'warn',
+    { count: restored.length },
   );
+  if (dropped) {
+    // #45: the dropped-image note used to be spliced onto the sentence above, which made both halves
+    // impossible to translate as a unit. It is its own note now.
+    pushNote(
+      tab,
+      dropped === 1
+        ? '{count} message had an image too large to store; it was dropped.'
+        : '{count} messages had images too large to store; they were dropped.',
+      'warn',
+      { count: dropped },
+    );
+  }
   return restored.length;
 }
 
@@ -2702,7 +2719,7 @@ async function createTab({ cwd, sessionPath, name, ephemeral }) {
   if (!res.ok) {
     tab.starting = false;
     tab.alive = false;
-    pushNote(tab, `failed to start pi: ${res.error}`, 'error');
+    pushNote(tab, 'failed to start pi: {error}', 'error', { error: res.error });
     renderTabs();
     renderComposerState();
     toast(res.error || 'failed to start pi', 'error');
@@ -2712,7 +2729,7 @@ async function createTab({ cwd, sessionPath, name, ephemeral }) {
   state.cwd = res.cwd || tab.cwd;
   if (res.cwdFallback) {
     // the session file recorded a folder that no longer exists (renamed/moved project)
-    pushNote(tab, `session 記錄的資料夾不存在：${res.cwdFallback}\n改用 ${state.cwd} 啟動這個 session`, 'warn');
+    pushNote(tab, 'the folder this session log lives in is gone: {folder}\nstarted this session in {cwd} instead', 'warn', { folder: res.cwdFallback, cwd: state.cwd });
     toast(`cwd 退到 ${state.cwd}`, 'warning');
     scheduleSave();
   }
@@ -3211,7 +3228,7 @@ async function openSessionTree(tab) {
           tab.streaming = null;
           tab.currentRequest = null;
           await bootstrap(tab);
-          pushNote(tab, `forked from: ${oneLine(text, 160)} - type the next prompt to take the other route`, 'info');
+          pushNote(tab, 'forked from: {text} - type the next prompt to take the other route', 'info', { text: oneLine(text, 160) });
           renderAll(tab);
           renderTabs();
         });
@@ -5084,7 +5101,7 @@ async function respawnTab(tab) {
   pushNote(tab, 'restarting pi process for this tab…', 'warn');
   const res = await api.spawn({ tabId: tab.id, cwd: tab.cwd, args: tab.args });
   if (!res.ok) {
-    pushNote(tab, `failed to restart pi: ${res.error}`, 'error');
+    pushNote(tab, 'failed to restart pi: {error}', 'error', { error: res.error });
     toast(res.error || 'restart failed', 'error');
     return false;
   }
@@ -5295,7 +5312,7 @@ async function runSlashCommand(tab, text) {
       }
       if (isWorking(tab)) {
         tab.pendingCompact = arg;
-        pushNote(tab, `compaction queued — runs when this session goes idle: ${arg}`, 'compact');
+        pushNote(tab, 'compaction queued — runs when this session goes idle: {command}', 'compact', { command: arg });
         clearComposer();
         return true;
       }
@@ -5399,10 +5416,20 @@ async function runSlashCommand(tab, text) {
       const ctx = d.contextUsage || {};
       pushNote(
         tab,
-        `stats — user ${d.userMessages || 0}, assistant ${d.assistantMessages || 0}, tool calls ${d.toolCalls || 0}\n`
-          + `tokens ${tokenLabel(t)} · total (in+out+cache) ${fmtTokens(t.total || 0)}\n`
-          + `cost $${Number(d.cost || 0).toFixed(4)} · context ${ctx.percent || 0}% (${fmtTokens(ctx.tokens || 0)} / ${fmtTokens(ctx.contextWindow || 0)})\n`
-          + `session: ${tab.sessionPath || '(ephemeral)'}`,
+        'stats — user {user}, assistant {assistant}, tool calls {tools}\ntokens {tokens} · total (in+out+cache) {total}\ncost ${cost} · context {pct}% ({ctxTokens} / {window})\nsession: {session}',
+        '',
+        {
+          user: d.userMessages || 0,
+          assistant: d.assistantMessages || 0,
+          tools: d.toolCalls || 0,
+          tokens: tokenLabel(t),
+          total: fmtTokens(t.total || 0),
+          cost: Number(d.cost || 0).toFixed(4),
+          pct: ctx.percent || 0,
+          ctxTokens: fmtTokens(ctx.tokens || 0),
+          window: fmtTokens(ctx.contextWindow || 0),
+          session: tab.sessionPath || '(ephemeral)',
+        },
       );
       clearComposer();
       return true;
@@ -5439,7 +5466,7 @@ async function runSlashCommand(tab, text) {
         return true;
       }
       const waiting = tab.retrying ? `waiting ${tab.retrying.delayMs}ms before attempt ${tab.retrying.attempt}/${tab.retrying.maxAttempts}` : 'not retrying';
-      pushNote(tab, `auto-retry is ${tab.autoRetry === false ? 'off' : 'on'} for this session (a restarted session is always on) \u00b7 ${waiting}\n/retry on | /retry off | /retry stop (cancels a retry that is waiting)`, 'info');
+      pushNote(tab, tab.autoRetry === false ? 'auto-retry is off for this session (a restarted session is always on) · {waiting}\n/retry on | /retry off | /retry stop (cancels a retry that is waiting)' : 'auto-retry is on for this session (a restarted session is always on) · {waiting}\n/retry on | /retry off | /retry stop (cancels a retry that is waiting)', 'info', { waiting });
       clearComposer();
       return true;
     }
@@ -5454,7 +5481,7 @@ async function runSlashCommand(tab, text) {
     case 'commands':
     case 'help': {
       const lines = slashCatalog(tab).map((c) => `/${c.name}${c.args ? ` ${c.args}` : ''} — ${c.desc} [${c.source}]`);
-      pushNote(tab, `slash commands\n${lines.join('\n')}\n\n!command runs a shell command in this folder (!! keeps it out of the model context)`);
+      pushNote(tab, 'slash commands\n{list}\n\n!command runs a shell command in this folder (!! keeps it out of the model context)', '', { list: lines.join('\n') });
       clearComposer();
       return true;
     }
@@ -5662,7 +5689,7 @@ async function deliverPrompt(tab, item) {
       renderComposerState();
       return { ok: false, deferred: true, error: res.error };
     }
-    pushNote(tab, `send failed: ${res.error}`, 'error');
+    pushNote(tab, 'send failed: {error}', 'error', { error: res.error });
     return { ok: false, error: res.error };
   }
   const key = nextKey(tab);
@@ -5842,7 +5869,7 @@ async function compactNow() {
   const instructions = String(response.values.instructions || '').trim();
   if (busy && response.values.when === 'wait') {
     tab.pendingCompact = instructions;
-    pushNote(tab, 'compaction queued — 這個 session 空下來時會自動壓縮', 'compact');
+    pushNote(tab, 'compaction queued — it runs when this session goes idle', 'compact');
     return;
   }
   await runCompact(tab, instructions);
@@ -5877,11 +5904,11 @@ async function runCompact(tab, instructions) {
       // a timeout is NOT proof of failure: ask pi whether the compaction is still running
       const st = await api.cmd(tab.id, 'get_state');
       if (st.success && st.data.isCompacting) {
-        pushNote(tab, `compaction still running after ${elapsed}s (big session) — 這不是失敗，完成時會自動顯示結果`, 'warn');
+        pushNote(tab, 'compaction still running after {seconds}s (big session) — this is not a failure, the result shows when it finishes', 'warn', { seconds: elapsed });
         stillRunning = true;
         console.log(`[compact] tab=${tab.id} rpc timeout after ${elapsed}s but pi reports isCompacting=true`);
       } else {
-        pushNote(tab, `compaction failed: ${res.error} (after ${elapsed}s)`, 'error');
+        pushNote(tab, 'compaction failed: {error} (after {seconds}s)', 'error', { error: res.error, seconds: elapsed });
         console.log(`[compact] tab=${tab.id} failed: ${res.error} after ${elapsed}s`);
       }
     } else if (tab.compactEventSeen) {
@@ -5893,7 +5920,7 @@ async function runCompact(tab, instructions) {
       console.log(`[compact] tab=${tab.id} failed: ${reason}`);
       setTimeout(() => {
         if (tab.compactEventSeen) return; // compaction_end already showed it
-        pushNote(tab, `compaction failed: ${reason}`, 'error');
+        pushNote(tab, 'compaction failed: {error}', 'error', { error: reason });
       }, 500);
     }
   } finally {
@@ -6016,7 +6043,7 @@ async function runExport(tab, arg) {
     const elapsed = Math.round((Date.now() - tab.exportStartedAt) / 1000);
     if (res.success && res.data && res.data.path) {
       tab.lastExport = { ok: true, path: res.data.path };
-      pushNote(tab, `exported this session to ${res.data.path} (${elapsed}s)`, 'compact');
+      pushNote(tab, 'exported this session to {path} ({seconds}s)', 'compact', { path: res.data.path, seconds: elapsed });
       toast(`exported: ${res.data.path}`, 'info', 8000);
       api.openPath(res.data.path, true); // reveal the file in the file manager
       console.log(`[export] tab=${tab.id} ok after ${elapsed}s path=${res.data.path}`);
@@ -6156,7 +6183,7 @@ async function handleCronFire({ job, firedAt, manual, key }) {
     scheduleSave(); // a cron prompt sitting in the outbox is recoverable like any other (B4)
     renderOpenSessions();
     renderTabs();
-    pushNote(tab, `scheduled job "${name}" (${job.schedule}) queued${manual ? ' now (manual run)' : ''}: ${oneLine(job.prompt, 200)}`, 'info');
+    pushNote(      tab,      manual        ? 'scheduled job "{name}" ({schedule}) queued now (manual run): {prompt}'        : 'scheduled job "{name}" ({schedule}) queued: {prompt}',      'info',      { name, schedule: job.schedule, prompt: oneLine(job.prompt, 200) },    );
     scheduler.pumpSoon(0);
     toast(`scheduled job "${name}" queued in ${tabLabel(tab)}`, 'info', 6000);
     console.log(`[cron] fired job=${job.id} name=${JSON.stringify(name)} target_tab=${tab.id} outbox=${tab.outbox.length} manual=${!!manual} firedAt=${firedAt} acked=${!!key}`);
@@ -7258,9 +7285,10 @@ function wireUi() {
     pushNote(
       tab,
       error
-        ? `pi process failed to start: ${error}`
-        : `pi process exited (code=${code} signal=${signal})${stderr ? `\n${stderr.slice(-1500)}` : ''}`,
+        ? 'pi process failed to start: {error}'
+        : 'pi process exited (code={code} signal={signal}){stderr}',
       'error',
+      error ? { error } : { code, signal, stderr: stderr ? '\n' + stderr.slice(-1500) : '' },
     );
     renderTabs();
     renderComposerState();
@@ -7275,7 +7303,7 @@ function wireUi() {
     const trimmed = text.trim();
     if (!trimmed) return;
     if (!tab.starting) return; // keep runtime stderr out of the transcript
-    pushNote(tab, `stderr: ${trimmed.slice(0, 1500)}`, 'warn');
+    pushNote(tab, 'stderr: {text}', 'warn', { text: trimmed.slice(0, 1500) });
   });
 
   api.on('pi:log', ({ tabId, text }) => {
@@ -7384,7 +7412,7 @@ async function init() {
         await bootstrap(tab);
       } else {
         tab.starting = false;
-        pushNote(tab, `failed to restore: ${res.error}`, 'error');
+        pushNote(tab, 'failed to restore: {error}', 'error', { error: res.error });
       }
     }
     // A reload after a renderer crash reuses the persisted tab ids, so main hands back the pi
