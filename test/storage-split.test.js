@@ -127,4 +127,19 @@ test('the transcript builders live in transcript.js, and app.js keeps the state 
   }
   const order = [...read('index.html').matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
   assert.ok(order.indexOf('transcript.js') < order.indexOf('app.js'), 'load transcript.js before app.js');
+});
+
+test('the Monitor panel lives in monitor.js, and its load-time tables stay in app.js', () => {
+  const moved = read('monitor.js');
+  const app = read('app.js');
+  for (const name of ['renderMonitorServers', 'applyHealthDot', 'renderMonitor', 'applyMonitorWidth', 'buildMonitorCards']) {
+    assert.ok(moved.includes('function ' + name + '('), `${name} should live in renderer/monitor.js`);
+    assert.ok(!app.includes('function ' + name + '('), `${name} is declared in both files`);
+  }
+  for (const table of ['const MON_CARDS', 'const MON_STATES']) {
+    assert.ok(app.includes(table), `${table} is built with i18nKey() at load time: it stays in app.js`);
+    assert.ok(!moved.includes(table), `${table} does not belong in monitor.js`);
+  }
+  const order = [...read('index.html').matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
+  assert.ok(order.indexOf('monitor.js') < order.indexOf('app.js'), 'load monitor.js before app.js');
 });
