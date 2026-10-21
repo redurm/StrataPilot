@@ -95,4 +95,22 @@ test('no moved script runs app.js code at load time', () => {
       }
     }
   }
+});
+
+test('the composer, queue and outbox functions are declared in composer.js, not in app.js', () => {
+  const moved = read('composer.js');
+  const app = read('app.js');
+  const names = ['renderQueueBar', 'renderComposerState', 'queueRow', 'openOutboxModal', 'restorePendingOutbox',
+    'openPendingOutboxModal', 'queueBackOfWorking', 'describeQueueRow', 'clearComposer', 'abortBash', 'send',
+    'resendMessage', 'abortRun', 'clearQueue', 'setAutoRetry', 'abortRetry', 'persistedOutbox'];
+  for (const name of names) {
+    const decl = new RegExp(`^(?:async )?function ${name}\\(`, 'm');
+    assert.ok(decl.test(moved), `${name} should live in renderer/composer.js`);
+    assert.ok(!decl.test(app), `${name} is declared in both files`);
+  }
+  // the statements that were NOT carried over: tab drag state and the bash timer are not composer's
+  for (const kept of ['let dragTabId', 'const BASH_TIMEOUT_MS']) {
+    assert.ok(app.includes(kept), `${kept} belongs in app.js, not in composer.js`);
+    assert.ok(!moved.includes(kept), `${kept} does not belong in composer.js`);
+  }
 });
