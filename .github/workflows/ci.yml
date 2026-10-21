@@ -5,11 +5,13 @@ name: CI
 #   * the unit tests (`npm test`) need nothing but Node - no Electron binary, no pi, no Strata -
 #     so they run on all three platforms, which is also the only cross-platform signal this repo
 #     has today (see docs/TODO.md C7: the app itself is developed and smoke-tested on Windows).
-#   * the smoke scenarios (STRATAPILOT_SMOKE_*) need a real pi install and a running Strata
-#     server, so the ones that talk to a model stay manual. `smoke-rpc.js` checks the pi install
-#     without a model, and the `electron smoke` job below starts a real window with no Strata
-#     server on Linux and macOS - that is this repo's only proof that the app itself runs
-#     outside Windows (docs/TODO.md C7).
+#   * the smoke scenarios (STRATAPILOT_SMOKE_*) need a real pi install. The ones that talk to a model
+#     stay manual, but the model-independent ones run in CI under STRATAPILOT_SMOKE_SAFE (#47): they
+#     drive the real UI against a real pi with no credentials, one scenario at a time, and
+#     scripts/check-smoke-log.js reads the log and decides - a scenario that printed FAIL, or never
+#     printed its line at all, fails the build. `smoke-rpc.js` checks the pi install without a model,
+#     and the `electron smoke` job below starts a real window with no Strata server on Linux and macOS
+#     - that is this repo's proof that the app itself runs outside Windows (docs/TODO.md C7).
 #   * the Electron binary is downloaded only by the `electron smoke` job; the other jobs skip it
 #     with ELECTRON_SKIP_BINARY_DOWNLOAD, which cuts minutes off every job.
 
@@ -135,3 +137,55 @@ jobs:
           grep -q "\[smoke-env\]" smoke.log || { echo "NO_ENVBAR_LINE"; failed=1; }
           [ "$failed" = 0 ] && echo "WINDOW_OK ENVBAR_OK"
           exit $failed
+
+  # #47: the model-independent scenarios, on the two platforms this repo actually ships and breaks on.
+  # They drive the real UI against a real pi with no credentials and no model call, one at a time, and
+  # quit the app when every one of them has reported. The checker then fails the build when a scenario
+  # printed FAIL, threw, finished without printing its line, or when the tally is missing entirely -
+  # which is how a run that ended early used to look exactly like a pass.
+  smoke-scenarios:
+    name: smoke scenarios (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19'
+          cache: npm
+      - name: install the libraries Electron needs (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0 libnss3 libasound2t64 libxss1 libgbm1
+      - name: install pi
+        run: curl -fsSL https://pi.dev/install.sh | sh
+      - name: npm ci (with the Electron binary)
+        run: npm ci
+      - name: run every scenario that needs no model
+        shell: bash
+        env:
+          STRATAPILOT_SMOKE: '1'
+          STRATAPILOT_SMOKE_SAFE: '1'
+          # a backstop, not the finish line: the queue quits the app once every scenario reported. If a
+          # scenario hangs, this window closes and the tally line is missing, which the checker fails.
+          STRATAPILOT_SMOKE_MS: '300000'
+        run: |
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            xvfb-run -a npx electron . --no-sandbox > smoke.log 2>&1 || true
+          else
+            npx electron . > smoke.log 2>&1 || true
+          fi
+          cat smoke.log
+      - name: decide pass or fail from the log
+        run: node scripts/check-smoke-log.js smoke.log --safe
+      - name: upload the log when it went wrong
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-log-${{ matrix.os }}
+          path: smoke.log

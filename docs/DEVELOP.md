@@ -52,10 +52,33 @@ Uses an ephemeral session (writes no file), prints the renderer console to stder
 (`%TEMP%/stratapilot_smoke_profile`) and skips the single-instance lock, so it does not disturb the
 GUI you already have open.
 
+**CI runs the scenarios that need no model.** `STRATAPILOT_SMOKE_SAFE=1` turns on every scenario in
+`lib/smoke-flags.js` `MODEL_INDEPENDENT` (plus `SMOKE_PERSIST` and `SMOKE_MONITOR`), and the CI job
+`smoke scenarios` runs exactly that on Windows and Linux against a real pi with no credentials. The
+scenarios run **one at a time** in `SCENARIO_TABLE` order and the app quits when they have all
+reported, printing one tally line:
+
+```
+[smoke-scenarios] tally ran=16/16 crashed=0 fail_lines=0
+```
+
+The verdict comes from the log, not the exit code:
+
+```bash
+STRATAPILOT_SMOKE=1 STRATAPILOT_SMOKE_SAFE=1 npx electron . > smoke.log 2>&1
+node scripts/check-smoke-log.js smoke.log --safe
+```
+
+That checker fails when a scenario printed `FAIL`, threw, finished without printing its `[smoke-…]`
+line, or when the tally line is missing at all - which is how a run that ended early used to look like
+a pass. Adding a scenario to the safe set makes CI demand its line automatically
+(`test/smoke-flags.test.js` keeps the tag table honest).
+
 Other smoke switches:
 
 | Variable | Effect |
 |---|---|
+| `STRATAPILOT_SMOKE_SAFE=1` | Turns on every scenario that needs no model and no credentials - the set CI runs (#47). See the block above |
 | `STRATAPILOT_SMOKE_PROMPT="…"` | Sends one prompt after startup (tests streaming / markdown / tool cards) |
 | `STRATAPILOT_SMOKE_STEER=1` | Sends a second message to exercise the steer path while busy |
 | `STRATAPILOT_SMOKE_SESSION=<path>` | Loads a given session with `switch_session` after startup (tests session switching / history rendering); with A2 it also prints `msg_actions=… copy=… resend=…` so you can see the hover actions exist on history-rendered messages, and `[smoke-tokens] bar="tok in … / out … / cache …" message_chips=N first="in … / out …" tooltip="…"` so the token chips are proven to carry the split, not a blended total |

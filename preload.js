@@ -42,6 +42,7 @@ const api = {
   chooseFile: (payload = {}) => ipcRenderer.invoke('fs:choose-file', payload),
   fsComplete: (payload = {}) => ipcRenderer.invoke('fs:complete', payload),
   smokeShot: (name) => ipcRenderer.invoke('app:smoke-shot', { name }),
+  smokeQuit: () => ipcRenderer.invoke('app:smoke-quit'),
   saveFile: (payload = {}) => ipcRenderer.invoke('fs:save-file', payload),
   statPaths: (paths) => ipcRenderer.invoke('fs:stat-paths', { paths }),
   // #6: `fs:read-text` had no preload binding removed-by-accident story - it simply had no caller at
