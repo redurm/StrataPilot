@@ -86,15 +86,20 @@ token before it emits markup, so model output can never inject HTML.
 - **A single newline inside a paragraph is a line break**, not a paragraph gap: pi's system prompt
   tells models CJK output needs no blank lines between paragraphs, and a renderer that joins those
   lines produces one unreadable wall
-- **Inline**: emphasis (including the CJK case `**粗體**中文`, where the closing marker is followed by
-  a non-space that is not punctuation), inline code (its content is tokenised before emphasis runs,
+- **Inline**: emphasis (`**b**`, `*i*`, `_i_`; the CJK cases work - `**粗體**中文` where the closing
+  marker is followed by a non-space that is not punctuation, `、*斜體*、` where the opener follows CJK
+  punctuation, `中文*斜體*中文` between CJK letters - while `2 * 3 * 4` and `snake_case_name` stay text),
+  inline code (its content is tokenised before emphasis runs,
   so `` `a*b*c` `` stays literal), links `[t](u "title")`, reference and shortcut links, angle-bracket
   autolinks, bare-URL linkification
 - **Not rendered, on purpose**: raw HTML (other than autolinks), `<img>` (the CSP allows `img-src
   'self' data: blob:`, so a remote image would be a tracker the user never asked for: an image becomes
   a labelled chip), Mermaid and math (this app has no renderer for them; the **Markdown Viewer**
-  button hands the block to an external program, see [CONFIGURE.md](CONFIGURE.md)), footnotes,
-  `==mark==`, `::: containers`. An unknown construct is left as text, which is ugly but honest
+  button hands the block to an external program, see [CONFIGURE.md](CONFIGURE.md)), footnotes (a
+  transcript has no page bottom to park one at - the `[^1]: …` line stays as text, it is not dropped),
+  `==mark==`, `::: containers`, `++underline++`, subscript/superscript (`~2~`, `^2^`), `:emoji:`
+  shortcodes, smart punctuation (`---`, `...`), definition lists, `*[HTML]: …` abbreviations and
+  `{#custom-id}` heading ids. An unknown construct is left as text, which is ugly but honest
 - `linkify()` is the links-only path used for user messages, thinking, tool cards and notes; assistant
   text goes through `mdToHtml()`
 - Streaming thinking / tool output uses `setPreText()` / `appendPreText()`: innerHTML is re-applied

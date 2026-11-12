@@ -94,6 +94,23 @@ function safeHref(href) {
   return /^(https?:|mailto:)/i.test(bare) ? href : '';
 }
 
+/*
+ * Where an emphasis marker may open. `**` never asked for a boundary, so a Chinese answer writing
+ * `、**粗體**、` came out bold while `、*斜體*、` came out as two stray asterisks - the boundary list
+ * only knew ASCII whitespace and `(`. CJK punctuation, the brackets a model actually uses, and CJK
+ * letters themselves belong in it for `*` (pi's answers are CJK prose, and CommonMark agrees:
+ * `中文*斜體*中文` is emphasis). `_` deliberately does NOT take CJK letters, because that is what keeps
+ * `snake_case_name` and `foo_bar_baz` intact. The `(?![\s*])` after the opener and the `(?<![\s*])`
+ * before the closer are what keep `2 * 3 * 4` and `* spaced *` from being read as emphasis - the old
+ * rule matched the first of those and printed `2 <em> 3 </em> 4`.
+ */
+const EMPH_EDGE_PUNCT = '[\\s([{、。，：；！？（）「」『』【】《》〈〉…—・·]';
+// every `\p{...}` written as `\p{Script=…}`: V8 rejects two bare `\p{Hiragana}`-style escapes side by
+// side inside one character class, which is an unhelpful error to hit while loading a page
+const EMPH_EDGE_CJK = `${EMPH_EDGE_PUNCT.slice(0, -1)}\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}]`;
+const EMPH_STAR_RE = new RegExp(`(^|${EMPH_EDGE_CJK})\\*(?![\\s*])([^*\\n]+?)(?<![\\s*])\\*`, 'gu');
+const EMPH_UNDER_RE = new RegExp(`(^|${EMPH_EDGE_PUNCT})_(?![\\s_])([^_\\n]+?)(?<![\\s_])_`, 'gu');
+
 /** bold / italic / strike / inline code, without touching links (labels run through this). */
 function inlineStyle(text, stash) {
   let out = text;
@@ -102,8 +119,8 @@ function inlineStyle(text, stash) {
     stash.put(`<code class="inline">${(double == null ? single : double).trim()}</code>`),
   );
   out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-  out = out.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  out = out.replace(/(^|[\s(])_([^_\n]+)_/g, '$1<em>$2</em>');
+  out = out.replace(EMPH_STAR_RE, '$1<em>$2</em>');
+  out = out.replace(EMPH_UNDER_RE, '$1<em>$2</em>');
   out = out.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
   return out;
 }
@@ -171,7 +188,10 @@ const ITEM_RE = /^( {0,3})([-*+]|\d{1,9}[.)])([ \t]+|$)(.*)$/;
 const INDENT_CODE_RE = /^ {4}(\S.*)$/;
 const TASK_RE = /^\[([ xX])\][ \t]+([\s\S]*)$/;
 const ALERT_RE = /^\[!(note|tip|important|warning|caution)\]$/i;
-const LINK_DEF_RE = /^ {0,3}\[([^\]]+)\]:[ \t]*(\S+)[ \t]*(?:\S.*)?$/;
+// `[^1]: …` is a GFM footnote definition, which this renderer deliberately does not build. It must
+// not match here either: eating the line turned it into a reference whose target goes nowhere, so the
+// footnote text simply disappeared from the answer.
+const LINK_DEF_RE = /^ {0,3}\[([^\]^][^\]]*)\]:[ \t]*(\S+)[ \t]*(?:\S.*)?$/;
 
 const ALERT_LABEL = { note: 'Note', tip: 'Tip', important: 'Important', warning: 'Warning', caution: 'Caution' };
 

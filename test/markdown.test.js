@@ -376,6 +376,40 @@ test('inline code protects emphasis inside it', () => {
   assert.ok(!html.includes('<strong>b</strong>'), html);
 });
 
+/* ---- emphasis: the boundary list is what broke on Chinese text ---- */
+
+test('*emphasis* opens after CJK punctuation, not only after ASCII space or "("', () => {
+  // the shipped rule required the opener to sit at the start or after ASCII whitespace / "(", and `**`
+  // never asked for a boundary at all: `、**粗體**、` came out bold while `、*斜體*、` came out as two
+  // stray asterisks, and `***粗斜體***` left its outer pair behind
+  const html = mdToHtml('**粗體**、*斜體*、***粗斜體***');
+  assert.ok(html.includes('<strong>粗體</strong>'), html);
+  assert.ok(html.includes('<em>斜體</em>'), html);
+  assert.ok(html.includes('<em><strong>粗斜體</strong></em>'), html);
+});
+
+test('emphasis between CJK letters and inside full-width brackets', () => {
+  // CommonMark agrees: a `*` between two ideographs is emphasis, CJK is not alphanumeric for flanking
+  assert.ok(mdToHtml('中文*斜體*中文').includes('<em>斜體</em>'));
+  assert.ok(mdToHtml('（*注意*）').includes('<em>注意</em>'));
+  assert.ok(mdToHtml('「*引用裡的斜體*」').includes('<em>引用裡的斜體</em>'));
+});
+
+test('asterisks that are arithmetic or stray stay text', () => {
+  // the old rule matched the first of these and printed `2 <em> 3 </em> 4`: an emphasis marker may not
+  // open in front of a space, and may not close behind one
+  assert.ok(!mdToHtml('2 * 3 * 4 = 24').includes('<em>'), mdToHtml('2 * 3 * 4 = 24'));
+  assert.ok(!mdToHtml('a * b * c').includes('<em>'));
+  assert.ok(!mdToHtml('2*3*4').includes('<em>'), 'no CJK around it, no emphasis');
+});
+
+test('underscores never emphasise inside a word, but do after CJK punctuation', () => {
+  // the CJK letters that `*` accepts are deliberately NOT in the `_` boundary: that is what keeps
+  // identifiers alive in an answer that talks about code
+  assert.ok(!mdToHtml('snake_case_name and foo_bar_baz stay').includes('<em>'));
+  assert.ok(mdToHtml('，_斜體_，').includes('<em>斜體</em>'));
+});
+
 /* ---- deliberately unsupported: pinned so the deviation stays a decision, not an accident ---- */
 
 test('raw HTML, footnotes, math and ==mark== stay visible text (chat renderer, not a document)', () => {
@@ -383,8 +417,29 @@ test('raw HTML, footnotes, math and ==mark== stay visible text (chat renderer, n
   assert.ok(html.includes('&lt;div align=&quot;center&quot;&gt;hi&lt;/div&gt;'), html);
   assert.ok(html.includes('$$x^2$$'), html);
   assert.ok(html.includes('==marked=='), html);
+  // the point of "stays visible text": a construct this renderer refuses must still be READABLE. A
+  // `[^1]: …` line used to match the link-reference-definition pattern and be dropped from the answer
+  assert.ok(html.includes('[^1]: note'), html);
   assert.ok(!html.includes('<sup>'), html);
   assert.ok(!html.includes('<mark>'), html);
+});
+
+test('the other document-only syntaxes stay as written (and nothing else swallows them)', () => {
+  const html = mdToHtml('++底線++ H~2~O x^2^ :smile: a---b\n\n*[HTML]: HyperText Markup Language\n\n### 標題 {#custom-anchor}');
+  for (const text of ['++底線++', 'H~2~O', 'x^2^', ':smile:', '*[HTML]: HyperText Markup Language', '{#custom-anchor}']) {
+    assert.ok(html.includes(text), `${text} must stay visible: ${html}`);
+  }
+  assert.ok(!html.includes('<ins>'), html);
+  assert.ok(!html.includes('<abbr'), html);
+});
+
+test('a footnote definition is not eaten as a link reference definition', () => {
+  const html = mdToHtml('文字[^1]更長\n\n[^1]: 第一個註腳的內容。');
+  assert.ok(html.includes('[^1]'), html);
+  assert.ok(html.includes('[^1]: 第一個註腳的內容。'), html);
+  // and the pattern that used to match it still does its actual job
+  const link = mdToHtml('[a]: https://example.com\n\n見 [a][a]');
+  assert.ok(link.includes('<a href="https://example.com"'), link);
 });
 
 test('a CJK answer renders as CJK (nothing in the block pass splits on it)', () => {
