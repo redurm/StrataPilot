@@ -26,6 +26,15 @@ function constSource(name) {
   return match[0];
 }
 
+/** Return the text of a top-level `const NAME = [ ... ];` table in the renderer source. */
+function tableSource(name) {
+  const start = appSource.match(new RegExp(`^const ${name} = \\[`, 'm'));
+  assert.ok(start, `the renderer source no longer has a \`const ${name} = [...]\``);
+  const end = appSource.indexOf('\n];', start.index);
+  assert.notEqual(end, -1, `unterminated table after const ${name}`);
+  return appSource.slice(start.index, end + 3);
+}
+
 /** Return the text of a top-level `function name(...) { ... }` in the renderer source. */
 function functionSource(name) {
   const start = appSource.indexOf(`function ${name}(`);
@@ -46,6 +55,8 @@ const SOURCE = [
   constSource('PRICE_FIELDS'),
   constSource('PRICE_LABELS'),
   constSource('TOKENS_PER_MILLION'),
+  constSource('UD_MIN_SHARE_PCT'),
+  tableSource('USAGE_STACK'),
   functionSource('priceNumber'),
   functionSource('normalizePrice'),
   functionSource('priceForModel'),
@@ -57,13 +68,15 @@ const SOURCE = [
   functionSource('fmtMoney'),
   functionSource('usageStackTotal'),
   functionSource('usageSegmentValues'),
+  functionSource('usageShareText'),
+  functionSource('usageBarParts'),
 ].join('\n\n');
 
 // i18nKey() only declares a string for the catalogs; in here it is the identity, as it is at runtime
 // before a language is installed.
 global.i18nKey = (text) => text;
 
-const usage = new Function(`${SOURCE}\nreturn { PRICE_FIELDS, PRICE_LABELS, normalizePrice, priceForModel, hasPrices, pruneRateRows, costOf, fieldCost, bucketCostParts, fmtMoney, usageStackTotal, usageSegmentValues };`)();
+const usage = new Function(`${SOURCE}\nreturn { PRICE_FIELDS, PRICE_LABELS, normalizePrice, priceForModel, hasPrices, pruneRateRows, costOf, fieldCost, bucketCostParts, fmtMoney, usageStackTotal, usageSegmentValues, usageShareText, usageBarParts, USAGE_STACK, UD_MIN_SHARE_PCT };`)();
 
 const round = (value) => Math.round(value * 1e6) / 1e6;
 
@@ -226,4 +239,58 @@ test('usageSegmentValues(): the same column, in tokens or in dollars', () => {
   assert.equal(round(money.out), 1);
   assert.equal(round(money.cacheRead), 0.3);
   assert.equal(round(money.total), 2.3);
+});
+
+/* ---- the composition bar under the chart ---- */
+
+test('usageShareText(): a part never rounds away into looking absent', () => {
+  assert.equal(usage.usageShareText(0), '0%');
+  assert.equal(usage.usageShareText(0.032), '3.2%');
+  assert.equal(usage.usageShareText(0.5), '50.0%');
+  assert.equal(usage.usageShareText(0.999999), '100%', 'a one-part day does not print 100.0%');
+  assert.equal(usage.usageShareText(0.00995), '1%', 'and 0.995% is not written 1.00% next to 3.1%');
+  assert.equal(usage.usageShareText(0.002), '0.2%');
+  assert.equal(usage.usageShareText(0.0004), '0.04%');
+  assert.equal(usage.usageShareText(0.0000001), '<0.01%', 'a real 4-token part must not print 0%');
+});
+
+test('usageBarParts(): exact shares when everything is big enough to see', () => {
+  const parts = usage.usageBarParts({ cacheRead: 3000000, cacheWrite: 0, in: 1000000, out: 500000 }, true);
+  assert.deepEqual(parts.map((part) => part.key), usage.USAGE_STACK.map((segment) => segment.key));
+  const by = Object.fromEntries(parts.map((part) => [part.key, part]));
+  const r2 = (value) => Math.round(value * 100) / 100;
+  assert.equal(r2(by.cacheRead.width), 66.67, '3M of a 4.5M stack');
+  assert.equal(r2(by.in.width), 22.22);
+  assert.equal(r2(by.out.width), 11.11);
+  assert.equal(by.cacheWrite.width, 0, 'a zero part gets no width - and no floor: 0 is the fact');
+  assert.equal(round(by.cacheRead.share), round(2 / 3));
+});
+
+test('usageBarParts(): the slivers of a cache-heavy day stay visible, and the bar still fits', () => {
+  // the shape of a real day: 54.41M cache read against 1.79M in and 564.9k out
+  const parts = usage.usageBarParts({ cacheRead: 54410000, cacheWrite: 0, in: 1790000, out: 564900 }, true);
+  const by = Object.fromEntries(parts.map((part) => [part.key, part]));
+  assert.equal(round(by.out.width), usage.UD_MIN_SHARE_PCT, 'out is 1.0% of the day: floored, so it is still a band and not a hairline');
+  assert.ok(by.in.width > usage.UD_MIN_SHARE_PCT, 'in is 3.2%, big enough to keep its own width');
+  assert.ok(by.cacheRead.width < (100 * 54410000) / 56764900, 'the biggest part pays for the floor');
+  assert.equal(round(parts.reduce((acc, part) => acc + part.width, 0)), 100, 'the bar must not overflow: it would clip the thin part the floor was for');
+  assert.ok(by.cacheRead.share > 0.95, 'the share printed beside the number stays the true one, floor or not');
+});
+
+test('usageBarParts(): with the cache toggle off, only in / out are in the bar and in the shares', () => {
+  const parts = usage.usageBarParts({ cacheRead: 54410000, cacheWrite: 7, in: 1790000, out: 564900 }, false);
+  assert.deepEqual(parts.map((part) => part.key), ['in', 'out']);
+  const widths = parts.reduce((acc, part) => acc + part.width, 0);
+  assert.equal(round(widths), 100);
+  assert.equal(round(parts[0].share), round(1790000 / (1790000 + 564900)), 'rescaled, not the day total');
+});
+
+test('usageBarParts(): an empty period is a flat bar, not a division by zero', () => {
+  const parts = usage.usageBarParts({ cacheRead: 0, cacheWrite: 0, in: 0, out: 0 }, true);
+  assert.equal(parts.length, usage.USAGE_STACK.length);
+  for (const part of parts) {
+    assert.equal(part.width, 0);
+    assert.equal(part.share, 0);
+    assert.ok(Number.isFinite(part.share));
+  }
 });

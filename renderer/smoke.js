@@ -882,6 +882,14 @@ async function smokeUsageScenario() {
   if (firstColumn) firstColumn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   await new Promise((resolve) => setTimeout(resolve, 200));
   const detail = modal ? modal.querySelector('.usage-detail').textContent : '';
+  /*
+   * The clicked column must have laid out its composition below the chart: a stacked bar of the parts
+   * that are actually in it, each with its own label. Counted, not screenshotted, because "the bar has
+   * three segments on a day whose cache write was 0" is a fact a number can carry.
+   */
+  const barSegments = modal ? modal.querySelectorAll('.ud-bar .ud-seg').length : 0;
+  const partChips = modal ? modal.querySelectorAll('.ud-part').length : 0;
+  const barWidths = modal ? [...modal.querySelectorAll('.ud-bar .ud-seg')].map((seg) => seg.style.width).join('|') : '';
   if (modal) await api.smokeShot('usage-chart'); // the chart is the part a screenshot can actually check
   const axisLabels = (node) => (node ? [...node.querySelectorAll('.uc-ylab')].map((label) => label.textContent).join('|') : '');
   const axisWithCache = axisLabels(modal);
@@ -892,6 +900,9 @@ async function smokeUsageScenario() {
   }
   await new Promise((resolve) => setTimeout(resolve, 300));
   const axisWithoutCache = axisLabels(modal);
+  // the bar follows the toggle: two parts left to show, and the remembered column is still picked
+  const partsNoCache = modal ? modal.querySelectorAll('.ud-part').length : 0;
+  const segmentsNoCache = modal ? modal.querySelectorAll('.ud-bar .ud-seg').length : 0;
   if (modal) await api.smokeShot('usage-chart-nocache'); // still per day, now scaled to in / out only
 
   /*
@@ -956,7 +967,7 @@ async function smokeUsageScenario() {
   if (closeBox) closeBox.click();
   await opened;
   console.log(
-    `[smoke-usage] ok=${day.ok && month.ok && sums.ok} ipc_day=${day.buckets.length} ipc_month=${month.buckets.length} chart_columns=${columns} after_unit=${monthColumns} entries=${day.entries} chip_before=${JSON.stringify(chipBefore)} chip_after=${JSON.stringify(chipAfter)} chip_follows_ledger=${chipFollowsLedger} gone=${day.gone} dedupe_missed=${day.dedupeMissed} ledger=${JSON.stringify(String(day.ledgerFile || '').split(/[\\/]/).pop())} total=${sums.all ? sums.all.total : 0} cache_read=${sums.all ? sums.all.cacheRead : 0} answers=${sums.all ? sums.all.answers : 0} compactions=${sums.all ? sums.all.compactions : 0} branches=${sums.all ? sums.all.branches : 0} axis_with_cache=${JSON.stringify(axisWithCache)} axis_without_cache=${JSON.stringify(axisWithoutCache)} rescaled=${axisWithCache !== axisWithoutCache} cost_axis=${JSON.stringify(costAxis)} cost_is_money=${costAxis.includes('$')} rate_rows=${rateRows} rate_inputs=${rateInputs} money_in_header=${moneyShown} money_before=${JSON.stringify(moneyBefore)} typed_model_rate=${JSON.stringify(modelKey)} saved_by_model=${JSON.stringify(savedByModel)} money_after=${JSON.stringify(moneyAfter)} money_changed=${moneyBefore !== moneyAfter && !!moneyAfter} money_up=${parseFloat(moneyAfter) > parseFloat(moneyBefore)} refilled_boxes=${refilled} detail=${JSON.stringify(detail.slice(0, 70))} footer=${JSON.stringify(footer.slice(-46))} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
+    `[smoke-usage] ok=${day.ok && month.ok && sums.ok} ipc_day=${day.buckets.length} ipc_month=${month.buckets.length} chart_columns=${columns} after_unit=${monthColumns} entries=${day.entries} chip_before=${JSON.stringify(chipBefore)} chip_after=${JSON.stringify(chipAfter)} chip_follows_ledger=${chipFollowsLedger} gone=${day.gone} dedupe_missed=${day.dedupeMissed} ledger=${JSON.stringify(String(day.ledgerFile || '').split(/[\\/]/).pop())} total=${sums.all ? sums.all.total : 0} cache_read=${sums.all ? sums.all.cacheRead : 0} answers=${sums.all ? sums.all.answers : 0} compactions=${sums.all ? sums.all.compactions : 0} branches=${sums.all ? sums.all.branches : 0} axis_with_cache=${JSON.stringify(axisWithCache)} axis_without_cache=${JSON.stringify(axisWithoutCache)} rescaled=${axisWithCache !== axisWithoutCache} cost_axis=${JSON.stringify(costAxis)} cost_is_money=${costAxis.includes('$')} rate_rows=${rateRows} rate_inputs=${rateInputs} money_in_header=${moneyShown} money_before=${JSON.stringify(moneyBefore)} typed_model_rate=${JSON.stringify(modelKey)} saved_by_model=${JSON.stringify(savedByModel)} money_after=${JSON.stringify(moneyAfter)} money_changed=${moneyBefore !== moneyAfter && !!moneyAfter} money_up=${parseFloat(moneyAfter) > parseFloat(moneyBefore)} refilled_boxes=${refilled} detail=${JSON.stringify(detail.slice(0, 70))} composition_segments=${barSegments} composition_parts=${partChips} bar_widths=${JSON.stringify(barWidths)} parts_no_cache=${partsNoCache} segments_no_cache=${segmentsNoCache} selection_kept=${partsNoCache === 2 && segmentsNoCache > 0} footer=${JSON.stringify(footer.slice(-46))} dialog=${!!modal} dialog_closed=${!els.modalRoot.querySelector('.modal')}`,
   );
 }
 

@@ -103,6 +103,23 @@
   --uc-cw: #a9b3c4;
   --uc-in: #1f6feb;
   --uc-out: #14795a;
+  /* the pale cache colours take dark text; the two saturated ones are overridden to white below */
+  --uc-seg-text: #10203a;
+  --code: #1b2330;
+  --code-bg: #eef2f7;
+  --code-com: #5f6b81;
+  --code-kw: #0b3f8f;
+  --code-str: #0a6b4a;
+  --code-num: #8a5a00;
+  --code-fn: #155e9b;
+  --code-type: #6b3fa0;
+  --code-var: #8a4b1c;
+  --code-meta: #5c6a7e;
+  --code-tag: #0b3f8f;
+  --code-attr: #7a4d00;
+  --code-link: #14795a;
+  --code-add: #14795a;
+  --code-remove: #b3261e;
 }
 
 * {
@@ -2491,6 +2508,93 @@ button:disabled {
   font-size: 12.5px;
   color: var(--text-dim);
   font-family: var(--mono);
+}
+/*
+ * One period's composition, laid out flat under the chart: the same four colours in the same order as
+ * the stack above, so a clicked column and its breakdown are visibly the same thing. The widths come
+ * from usageBarParts() as percents; the labels under the bar carry the exact numbers, because a bar
+ * shows proportions and not values.
+ */
+.ud-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.ud-when {
+  color: var(--text);
+}
+.ud-total {
+  color: var(--text-dim);
+}
+.ud-bar {
+  display: flex;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-sunken);
+}
+.ud-seg {
+  flex: 0 0 auto;
+  min-width: 2px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 10.5px;
+}
+.ud-seg span {
+  color: var(--uc-seg-text);
+}
+.ud-seg.uc-cr {
+  background: var(--uc-cr);
+}
+.ud-seg.uc-cw {
+  background: var(--uc-cw);
+}
+.ud-seg.uc-in {
+  background: var(--uc-in);
+}
+.ud-seg.uc-out {
+  background: var(--uc-out);
+}
+/* the light theme's cache colours are pale, so its own accent colours need light text on them */
+[data-theme="light"] .ud-seg.uc-in span,
+[data-theme="light"] .ud-seg.uc-out span {
+  color: #ffffff;
+}
+.ud-seg.ud-none {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-start;
+  padding-left: 6px;
+  background: transparent;
+  color: var(--text-faint);
+}
+.ud-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 7px;
+  font-size: 12px;
+}
+.ud-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+}
+.ud-part.ud-zero {
+  color: var(--text-faint);
+  opacity: 0.65;
+}
+.ud-note {
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: var(--text-faint);
 }
 .usage-totals {
   margin-top: 6px;

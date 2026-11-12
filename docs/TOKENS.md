@@ -8,7 +8,9 @@ backlog is in [TODO.md](TODO.md).
 
 The sidebar footer shows the all-time total: `Usage: 33.1M tok`. Click **Usage** (or `/usage`) for the
 dialog: a stacked column chart of **in / out / cache read / cache write** per **day, week, month or
-year**, over the last 7 / 30 / 90 / 365 days or everything.
+year**, over the last 7 / 30 / 90 / 365 days or everything. Click a column and the box under the chart
+lays that one period out flat: a horizontal stacked bar of the same four parts in the same colours, with
+the exact figures and the share written beside it (`cache read 16.12M · 95.5%`).
 
 | Thing | How |
 |---|---|
@@ -23,6 +25,7 @@ year**, over the last 7 / 30 / 90 / 365 days or everything.
 | Local calendar | day buckets are the user's local day, not UTC - a session that ran at 23:30 belongs to their day. Weeks start on Monday |
 | Retention | day buckets older than 3 years are dropped on the next refresh |
 | Cache dominates | cache reads are usually two orders of magnitude bigger than real work (this machine: 39.9M cache reads against 1.0M prompt reads), so the dialog has a **stack cache read / write** checkbox: untick it and the columns show only in / out, rescaled |
+| **What one period is made of** | clicking a column draws a horizontal stacked bar of that period under the chart - the same four colours, the same order as the stack above, so a column and its breakdown are visibly one thing. A non-zero part is floored to 1.5% of the bar (`usageBarParts()`) because a 1% part would otherwise be an invisible hairline, and the biggest part pays for that width so the parts still add to exactly 100 (an overflowing bar clips the thin part on the right, which is the one the floor was for). The share printed next to each figure stays the **true** share, floor or not; `cache write 0` is stated rather than drawn as a gap. In **cost (USD)** mode the bar is money. The bar itself is `aria-hidden`, because the same four figures are written out in text directly under it |
 | **What it costs** | Strata reports no prices - pi's `usage.cost` is `0` for every call - so the money side is computed from rates **you** type: **USD per 1,000,000 tokens**, one row per model plus a **default rate** row. The rate table sits under the chart; pick **cost (USD)** in the third dropdown and the columns become money, split into the same four stacked parts. The totals line spells the sum out (`$6.91 = $1.17 in + $0.99 out + $4.75 cache read + $0 cache write`), and the sidebar chip gains the money too |
 | Rates live in settings, not in the ledger | they are saved in `stratapilot_settings.json` under `usagePrices` as soon as you leave a box. The ledger stores only token counts, so changing a rate re-prices every past day instantly, needs no re-scan, and never rewrites history. Each model is priced at its own rate, so a day that used two models is the sum of both |
 | A model row is a **patch**, not a replacement | filling in only `in` changes only `in` - the other three fields come from the default rate, and the placeholder in each box shows what currently applies. An all-empty model row is not stored at all, so it keeps falling back to the default instead of silently making that model free. To make one model free: set the default row to 0 and give the expensive models their own rows |
@@ -31,10 +34,12 @@ year**, over the last 7 / 30 / 90 / 365 days or everything.
 
 Code: `lib/usage-ledger.js` (33 unit tests against a temp sessions root - among them "a rewritten
 session file cannot write off banked tokens", "a compaction entry's usage is counted" and "a fork's
-copied entries are not counted twice") and the pricing side in `renderer/app.js` (`priceForModel()`,
-`costOf()`, `bucketCostParts()`, 11 unit tests in `test/usage-cost.test.js`), IPC `usage:series` /
-`usage:summary` / `usage:recount`, dialog `openUsageModal()` and `buildUsageChart()` (inline SVG, no
-dependency, CSP untouched).
+copied entries are not counted twice"), the pricing side in `renderer/app.js` (`priceForModel()`,
+`costOf()`, `bucketCostParts()`) and the composition bar's arithmetic in `renderer/storage.js`
+(`usageShareText()`, `usageBarParts()`) - 17 unit tests in `test/usage-cost.test.js`, five of them about
+the bar. IPC `usage:series` / `usage:summary` / `usage:recount`, dialog `openUsageModal()`,
+`buildUsageChart()` and `renderUsageComposition()` (inline SVG / plain divs, no dependency, CSP
+untouched).
 
 ## Token counts: in / out / cache
 

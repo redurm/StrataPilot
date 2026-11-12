@@ -302,16 +302,21 @@ function usageRangeFrom(rangeValue) {
   return Date.now() - days * 86400000;
 }
 
-function usageTotalsLine(totals, extra, costParts) {
+/*
+ * `omitCounts` drops the five token counts: the selected column's breakdown now draws them as a
+ * stacked bar with its own labels, and repeating them in the sentence under it puts the wall of text
+ * back. The header line above the chart keeps the full sentence.
+ */
+function usageTotalsLine(totals, extra, costParts, omitCounts = false) {
   if (!totals) return tr('no usage recorded');
-  const parts = [
+  const counts = [
     tr('in {n}', { n: fmtTokens(totals.in || 0) }),
     tr('out {n}', { n: fmtTokens(totals.out || 0) }),
     tr('cache read {n}', { n: fmtTokens(totals.cacheRead || 0) }),
     tr('cache write {n}', { n: fmtTokens(totals.cacheWrite || 0) }),
     tr('total {n}', { n: fmtTokens(totals.total || 0) }),
-    tr('{n} model calls', { n: totals.msgs || 0 }),
   ];
+  const parts = (omitCounts ? [] : counts).concat([tr('{n} model calls', { n: totals.msgs || 0 })]);
   // compact and branch-switch summaries are model calls too - saying so is what makes it obvious
   // that their tokens were not written off
   const extraCalls = [];
@@ -333,15 +338,18 @@ function usageTotalsLine(totals, extra, costParts) {
   return parts.join(' \u00b7 ');
 }
 
-function usageBucketLine(bucket, mode, usagePrices) {
+/* What one period adds beyond the numbers: how many sessions, and which models ran. */
+function usageBucketExtra(bucket) {
   const models = (bucket.models || []).slice(0, 3).map((model) => `${model.model} ${fmtTokens(model.total)}`).join(', ');
-  const money = mode === 'cost' || hasPrices(usagePrices) ? bucketCostParts(bucket, usagePrices) : null;
   return [
-    bucket.full || bucket.key,
-    usageTotalsLine(bucket, '', money),
     tr(bucket.sessions === 1 ? '{n} session' : '{n} sessions', { n: bucket.sessions || 0 }),
     models ? tr('models: {list}', { list: models }) : '',
   ].filter(Boolean).join(' \u00b7 ');
+}
+
+function usageBucketLine(bucket, mode, usagePrices) {
+  const money = mode === 'cost' || hasPrices(usagePrices) ? bucketCostParts(bucket, usagePrices) : null;
+  return [bucket.full || bucket.key, usageTotalsLine(bucket, usageBucketExtra(bucket), money)].join(' \u00b7 ');
 }
 
 /**
@@ -453,6 +461,130 @@ function buildUsageChart(container, report, onSelect, showCache = true, mode = '
   return buckets.length;
 }
 
+/* ------------------------------------------------------------------ */
+/* the selected column: one stacked bar of what that period is made of  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The breakdown the dialog printed for a clicked column was one long sentence, and a sentence gives
+ * every part the same weight: on a day that read 54.41M cache against 1.79M real prompt tokens the
+ * reader could not see that 96% of the day was re-read context. A stacked bar gives the parts their
+ * actual widths, in the same four colours and the same bottom-to-top order as the columns above.
+ *
+ * The numbers stay as text beside it. A bar cannot be read exactly, a colour cannot be read by a
+ * screen reader, and "cache write 0" is a fact worth stating rather than an empty gap.
+ */
+
+// A non-zero part is floored to this width so it stays visible (in / out are often under 5% of a
+// cache-heavy day). The difference is taken off the biggest part, which on such a day is huge.
+const UD_MIN_SHARE_PCT = 1.5;
+
+/** 0.032 -> "3.2%"; below one percent two decimals, and a part never rounds away into looking absent. */
+function usageShareText(share) {
+  if (!(share > 0)) return '0%';
+  const pct = share * 100;
+  if (pct >= 99.95) return '100%';
+  if (pct < 1) {
+    // 0.995% reads "1%" and 0.2% reads "0.2%" rather than "1.00%" / "0.20%", and something too small
+    // to see says "<0.01%" instead of the lie "0%"
+    const rounded = Number(pct.toFixed(2));
+    return `${rounded > 0 ? rounded : '<0.01'}%`;
+  }
+  return `${pct.toFixed(1)}%`;
+}
+
+/**
+ * The parts of one column's stack - four, or two when the cache toggle is off - each with the width
+ * in percent it gets in the bar. The widths always add to 100: a bar that overflows clips what sticks
+ * out at the right, which is exactly the thin part the floor exists to rescue.
+ */
+function usageBarParts(values, showCache) {
+  const picked = USAGE_STACK.filter((segment) => showCache || segment.key === 'in' || segment.key === 'out');
+  const sum = picked.reduce((acc, segment) => acc + (values[segment.key] || 0), 0);
+  const parts = picked.map((segment) => {
+    const value = values[segment.key] || 0;
+    return {
+      key: segment.key,
+      cls: segment.cls,
+      label: segment.label,
+      value,
+      share: sum > 0 ? value / sum : 0,
+      width: sum > 0 ? (100 * value) / sum : 0,
+    };
+  });
+  const live = parts.filter((part) => part.value > 0);
+  if (!live.length) return parts;
+  let debt = 0;
+  for (const part of live) {
+    if (part.width < UD_MIN_SHARE_PCT) {
+      debt += UD_MIN_SHARE_PCT - part.width;
+      part.width = UD_MIN_SHARE_PCT;
+    }
+  }
+  if (debt > 0) {
+    // the biggest part pays for the floors, and it can always afford them: at most three of the four
+    // parts can be floored, so the debt is under 5 percent, while the biggest of four parts of a
+    // non-zero total is at least 25. Math.max only guards the day someone adds a fiftieth segment.
+    const biggest = live.reduce((a, b) => (b.width > a.width ? b : a));
+    biggest.width = Math.max(0, biggest.width - debt);
+  }
+  return parts;
+}
+
+/** Draw one period's composition into the detail box: the bar, its labels, and what else it records. */
+function renderUsageComposition(container, bucket, mode, usagePrices, showCache) {
+  container.textContent = '';
+  const values = usageSegmentValues(bucket, mode, usagePrices);
+  const parts = usageBarParts(values, showCache);
+
+  const head = el('div', 'ud-head');
+  head.appendChild(el('span', 'ud-when', bucket.full || bucket.key));
+  const shownTotal = parts.reduce((acc, part) => acc + part.value, 0);
+  head.appendChild(el('span', 'ud-total', tr('total {n}', { n: usageValueText(shownTotal, mode) })));
+  container.appendChild(head);
+
+  /*
+   * aria-hidden: the bar is the picture of numbers that are written out in full directly under it, so
+   * reading both would make a screen reader say the same four figures twice.
+   */
+  const bar = el('div', 'ud-bar');
+  bar.setAttribute('aria-hidden', 'true');
+  for (const part of parts) {
+    if (!part.value) continue;
+    const seg = el('div', `ud-seg ${part.cls}`);
+    seg.style.width = `${part.width}%`;
+    seg.title = `${tr(part.label)} ${usageValueText(part.value, mode)} \u00b7 ${usageShareText(part.share)}`;
+    if (part.width >= 14) seg.appendChild(el('span', '', usageShareText(part.share)));
+    bar.appendChild(seg);
+  }
+  if (!bar.childNodes.length) bar.appendChild(el('div', 'ud-seg ud-none', tr('nothing recorded yet')));
+  container.appendChild(bar);
+
+  const labels = el('div', 'ud-parts');
+  for (const part of parts) {
+    const chip = el('span', 'ud-part');
+    if (!part.value) chip.classList.add('ud-zero');
+    chip.appendChild(el('span', `usage-swatch ${part.cls}`));
+    chip.appendChild(
+      el(
+        'span',
+        '',
+        `${tr(part.label)} ${usageValueText(part.value, mode)}${part.value ? ` \u00b7 ${usageShareText(part.share)}` : ''}`,
+      ),
+    );
+    labels.appendChild(chip);
+  }
+  container.appendChild(labels);
+
+  /*
+   * The counts are the bar's job now; what the sentence still has to say is the calls, the sessions,
+   * the models, and the money. In cost mode the bar and its labels already are money, so the split is
+   * not repeated underneath.
+   */
+  const money = mode === 'cost' || hasPrices(usagePrices) ? bucketCostParts(bucket, usagePrices) : null;
+  container.appendChild(el('div', 'ud-note', usageTotalsLine(bucket, usageBucketExtra(bucket), mode === 'cost' ? null : money, true)));
+}
+
 async function openUsageModal() {
   let unit = 'day';
   let range = '90';
@@ -529,6 +661,10 @@ async function openUsageModal() {
   const detail = el('div', 'usage-detail', tr('Hover or click a column for the breakdown.'));
   modal.appendChild(detail);
 
+  // the column whose composition is shown below the chart, remembered across redraws so changing a
+  // rate or a live ledger refresh does not throw away what the user is looking at
+  let selectedKey = null;
+
   const totalsLine = el('div', 'usage-totals', '');
   modal.appendChild(totalsLine);
 
@@ -577,10 +713,27 @@ async function openUsageModal() {
     });
   });
 
-  const selectBucket = (bucket, group) => {
+  const showBucket = (bucket, group) => {
     for (const node of chartWrap.querySelectorAll('.uc-col.selected')) node.classList.remove('selected');
     if (group) group.classList.add('selected');
-    detail.textContent = usageBucketLine(bucket, mode, currentPrices());
+    selectedKey = bucket.key;
+    renderUsageComposition(detail, bucket, mode, currentPrices(), cacheBox.checked);
+  };
+
+  /*
+   * Re-draw the selection after the chart was rebuilt (the unit / range / metric dropdowns, a rate
+   * being typed, the ledger moving under an open dialog): the same period is picked again when it is
+   * still on screen, and the hint comes back when the range no longer contains it.
+   */
+  const reapplySelection = () => {
+    const buckets = (report && report.buckets) || [];
+    const index = buckets.findIndex((bucket) => bucket.key === selectedKey);
+    if (index < 0) {
+      selectedKey = null;
+      detail.textContent = tr('Hover or click a column for the breakdown.');
+      return;
+    }
+    showBucket(buckets[index], chartWrap.querySelectorAll('.uc-col')[index]);
   };
 
   function renderRates() {
@@ -709,8 +862,11 @@ async function openUsageModal() {
     if (mode === 'cost' && !priced) {
       chartWrap.textContent = '';
       chartWrap.appendChild(el('div', 'empty-hint', tr('Enter the rates below (USD per 1,000,000 tokens) and the columns will show what each period cost.')));
+      selectedKey = null;
+      detail.textContent = tr('Hover or click a column for the breakdown.');
     } else {
-      buildUsageChart(chartWrap, res, selectBucket, cacheBox.checked, mode, prices);
+      buildUsageChart(chartWrap, res, showBucket, cacheBox.checked, mode, prices);
+      reapplySelection();
     }
     renderModels();
     renderRates();
@@ -718,7 +874,8 @@ async function openUsageModal() {
   usageDialogDraw = draw;
 
   cacheBox.addEventListener('change', () => {
-    if (report) buildUsageChart(chartWrap, report, selectBucket, cacheBox.checked, mode, currentPrices());
+    if (report) buildUsageChart(chartWrap, report, showBucket, cacheBox.checked, mode, currentPrices());
+    reapplySelection(); // the bar follows the toggle: two parts, not four
   });
   metricSel.addEventListener('change', () => {
     mode = metricSel.value === 'cost' ? 'cost' : 'tokens';
