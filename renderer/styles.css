@@ -40,6 +40,24 @@
   --uc-cw: #6b7488;
   --uc-in: #4f9cf9;
   --uc-out: #4ec9a5;
+  /* the percentage drawn inside a segment of the composition bar: readable on all four dark colours */
+  --uc-seg-text: #eaf3ff;
+  /* fenced code and its tokens (renderer/highlight.js): one set of names, two themes */
+  --code: #dfe3ea;
+  --code-bg: #11141b;
+  --code-com: #76819a;
+  --code-kw: #7aa2ff;
+  --code-str: #7fd6a5;
+  --code-num: #e0b352;
+  --code-fn: #6cc7d8;
+  --code-type: #c3a3e8;
+  --code-var: #e6a176;
+  --code-meta: #98a1b3;
+  --code-tag: #7aa2ff;
+  --code-attr: #c8a06a;
+  --code-link: #4ec9a5;
+  --code-add: #4ec9a5;
+  --code-remove: #ef6b6b;
 }
 
 /*
@@ -812,10 +830,77 @@ textarea {
   margin: 0 0 8px;
   padding-left: 22px;
 }
+/* a nested list sits inside the parent <li>, so it needs no extra vertical space of its own */
+.msg-body li > ul,
+.msg-body li > ol {
+  margin: 2px 0 0;
+}
 .msg-body blockquote {
   margin: 0 0 8px;
   padding-left: 10px;
   border-left: 3px solid var(--border);
+  color: var(--text-dim);
+}
+
+/*
+ * What the richer block pass now produces: a GitHub alert box, a task list, and an image reference.
+ * An image is never an <img>: CSP img-src is 'self' data: blob:, so a remote image would render as a
+ * broken icon - the chip says what was referenced, and still links to it.
+ */
+.md-alert {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 0 0 10px;
+  background: var(--accent-wash);
+}
+.md-alert-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.md-alert-tip {
+  border-left-color: var(--green);
+  background: rgba(78, 201, 165, 0.1);
+}
+.md-alert-important {
+  border-left-color: var(--code-type);
+  background: var(--bg-panel);
+}
+.md-alert-warning {
+  border-left-color: var(--amber);
+  background: rgba(224, 179, 82, 0.12);
+}
+.md-alert-caution {
+  border-left-color: var(--red);
+  background: rgba(239, 107, 107, 0.1);
+}
+.msg-body li.task {
+  list-style: none;
+  margin-left: -14px;
+}
+.msg-body li.task > input[type="checkbox"] {
+  margin-right: 6px;
+  accent-color: var(--accent);
+  pointer-events: none;
+  vertical-align: -1px;
+}
+/* a ticked box is something the answer already did: dim the line, do not leave it at full weight */
+.msg-body li.task:has(> input:checked) {
+  color: var(--text-dim);
+}
+.md-img {
+  padding: 0 5px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.md-broken-link {
+  border-bottom: 1px dotted var(--red);
   color: var(--text-dim);
 }
 
@@ -876,7 +961,7 @@ table.md-table td.al-right {
   font-size: 12.5px;
 }
 .msg-body pre.code {
-  background: var(--bg-deep);
+  background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   margin: 0 0 10px;
@@ -887,18 +972,66 @@ table.md-table td.al-right {
   padding: 8px 10px;
   font-family: var(--mono);
   font-size: 12.5px;
+  line-height: 1.5;
   white-space: pre;
   overflow-x: auto;
+  color: var(--code);
+}
+/*
+ * Fenced-code colours (renderer/highlight.js). A working palette for a transcript, not a port of any
+ * editor theme: keyword / string / comment / number are the four that make a snippet scannable, the rest
+ * keep an unfamiliar language readable. A language with no rules emits no span, so these selectors can
+ * never be the reason a code block looks wrong.
+ */
+.msg-body pre.code .hl-com {
+  color: var(--code-com);
+  font-style: italic;
+}
+.msg-body pre.code .hl-kw,
+.msg-body pre.code .hl-tag {
+  color: var(--code-kw);
+}
+.msg-body pre.code .hl-str {
+  color: var(--code-str);
+}
+.msg-body pre.code .hl-num,
+.msg-body pre.code .hl-attr {
+  color: var(--code-num);
+}
+.msg-body pre.code .hl-fn {
+  color: var(--code-fn);
+}
+.msg-body pre.code .hl-type {
+  color: var(--code-type);
+}
+.msg-body pre.code .hl-var {
+  color: var(--code-var);
+}
+.msg-body pre.code .hl-meta {
+  color: var(--code-meta);
+}
+.msg-body pre.code .hl-link {
+  color: var(--code-link);
+}
+.msg-body pre.code .hl-add {
+  color: var(--code-add);
+}
+.msg-body pre.code .hl-remove {
+  color: var(--code-remove);
 }
 .code-bar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 6px;
   padding: 3px 8px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   font-size: 11px;
   color: var(--text-faint);
+}
+/* the language label is the label; the buttons that follow it belong on the right */
+.code-bar > span:first-child {
+  margin-right: auto;
 }
 .copy-btn {
   background: transparent;

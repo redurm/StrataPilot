@@ -107,6 +107,7 @@ Normally you set **nothing**; only override when auto-detection fails.
 | `PI_MANAGED_INSTALL_ROOT` | pi installation root | `~/.pi/agent/install` |
 | `STRATAPILOT_KEY` / `STRATA_API_KEY` | API key the Monitor uses for `/metrics` | Empty (no key); can also come from the tab model's `apiKey` |
 | `PI_CODING_AGENT_SESSION_DIR` | Session JSONL root folder | `~/.pi/agent/sessions` |
+| `STRATAPILOT_MD_VIEWER` | Program that opens the **Markdown Viewer** handoff (Mermaid blocks, long answers) | Empty: the operating system's handler for `.md`. The **Settings** dialog offers the same switch as `markdownViewerPath`, and that wins over this variable - see [How the Markdown Viewer handoff works](COMPOSER.md#how-the-markdown-viewer-handoff-works) |
 | `STRATAPILOT_SMOKE*` | Developer smoke mode | See [Smoke mode](DEVELOP.md#smoke-mode-for-development) |
 
 > The old `PI_ON_STRATA_*` names still work: `migrateEnv()` in `main.js` copies any `PI_ON_STRATA_X`
@@ -136,6 +137,7 @@ the file still works — press `Ctrl+R` to reload, or reopen the Settings dialog
 | `serialQueue` | Serial queue on/off |
 | `restoreTabs` | Set to `false` to stop reopening last run's tabs (`true` unless set) |
 | `sidebarHidden` / `monitorOpen` / `monitorWidth` | Sidebar, Monitor panel state and width |
+| `markdownViewerPath` | Program the **Markdown Viewer** button hands a `.md` file to; empty means the operating system's own `.md` handler. Set it from the Settings dialog (a file picker) or by hand |
 | `strataUrl` | Fixed Strata address for the Monitor (e.g. `http://127.0.0.1:8081/v1`); if absent it is derived from the current tab's `model.baseUrl` |
 | `jobs[]` | Scheduled prompts (B5): `{ id, name, schedule, prompt, target, cwd, ephemeral, enabled, lastRun, nextRun }` - edited in the Jobs dialog rather than by hand |
 | `strataUrls` | Extra Strata addresses the Monitor should watch (array, one per line in the Settings dialog) - see [More than one Strata server](MONITOR.md#more-than-one-strata-server) |

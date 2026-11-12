@@ -72,21 +72,62 @@ session's working folder**:
 | Two Enters | the first completes the path, the second sends the prompt - the same rule as the command palette |
 | Not an attachment | the path is inserted as **text**; the model reads the file with its own tools. Drag & drop or **Attach files** is still what actually uploads content |
 
-## How links are handled
+## How markdown is rendered
 
-- `linkify()` in `renderer/markdown.js`: escapes first, then wraps bare URLs in `<a>`; trailing
-  `, . ; : ! ?` are not swallowed into the URL, CJK full-width punctuation (`，。、；：！？（）`)
-  acts as a URL boundary, while ASCII parentheses in
-  `https://en.wikipedia.org/wiki/Foo_(bar)` are kept intact
-- Assistant text goes through the full markdown renderer (`[text](url)` and bare URLs both work);
-  user messages, thinking, tool cards and notes go through `linkify()` (links only, no other markdown,
-  line breaks preserved)
+The transcript renders what a chat answer actually contains, and refuses to render the rest. The
+renderer is hand-written (`renderer/markdown.js`, no dependency, no build step) and it escapes every
+token before it emits markup, so model output can never inject HTML.
+
+- **Block level**: fenced code (``` and `~~~`, any fence length, an unclosed fence runs to the end of
+  the answer because that is where the answer ends), tables with `:---:` alignment, nested ordered and
+  unordered lists, task lists, blockquotes (including nested ones and GitHub alerts
+  `[!NOTE] [!TIP] [!IMPORTANT] [!WARNING] [!CAUTION]`, which get a class rather than an emoji),
+  `#` and `===`/`---` underlined headings, thematic breaks, and 4-space indented code
+- **A single newline inside a paragraph is a line break**, not a paragraph gap: pi's system prompt
+  tells models CJK output needs no blank lines between paragraphs, and a renderer that joins those
+  lines produces one unreadable wall
+- **Inline**: emphasis (including the CJK case `**粗體**中文`, where the closing marker is followed by
+  a non-space that is not punctuation), inline code (its content is tokenised before emphasis runs,
+  so `` `a*b*c` `` stays literal), links `[t](u "title")`, reference and shortcut links, angle-bracket
+  autolinks, bare-URL linkification
+- **Not rendered, on purpose**: raw HTML (other than autolinks), `<img>` (the CSP allows `img-src
+  'self' data: blob:`, so a remote image would be a tracker the user never asked for: an image becomes
+  a labelled chip), Mermaid and math (this app has no renderer for them; the **Markdown Viewer**
+  button hands the block to an external program, see [CONFIGURE.md](CONFIGURE.md)), footnotes,
+  `==mark==`, `::: containers`. An unknown construct is left as text, which is ugly but honest
+- `linkify()` is the links-only path used for user messages, thinking, tool cards and notes; assistant
+  text goes through `mdToHtml()`
 - Streaming thinking / tool output uses `setPreText()` / `appendPreText()`: innerHTML is re-applied
   only when the text contains `http`, so long output is not re-rendered per delta
-- Clicks are caught at the `document` level → `api.openExternal(href)` → `shell.openExternal`
+- Link clicks are caught at the `document` level → `api.openExternal(href)` → `shell.openExternal`.
+  A target that is not `http(s)`, `mailto:` or an app route is not made clickable at all, and one
+  whose path traverses (`..`) is rendered as a dead-link marker rather than a link
 - Belt and braces: the main process has `setWindowOpenHandler` (deny) and `will-navigate` (blocks
   navigation away from the current page), so even `target="_blank"` never opens an extra Electron
   window
+- Fenced blocks are coloured by `renderer/highlight.js` (also hand-written: vendoring highlight.js
+  would mean ~1 MB of code and a bundler this repo does not have). An unknown language is not an
+  error - the block is escaped and left uncoloured, so a new language costs a rule set and nothing else
+
+## How the Markdown Viewer handoff works
+
+A Mermaid block, a long answer, or any markdown the transcript will not draw: the **viewer** button on
+a fenced block (diagrams only) or in an assistant message's actions writes the source to a `.md` file
+under the user temp folder and opens it with an external program. Nothing is rendered inside this app,
+and the file is a real file, so saving, printing and searching it are the viewer's problem, not ours.
+
+- `lib/md-viewer.js` owns the rules: the message title becomes a file name that cannot walk out of the
+  handoff folder (separators, leading and trailing dots, a name that is only dots), two messages with the
+  same title get two files instead of the viewer showing a stale answer, an over-long answer is cut at a
+  byte cap without splitting a multi-byte character, handoff files older than a week are pruned on the
+  next handoff, and the fence wrapped around a copied block is sized longer than anything inside it
+  (`fenceFor()`), because a block quoted inside a block would otherwise close itself
+- which program: the `markdownViewerPath` setting, then `STRATAPILOT_MD_VIEWER`, then the operating
+  system's handler for `.md`. A configured path that no longer exists is **reported**, never quietly
+  replaced - silently opening Notepad is how "the diagram showed a wall of text" becomes a bug report
+- `test/md-viewer.test.js` covers the rules; `STRATAPILOT_SMOKE_MDVIEW=1` drives the channel through
+  the real app with a viewer that cannot exist, so no desktop program is launched inside a test run, and
+  `STRATAPILOT_SMOKE_MDVIEW_EXE=<executable>` adds the launch itself when a developer wants it proved
 
 ## Keyboard shortcuts
 

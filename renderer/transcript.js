@@ -208,6 +208,15 @@ function buildMessageActions(item, role, text) {
   copy.title = 'copy this message as raw markdown';
   actions.appendChild(copy);
 
+  if (role === 'assistant') {
+    // the transcript cannot draw diagrams or maths on purpose; the sibling Markdown Viewer app can
+    const viewer = el('button', 'copy-btn msg-action', 'viewer');
+    viewer.dataset.msgAction = 'viewer';
+    viewer.dataset.key = item.key;
+    viewer.title = 'open this answer in the external markdown viewer (diagrams, maths, long tables)';
+    actions.appendChild(viewer);
+  }
+
   if (role === 'user') {
     const resend = el('button', 'copy-btn msg-action', 'resend');
     resend.dataset.msgAction = 'resend';

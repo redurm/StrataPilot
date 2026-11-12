@@ -49,6 +49,8 @@ const api = {
   // all, while being able to read any file on disk. The binding is gone; the handler is still guarded.
   openPath: (target, reveal) => ipcRenderer.invoke('app:open-path', { target, reveal }),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+  // the Markdown Viewer handoff: main writes the file and picks the program, we only hand over text
+  openMarkdown: (payload = {}) => ipcRenderer.invoke('md:open-viewer', payload),
 
   /* strata server monitor (proxied from main to dodge CSP/CORS) --------- */
   strataMetrics: (payload) => ipcRenderer.invoke('strata:metrics', payload),

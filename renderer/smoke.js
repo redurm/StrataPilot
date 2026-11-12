@@ -28,6 +28,7 @@ const SCENARIO_TABLE = [
   { flag: 'smokeCopy', label: 'copy', run: smokeCopyScenario },
   { flag: 'smokeExport', label: 'export', run: smokeExportScenario },
   { flag: 'smokeSetup', label: 'setup', run: smokeSetupScenario },
+  { flag: 'smokeMdView', label: 'mdview', run: smokeMdViewScenario },
   { flag: 'smokeFork', label: 'fork', run: smokeForkScenario },
   { flag: 'smokeTree', label: 'tree', run: smokeTreeScenario },
   { flag: 'smokePath', label: 'path', run: smokePathScenario },
@@ -571,7 +572,7 @@ function lastToastText() {
  * hand edit of the JSON file, save it through app:settings-set and apply it live.
  */
 async function smokeSettingsScenario() {
-  const wanted = ['cwd', 'serialQueue', 'restoreTabs', 'strataUrl', 'strataConfigPath', 'monitorOpen', 'monitorWidth', 'sidebarHidden'];
+  const wanted = ['cwd', 'serialQueue', 'restoreTabs', 'strataUrl', 'strataConfigPath', 'monitorOpen', 'monitorWidth', 'sidebarHidden', 'markdownViewerPath'];
   const opening = openSettingsModal();
   await new Promise((resolve) => setTimeout(resolve, 200));
   const present = wanted.filter((key) => !!document.querySelector(`[data-setting="${key}"]`));
@@ -1193,6 +1194,48 @@ async function smokeForkScenario() {
   await reopened;
   console.log(
     `[smoke-fork] rows_before=${rows.length} off_before=${offBefore} branch_heads=${heads} fork_button=${!!forkButton} confirm=${!!confirmButton} rows_after=${rows2.length} off_after=${offAfter} items_before=${itemsBefore} items_after=${tab.items.length} chip=${JSON.stringify(els.stats.querySelector('.stat-tree') ? els.stats.querySelector('.stat-tree').textContent : 'none')}`,
+  );
+}
+
+/** The three fields that say which program a handoff actually reached. */
+function handoffReport(res) {
+  return { ok: res && res.ok, error: res && res.error, viewer: res && res.viewer };
+}
+
+/**
+ * STRATAPILOT_SMOKE_MDVIEW=1: the Markdown Viewer handoff, WITHOUT launching a desktop app inside the run.
+ * The configured viewer is deliberately something that cannot exist, because what needs proving here is the
+ * part this app owns: main writes the file (utf8, a sanitised name, one file per handoff), refuses an empty
+ * one, and REPORTS a viewer it cannot find instead of quietly handing the answer to Notepad. The real spawn
+ * of a real viewer is checked by hand, and the rules behind it are unit-tested in test/md-viewer.test.js.
+ */
+async function smokeMdViewScenario() {
+  const before = await api.settingsGet();
+  const text = '### handoff\n\n```mermaid\nflowchart TD\nA-->B\n```\n\n漢字 and <b>escaped</b>';
+  await api.settingsSet({ markdownViewerPath: 'C:/stratapilot-smoke/no-such-viewer.exe' });
+  const first = await api.openMarkdown({ text, name: 'smoke 標題 #44' });
+  const second = await api.openMarkdown({ text, name: 'smoke 標題 #44' });
+  const empty = await api.openMarkdown({ text: '   ', name: 'nothing' });
+  await api.settingsSet({ markdownViewerPath: before.markdownViewerPath || '' });
+  const after = await api.settingsGet();
+  const restored = (after.markdownViewerPath || '') === (before.markdownViewerPath || '');
+  const named = typeof first.path === 'string' && first.path.includes('標題') && first.path.includes('stratapilot-viewer');
+  const distinct = !!first.path && !!second.path && first.path !== second.path;
+  const passed = first.missing === true && first.bytes > 0 && named && distinct && empty.ok === false && restored;
+  if (!passed) console.log('[smoke-mdview] FAIL the handoff did not behave (fields below)');
+  // optional, and never set in CI: STRATAPILOT_SMOKE_MDVIEW_EXE names a program to actually launch, so
+  // the spawn branch can be proved by hand without a CI run opening a desktop window
+  const lever = String(state.info.smokeMdViewExe || '');
+  let real = 'not_configured';
+  if (lever) {
+    await api.settingsSet({ markdownViewerPath: lever });
+    const launched = await api.openMarkdown({ text, name: 'smoke real handler' });
+    await api.settingsSet({ markdownViewerPath: before.markdownViewerPath || '' });
+    real = launched.ok === true && launched.viewer === lever;
+    if (!real) console.log(`[smoke-mdview] FAIL the configured viewer did not launch: ${JSON.stringify(handoffReport(launched))}`);
+  }
+  console.log(
+    `[smoke-mdview] missing=${first.missing} bytes=${first.bytes} named=${named} distinct=${distinct} empty_refused=${empty.ok === false} restored=${restored} real_viewer=${real}`,
   );
 }
 

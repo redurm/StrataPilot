@@ -171,6 +171,17 @@ function openSettingsModal() {
       { value: 'zh-CN', label: '简体中文' },
     ], tr('the app\u2019s own words (menus, buttons, dialogs, chips) follow this right away; pi answers in the language you prompt it in, and the log file and the diagnostics report stay English'), { language: 'auto' });
 
+    // the transcript cannot draw diagrams or typeset maths, and pulling a renderer for them in here would
+    // cost a bundler and a relaxed CSP (docs/TODO.md, "Deliberately not doing"); every viewer button
+    // therefore hands the block to a program the user picks, over a real .md file we write in main
+    group(tr('Markdown viewer'));
+    textRow('markdownViewerPath', tr('External Markdown Viewer program'), tr('the viewer button on a diagram or an answer opens it with this program; leave empty to use whatever Windows has for .md files'), {
+      filePicker: true,
+      fileTitle: tr('Markdown Viewer program'),
+      filters: [{ name: 'exe', extensions: ['exe'] }],
+      clear: true,
+    });
+
     group(tr('Files'))
     ;
     const paths = el('div', 'set-paths');

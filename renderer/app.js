@@ -172,6 +172,39 @@ function toast(message, kind = 'info', timeoutMs = 6000) {
   setTimeout(() => node.remove(), timeoutMs);
 }
 
+/**
+ * Hand a fenced block, or a whole answer, to the external Markdown Viewer (docs/COMPOSER.md). The
+ * transcript cannot draw Mermaid or maths and deliberately does not try to; the sibling app bundles every
+ * rendering dependency and runs offline, so the block is written out as a real .md file and opened there.
+ */
+async function openInMarkdownViewer(text, name, button) {
+  const value = String(text || '');
+  if (!value.trim()) {
+    toast('this message has no text to open', 'warning');
+    return;
+  }
+  let res;
+  try {
+    res = await api.openMarkdown({ text: value, name: String(name || '').slice(0, 80) });
+  } catch (err) {
+    console.warn('[md-viewer] ipc failed', err);
+    toast('markdown viewer could not open this', 'warning');
+    return;
+  }
+  if (!res || !res.ok) {
+    console.warn('[md-viewer]', res && res.error);
+    if (res && res.missing) toast('the configured markdown viewer was not found, check Settings', 'warning');
+    else toast('markdown viewer could not open this', 'warning');
+    return;
+  }
+  if (button) {
+    const original = button.textContent;
+    button.textContent = 'done';
+    setTimeout(() => (button.textContent = original), 1500);
+  }
+  if (res.truncated) toast('the answer was too long, the copy was cut', 'info', 5000);
+}
+
 function timeAgo(value) {
   if (!value) return '';
   const then = new Date(value).getTime();
@@ -491,7 +524,9 @@ function ensureBlockNode(message, index, live) {
   } else if (block.type === 'thinking') {
     const details = document.createElement('details');
     details.className = 'thinking';
-    details.open = true;
+    // start folded, like the finished block this node is replaced with: reasoning that streams
+    // past on its own is unreadable anyway, and collapsed means appendPreText skips every DOM write
+    details.open = false;
     const summary = document.createElement('summary');
     summary.textContent = 'thinking…';
     const pre = el('pre');
@@ -3889,6 +3924,19 @@ function wireUi() {
   });
 
   els.transcript.addEventListener('click', (event) => {
+    // a diagram block the transcript cannot draw: hand the fence over to the external viewer as it stands
+    const viewerButton = event.target.closest('[data-viewer]');
+    if (viewerButton) {
+      const pre = viewerButton.closest('pre.code');
+      const code = pre && pre.querySelector('code');
+      if (!code) return;
+      const lang = pre.dataset.lang || '';
+      // the block may itself contain a fence (a Mermaid sample quoted inside a fence): the wrapper has to
+      // be longer than anything inside it or the viewer would read a truncated diagram
+      const fence = fenceFor(code.textContent);
+      openInMarkdownViewer(`${fence}${lang}\n${code.textContent}\n${fence}`, lang || 'diagram', viewerButton);
+      return;
+    }
     const button = event.target.closest('[data-copy]');
     if (!button) return;
     const pre = button.closest('pre.code');
@@ -3923,6 +3971,11 @@ function wireUi() {
           setTimeout(() => (button.textContent = 'copy'), 1500);
         })
         .catch((err) => toast(`copy failed: ${err.message}`, 'error'));
+      return;
+    }
+    if (button.dataset.msgAction === 'viewer') {
+      const text = contentToText(item.message.content); // the markdown source, not the rendered view
+      openInMarkdownViewer(text, text.split('\n')[0], button);
       return;
     }
     if (button.dataset.msgAction === 'resend') {

@@ -141,7 +141,8 @@ Collapsing is still cheaper for the renderer, and the optimization is now really
 
 - `appendPreText()`: each delta only does `appendChild(textNode)` (O(1)) instead of reassigning the
   whole string; when a `<details>` is **collapsed all DOM writes are skipped**, and it is redrawn once
-  from `_raw` when expanded
+  from `_raw` when expanded. A streaming thinking block is created collapsed, so the skip is the
+  normal path and not the opt-in one - open it during the run if you want to watch the reasoning
 - Linkification runs exactly once at the end (`thinking_end` / tool end); innerHTML is never re-parsed
   mid-stream
 - `autoscroll()`: reading `scrollHeight` forces a synchronous layout, so it is now **rAF-throttled**

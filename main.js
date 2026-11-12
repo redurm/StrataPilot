@@ -4,6 +4,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell, Menu, clipboard, powerMonito
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 
 const { PiRpcProcess } = require('./lib/pi-process');
 const { resolvePiInvocation, TESTED_PI_VERSION, piVersionStatus } = require('./lib/pi-launch');
@@ -14,6 +15,7 @@ const diagnostics = require('./lib/diagnostics');
 const cron = require('./lib/cron');
 const netPolicy = require('./lib/net-policy');
 const fsGuard = require('./lib/fs-guard');
+const mdViewer = require('./lib/md-viewer');
 const { resolveCaptureTarget } = require('./lib/smoke-shot');
 const smokeFlags = require('./lib/smoke-flags');
 const { disposeAll, QUIT_GRACE_MS } = require('./lib/shutdown');
@@ -154,6 +156,10 @@ const SETTINGS_KEYS = new Set([
   'firstRunSeen',
   'usagePrices',
   'openTabs',
+  // a path the user picked in the Settings dialog, in the same class as strataConfigPath: main only uses
+  // it to launch that program with a handoff file, and the renderer could already ask main to open a
+  // path or a URL (shell.openPath / openExternal), so allowing the key adds no power it did not have
+  'markdownViewerPath',
 ]);
 
 /** Split a renderer patch into what it may write and what it may not. */
@@ -1426,6 +1432,44 @@ function registerIpc() {
     } finally {
       clearTimeout(timer);
     }
+  });
+
+  /*
+   * The Markdown Viewer handoff. The transcript deliberately cannot draw Mermaid diagrams or typeset
+   * maths (that costs several MB of renderer dependencies plus a build step this repo has neither of), so
+   * a diagram block or a whole message is written to the app's own handoff folder and opened outside -
+   * by the configured viewer if there is one, otherwise by whatever Windows has for .md.
+   */
+  ipcMain.handle('md:open-viewer', async (_event, { text = '', name = '' } = {}) => {
+    const dir = path.join(app.getPath('temp'), 'stratapilot-viewer');
+    const wrote = mdViewer.writeDocument({ dir, name: String(name || ''), text: String(text || '') });
+    if (!wrote.ok) return wrote;
+    const choice = mdViewer.resolveViewer({
+      setting: loadSettings().markdownViewerPath,
+      env: process.env.STRATAPILOT_MD_VIEWER,
+      exists: (target) => fs.existsSync(target),
+    });
+    if (choice.kind === 'missing') {
+      console.log(`[md-viewer] configured viewer is gone: ${choice.path} (from ${choice.from})`);
+      return { ok: false, error: `viewer not found: ${choice.path}`, path: wrote.path, bytes: wrote.bytes, truncated: wrote.truncated, missing: true };
+    }
+    if (choice.kind === 'exe') {
+      try {
+        // detached on purpose: the viewer is a normal desktop app, it must not die with this window and
+        // it must not be able to hold our exit open
+        const child = spawn(choice.path, [wrote.path], { detached: true, stdio: 'ignore', windowsHide: true });
+        child.on('error', (err) => console.log(`[md-viewer] spawn failed: ${err.message}`));
+        child.unref();
+        console.log(`[md-viewer] opened ${wrote.path} with ${choice.path} (${choice.from})${wrote.truncated ? ', truncated' : ''}`);
+        return { ok: true, path: wrote.path, viewer: choice.path, truncated: wrote.truncated };
+      } catch (err) {
+        console.log(`[md-viewer] spawn threw: ${err.message}`);
+        return { ok: false, error: err.message, path: wrote.path };
+      }
+    }
+    const error = await shell.openPath(wrote.path);
+    console.log(`[md-viewer] opened ${wrote.path} with the system .md handler${error ? `: ${error}` : ''}`);
+    return { ok: !error, error, path: wrote.path, viewer: 'system', truncated: wrote.truncated };
   });
 
   ipcMain.handle('app:open-path', async (_event, { target, reveal = false }) => {
