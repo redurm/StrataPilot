@@ -150,8 +150,6 @@ function setLanguage(pref) {
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 // Anything bigger than this is too heavy for the RPC `images` payload (base64 JSON line).
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-// File extension for a clipboard image that arrives without a name (see pasteName()).
-const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/tiff': 'tiff' };
 
 function fmtBytes(n) {
   if (n == null) return '?';
@@ -3601,45 +3599,8 @@ function wireDragAndDrop() {
 /* paste (Ctrl+V / right-click)                                        */
 /* ------------------------------------------------------------------ */
 
-/* Clipboard images carry no filesystem path (api.pathForFile() returns ''), and
-   Chromium names them "image.png" for every screenshot, so pastes get a name of
-   their own: pasted-1.png, pasted-2.png, … (never clashing with an existing chip). */
-let pasteSeq = 0;
-const GENERIC_PASTE_NAME = /^(image\d*|blob|clipboard|screenshot|screen[ -]?shot|未命名|untitled)(\.(png|jpe?g|gif|webp|bmp|tiff))?$/i;
-
-function pasteName(tab, file) {
-  const given = String(file.name || '').trim();
-  if (given && !GENERIC_PASTE_NAME.test(given)) return given;
-  const ext = IMAGE_EXT[file.type] || String(given).split('.').pop() || 'png';
-  const taken = new Set([
-    ...(tab ? tab.images.map((i) => i.name) : []),
-    ...(tab ? tab.attachments.map((a) => a.name) : []),
-    ...(tab ? tab.inlines.map((i) => i.name) : []),
-  ]);
-  let name;
-  do {
-    pasteSeq += 1;
-    name = `pasted-${pasteSeq}.${ext}`;
-  } while (taken.has(name));
-  return name;
-}
-
-/** Files carried by a paste event: `files` first, `items` as a fallback for the
- *  (rare) case where only items is populated. */
-function pastedFiles(clipboardData) {
-  const out = [];
-  for (const file of Array.from(clipboardData.files || [])) {
-    if (file) out.push(file);
-  }
-  if (!out.length) {
-    for (const item of Array.from(clipboardData.items || [])) {
-      if (!item || item.kind !== 'file') continue;
-      const file = typeof item.getAsFile === 'function' ? item.getAsFile() : null;
-      if (file) out.push(file);
-    }
-  }
-  return out;
-}
+/* What is worth attaching is decided in renderer/paste.js (#61), which is unit-tested without a
+   window; this part only wires the decision to the tab and the toast. */
 
 async function handlePaste(event) {
   // Never hijack a paste while a dialog (including the extension UI modals) or the
@@ -3647,11 +3608,23 @@ async function handlePaste(event) {
   if (modalOpen || slashMenu.open || pathMenu.open) return;
   const data = event.clipboardData;
   if (!data) return;
-  const files = pastedFiles(data);
-  if (!files.length) return; // plain text (or nothing): leave the default paste alone
+  const intent = pasteIntent(data, (file) => api.pathForFile(file));
+  if (intent.action === 'text') {
+    if (intent.reason !== 'text-with-clipboard-image') return;
+    // Word / Excel / PowerPoint / a PDF reader put a bitmap *rendering* of the selection on the
+    // clipboard beside the text, so the paste looked like an image and the prose was about to be
+    // thrown away. Leave the default paste alone - but say why no chip appeared, because "I copied a
+    // table and got pasted-1.png" is exactly what the user saw. Focus is moved first when the caret
+    // sits elsewhere: the paste is not cancelled, so it goes to whatever holds focus when the
+    // default action runs (verified on Electron 40 by focusing a second textarea inside a paste
+    // handler and reading where the text landed).
+    if (document.activeElement !== els.input) els.input.focus();
+    toast('the clipboard held an image as well as text · the text was pasted', 'info', 7000);
+    return;
+  }
   event.preventDefault();
   const tab = activeTab();
-  const named = files.map((file) => {
+  const named = intent.files.map((file) => {
     const name = pasteName(tab, file);
     if (name === file.name) return file;
     try {

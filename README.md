@@ -92,6 +92,10 @@ the app keeps its files, and how to reset or uninstall.
   - The `Attach files` button uses the same pipeline
   - A clipboard image has no file path, so it always goes down the `images` route; when the clipboard
     gives no name it is called `pasted-1.png`, `pasted-2.png`, … (de-duplicated per paste)
+  - A clipboard that carries **text and a picture of that text** pastes the text and says so: Word,
+    Excel (every cell copy), PowerPoint and a PDF reader put a bitmap rendering of the selection on the
+    clipboard beside the text, and the text is the only thing a composer can take (#61). To attach the
+    picture instead, copy it by itself or drop the file on the window
   - Pasting plain text is untouched; while a dialog (including the extension UI dialogs) or the
     slash palette is open, paste is never hijacked
 - **Shell & slash commands**: `!cmd` runs a shell command in the session folder (streaming output

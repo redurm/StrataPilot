@@ -101,7 +101,9 @@ up in [LOGS.md](LOGS.md).
 | Image rejected | Larger than 8 MB, or a format outside png/jpg/gif/webp |
 | `Ctrl+V` with a screenshot does nothing | A clipboard image is attached only when it is png/jpg/gif/webp and ≤8 MB — a `bmp`/`tiff` screenshot shows an "unsupported image type" toast (re-capture as png, or save it to disk and **drop** it: a dropped file is inserted as a path instead). Nothing is attached while a dialog or the slash palette is open, by design |
 | Pasted image is rejected with its size in the toast | A clipboard image has no file path to fall back on, so anything over 8 MB is refused (`image too large: … is 9.2 MB (9646899 bytes, max 8.0 MB)`). Save it as a file and drop it instead, or shrink it |
-| Pasting text stopped working? | It does not: a paste is only hijacked when the clipboard actually carries a file/image, plain text always reaches the composer |
+| Pasting text from Word / Excel / PowerPoint / a PDF reader comes out as `pasted-1.png` | Fixed for #61, so it only happens on an older build. Those programs put a **bitmap rendering of the selection** on the clipboard *next to* the text (Excel does it for every cell copy, so that "Paste as picture" works in Word), and the paste used to be hijacked by that bitmap. The rule now: a bitmap with no file path **and** text on the clipboard pastes the **text**; a bitmap on its own (a screenshot, a browser's **Copy image**) is still attached; a copied **file** is still attached, because it has a real path |
+| The composer shows "the clipboard held an image as well as text · the text was pasted" | Working as intended (#61): the text went into the composer and the picture - which is a picture *of that text* - was skipped. To attach the picture, copy it by itself (**Copy image** in a browser, or a fresh screenshot of it), or save it to a file and **drop** that file on the window |
+| Pasting text stopped working? | It does not: a paste is hijacked only when the clipboard carries something the composer cannot take - a real file, or a picture with no text beside it. Text alone, and text beside a picture, always reaches the composer |
 
 ## Bash (`!`) and slash commands (`/`)
 

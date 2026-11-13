@@ -1273,6 +1273,8 @@ async function smokeSetupScenario() {
 
 // STRATAPILOT_SMOKE_PASTE=1 — Ctrl+V of an image must attach it like a drop: chip + tab.images.
 // A 1x1 PNG is built in JS (clipboard images have no filesystem path, so pathForFile() -> '').
+// The #61 cases below are the other half of the rule: that same pathless bitmap, sitting next to prose
+// on the clipboard the way Word and Excel put it there, must NOT steal the paste from the text.
 const PNG_1X1_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
 
 function makeImageFile(name, type, bytes) {
@@ -1356,6 +1358,47 @@ async function smokePasteScenario() {
   document.dispatchEvent(text);
   await settle(4);
   console.log(`[smoke-paste] text: prevented=${text.defaultPrevented} images=${tab.images.length} chips=${chips()}`);
+
+  /* #61: Word / Excel / PowerPoint / a PDF reader put a bitmap *rendering* of the selection on the
+     clipboard next to the text, so the paste carried both and the prose used to be thrown away. The
+     rendering has no filesystem path, which is what separates it from a copied file. */
+  const before61 = tab.images.length;
+  const rich = makePasteEvent([makeImageFile('image.png', 'image/png', png)], 'copied from excel');
+  document.dispatchEvent(rich);
+  await new Promise((r) => setTimeout(r, 400));
+  console.log(
+    `[smoke-paste] bitmap_plus_text: prevented=${rich.defaultPrevented} images=${before61}->${tab.images.length} chips=${chips()} toast=${JSON.stringify(lastToast())}`,
+  );
+  if (rich.defaultPrevented || tab.images.length !== before61) {
+    console.log('[smoke-paste] FAIL #61: a clipboard bitmap next to prose hijacked the text paste');
+  }
+
+  // the decision itself, in the four clipboard shapes measured on Windows with Electron 40
+  const reasons = [
+    pasteIntent({ files: [], items: [], getData: () => 'prose' }, () => '').reason,
+    pasteIntent({ files: [makeImageFile('image.png', 'image/png', png)], items: [], getData: () => '' }, () => '').reason,
+    pasteIntent({ files: [makeImageFile('image.png', 'image/png', png)], items: [], getData: () => 'prose' }, () => '').reason,
+    pasteIntent({ files: [makeImageFile('image.png', 'image/png', png)], items: [], getData: () => 'prose' }, () => 'C:\\tmp\\shot.png').reason,
+  ].join(',');
+  console.log(`[smoke-paste] intents=${reasons}`);
+  if (reasons !== 'no-files,clipboard-image-only,text-with-clipboard-image,file-on-disk') {
+    console.log('[smoke-paste] FAIL #61: the paste decision changed shape (see intents=)');
+  }
+
+  // The copied-file branch cannot be synthesised here: webUtils.getPathForFile() answers '' for a File
+  // the page built itself (see the `[smoke] pathForFile probe` line above), and a real Explorer copy is
+  // not something a scenario can put on the clipboard. What this can prove is the premise the rule
+  // stands on - that the app's own resolver says "no path" for a file the page made - and the branch
+  // itself is pinned in test/paste.test.js and measured on Windows for #61 (a copied file arrives as
+  // types ["Files"] with files [local-img.png path=C:\…\local-img.png] and no text/plain at all).
+  const resolverSays = pasteIntent(
+    { files: [makeImageFile('image.png', 'image/png', png)], items: [], getData: () => 'prose' },
+    (f) => api.pathForFile(f),
+  ).reason;
+  console.log(`[smoke-paste] page_built_file: app_pathForFile_reason=${resolverSays}`);
+  if (resolverSays !== 'text-with-clipboard-image') {
+    console.log('[smoke-paste] FAIL #61: api.pathForFile() found a path on a file the page built, so "no path = a clipboard rendering" no longer holds');
+  }
 
   // while a modal is open the paste must be ignored entirely
   const modal = openModal({ title: 'paste guard', message: 'paste while this is open', kind: 'confirm' });
