@@ -474,6 +474,7 @@
   "that entry is not in the rendered transcript (it may be pre-compaction history or another branch)": "该条目不在当前显示的记录中（可能是压缩前的历史或另一个分支）",
   "the answer was too long, the copy was cut": "回答太长，副本已被截断",
   "the app’s own words (menus, buttons, dialogs, chips) follow this right away; pi answers in the language you prompt it in, and the log file and the diagnostics report stay English": "应用自身的文字（菜单、按钮、对话框、标签）会立即跟随；pi 会用你提示它的语言回答，而日志文件和诊断报告保持英文",
+  "the clipboard held an image as well as text · the text was pasted": "剪贴板里除了文字还有图片 · 已粘贴文字",
   "the configured markdown viewer was not found, check Settings": "找不到设置里的 Markdown 查看器，请到 Settings 检查",
   "the folder this session log lives in is gone: {folder}\nstarted this session in {cwd} instead": "这个 session 记录所在的文件夹已不存在：{folder}\n已改用 {cwd} 启动这个 session",
   "the ledger file is not set": "账本文件未设置",

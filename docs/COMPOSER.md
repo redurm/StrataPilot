@@ -148,7 +148,7 @@ and the file is a real file, so saving, printing and searching it are the viewer
 | `Ctrl+B` | Show / hide the sidebar |
 | `Ctrl+M` | Show / hide the Strata Monitor |
 | `Ctrl+,` | Settings dialog (working folder, serial queue, Strata address, Monitor, paths) |
-| `Ctrl+V` | Paste: an image (or file) on the clipboard is attached like a drop, plain text goes into the composer |
+| `Ctrl+V` | Paste: a file on the clipboard is attached like a drop, and so is a picture when it is the only thing there (a screenshot, a browser's **Copy image**). Text always reaches the composer - including when a bitmap sits next to it, which is how Word / Excel / PowerPoint / a PDF reader copy a selection (#61) |
 | `F2` | Name the current session |
 | `Tab` | Complete the highlighted slash command (while the palette is open) |
 | `Esc` | Abort what is running (agent run, or a running `!cmd`), close a dialog, or close the slash palette |
